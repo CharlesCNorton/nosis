@@ -18,6 +18,7 @@ from nosis.ir import Cell, Module, Net, PrimOp
 
 __all__ = [
     "boolean_optimize",
+    "tech_aware_optimize",
 ]
 
 
@@ -208,6 +209,80 @@ def boolean_optimize(mod: Module) -> int:
 
         to_remove.add(or_b.name)
         eliminated += 1
+
+    for name in to_remove:
+        if name in mod.cells:
+            del mod.cells[name]
+
+    return eliminated
+
+
+def tech_aware_optimize(mod: Module, *, lut_inputs: int = 4) -> int:
+    """Technology-aware Boolean optimization using LUT4 input capacity.
+
+    Evaluates whether merging adjacent cells would exceed the target LUT
+    input count. Only merges when the combined function fits in a single
+    LUT. Specifically targets double-NOT cancellation and single-consumer
+    chains where the input count stays within budget.
+
+    Returns the number of cells eliminated.
+    """
+    eliminated = 0
+    merge_ops = {PrimOp.AND, PrimOp.OR, PrimOp.XOR, PrimOp.NOT, PrimOp.EQ, PrimOp.NE}
+
+    # Build consumer map
+    net_consumers: dict[str, list[tuple[Cell, str]]] = {}
+    for cell in mod.cells.values():
+        for port_name, net in cell.inputs.items():
+            if net.name not in net_consumers:
+                net_consumers[net.name] = []
+            net_consumers[net.name].append((cell, port_name))
+
+    to_remove: set[str] = set()
+
+    for inner_cell in list(mod.cells.values()):
+        if inner_cell.name in to_remove:
+            continue
+        if inner_cell.op not in merge_ops:
+            continue
+
+        inner_outs = list(inner_cell.outputs.values())
+        if len(inner_outs) != 1:
+            continue
+        inner_out = inner_outs[0]
+
+        consumers = net_consumers.get(inner_out.name, [])
+        live = [(c, p) for c, p in consumers if c.name not in to_remove]
+        if len(live) != 1:
+            continue
+
+        outer_cell, outer_port = live[0]
+        if outer_cell.name in to_remove or outer_cell.op not in merge_ops:
+            continue
+
+        # Count combined unique inputs (excluding the intermediate net)
+        inner_inputs = {n.name for n in inner_cell.inputs.values()}
+        outer_inputs = {n.name for p, n in outer_cell.inputs.items() if p != outer_port}
+        combined = inner_inputs | outer_inputs
+        if len(combined) > lut_inputs:
+            continue  # won't fit in a single LUT
+
+        # Double NOT cancellation
+        if inner_cell.op == PrimOp.NOT and outer_cell.op == PrimOp.NOT:
+            inner_input = inner_cell.inputs.get("A")
+            if inner_input:
+                for out_net in outer_cell.outputs.values():
+                    # Redirect consumers of outer output to inner's input
+                    for other in mod.cells.values():
+                        if other is outer_cell or other is inner_cell:
+                            continue
+                        for pn, pnet in list(other.inputs.items()):
+                            if pnet is out_net:
+                                other.inputs[pn] = inner_input
+                    out_net.driver = inner_input.driver
+                to_remove.add(inner_cell.name)
+                to_remove.add(outer_cell.name)
+                eliminated += 2
 
     for name in to_remove:
         if name in mod.cells:

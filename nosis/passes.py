@@ -670,6 +670,11 @@ def run_default_passes(mod: Module) -> dict[str, int]:
             break
         prev_cells = cur_cells
 
+    # Cut-based re-mapping: absorb multi-cell cones into single LUT4s
+    from nosis.cutmap import cut_map_luts
+    stats["cut_map"] = cut_map_luts(mod)
+    stats["dce_final"] = dead_code_eliminate(mod)
+
     # Re-run inference after optimization
     from nosis.carry import infer_carry_chains
     from nosis.bram import infer_brams

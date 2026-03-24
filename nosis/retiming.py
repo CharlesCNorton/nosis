@@ -15,8 +15,56 @@ from nosis.ir import Cell, Module, Net, PrimOp
 
 __all__ = [
     "retime_forward",
+    "retime_backward",
+    "verify_retime_clocks",
     "duplicate_high_fanout",
 ]
+
+
+def verify_retime_clocks(mod: Module) -> list[str]:
+    """Verify that adjacent FFs connected through combinational logic share clocks.
+
+    Returns warning strings for any FF pair where a source FF drives
+    a destination FF through combinational logic but they have different clocks.
+    """
+    warnings: list[str] = []
+    ff_clocks: dict[str, str] = {}
+    for cell in mod.cells.values():
+        if cell.op == PrimOp.FF:
+            clk = cell.inputs.get("CLK")
+            if clk:
+                ff_clocks[cell.name] = clk.name
+
+    for cell in mod.cells.values():
+        if cell.op != PrimOp.FF:
+            continue
+        src_clk = ff_clocks.get(cell.name)
+        if not src_clk:
+            continue
+        # Walk forward from Q through combinational cells to find downstream FFs
+        visited: set[str] = set()
+        worklist: list[Net] = list(cell.outputs.values())
+        while worklist:
+            net = worklist.pop()
+            if net.name in visited:
+                continue
+            visited.add(net.name)
+            for other in mod.cells.values():
+                for inp in other.inputs.values():
+                    if inp.name != net.name:
+                        continue
+                    if other.op == PrimOp.FF:
+                        dst_clk = ff_clocks.get(other.name)
+                        if dst_clk and dst_clk != src_clk:
+                            warnings.append(
+                                f"FF {cell.name} (clk={src_clk}) feeds "
+                                f"FF {other.name} (clk={dst_clk}) — clock mismatch"
+                            )
+                    elif other.op not in (PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.FF):
+                        for out in other.outputs.values():
+                            if out.name not in visited:
+                                worklist.append(out)
+    return warnings
 
 
 def retime_forward(mod: Module, *, max_moves: int = 100) -> int:
@@ -105,6 +153,71 @@ def retime_forward(mod: Module, *, max_moves: int = 100) -> int:
         if not moved:
             break
 
+    return retimed
+
+
+def retime_backward(mod: Module, *, max_moves: int = 100) -> int:
+    """Move FFs backward through single-fanin combinational cells.
+
+    When an FF's D input is driven by a combinational cell with exactly
+    one output consumer (the FF), and that driver has exactly one non-const
+    data input, the FF can be moved before the driver. This balances
+    pipeline stages by equalizing path delays.
+
+    Returns the number of FFs retimed backward.
+    """
+    retimed = 0
+    for _ in range(max_moves):
+        moved = False
+        for cell in list(mod.cells.values()):
+            if cell.op != PrimOp.FF:
+                continue
+            d_net = cell.inputs.get("D")
+            if d_net is None or d_net.driver is None:
+                continue
+            driver = d_net.driver
+            if driver.op in (PrimOp.FF, PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.MEMORY, PrimOp.CONST):
+                continue
+            driver_outs = list(driver.outputs.values())
+            if len(driver_outs) != 1:
+                continue
+            # Count consumers of the driver output — must be only this FF
+            consumer_count = sum(
+                1 for other in mod.cells.values()
+                for inp in other.inputs.values()
+                if inp.name == d_net.name
+            )
+            if consumer_count != 1:
+                continue
+            # Driver must have exactly one non-const data input
+            data_inputs = [
+                n for n in driver.inputs.values()
+                if n.driver is None or n.driver.op != PrimOp.CONST
+            ]
+            if len(data_inputs) != 1:
+                continue
+            driver_input = data_inputs[0]
+            q_net = next(iter(cell.outputs.values()), None)
+            if q_net is None:
+                continue
+            # Find which port of driver has our data input
+            driver_port = next(
+                (p for p, n in driver.inputs.items() if n is driver_input), None
+            )
+            if driver_port is None:
+                continue
+            # Rewire: FF reads driver's input, driver reads FF Q
+            cell.inputs["D"] = driver_input
+            driver.inputs[driver_port] = q_net
+            cell.outputs[list(cell.outputs.keys())[0]] = d_net
+            driver.outputs[list(driver.outputs.keys())[0]] = q_net
+            d_net.driver = cell
+            q_net.driver = driver
+            retimed += 1
+            moved = True
+            break
+        if not moved:
+            break
     return retimed
 
 

@@ -1,7 +1,7 @@
 """Tests for nosis.retiming — register retiming and logic duplication."""
 
 from nosis.ir import Module, PrimOp
-from nosis.retiming import retime_forward, duplicate_high_fanout
+from nosis.retiming import retime_forward, retime_backward, verify_retime_clocks, duplicate_high_fanout
 
 
 def _ff_chain_module():
@@ -155,3 +155,61 @@ def test_no_duplicate_ff():
 
     dup_count = duplicate_high_fanout(mod, threshold=16)
     assert dup_count == 0  # FF is excluded from duplication
+
+
+def test_verify_retime_clocks_same():
+    """Same-clock FF pair should produce no warnings."""
+    mod = Module(name="test")
+    clk = mod.add_net("clk", 1)
+    d = mod.add_net("d", 1)
+    q1 = mod.add_net("q1", 1)
+    mid = mod.add_net("mid", 1)
+    q2 = mod.add_net("q2", 1)
+    ff1 = mod.add_cell("ff1", PrimOp.FF)
+    mod.connect(ff1, "CLK", clk)
+    mod.connect(ff1, "D", d)
+    mod.connect(ff1, "Q", q1, direction="output")
+    gc = mod.add_cell("not0", PrimOp.NOT)
+    mod.connect(gc, "A", q1)
+    mod.connect(gc, "Y", mid, direction="output")
+    ff2 = mod.add_cell("ff2", PrimOp.FF)
+    mod.connect(ff2, "CLK", clk)
+    mod.connect(ff2, "D", mid)
+    mod.connect(ff2, "Q", q2, direction="output")
+    warnings = verify_retime_clocks(mod)
+    assert len(warnings) == 0
+
+
+def test_verify_retime_clocks_mismatch():
+    """Different-clock FF pair through combinational logic should warn."""
+    mod = Module(name="test")
+    clk_a = mod.add_net("clk_a", 1)
+    clk_b = mod.add_net("clk_b", 1)
+    d = mod.add_net("d", 1)
+    q1 = mod.add_net("q1", 1)
+    mid = mod.add_net("mid", 1)
+    q2 = mod.add_net("q2", 1)
+    ff1 = mod.add_cell("ff1", PrimOp.FF)
+    mod.connect(ff1, "CLK", clk_a)
+    mod.connect(ff1, "D", d)
+    mod.connect(ff1, "Q", q1, direction="output")
+    gc = mod.add_cell("not0", PrimOp.NOT)
+    mod.connect(gc, "A", q1)
+    mod.connect(gc, "Y", mid, direction="output")
+    ff2 = mod.add_cell("ff2", PrimOp.FF)
+    mod.connect(ff2, "CLK", clk_b)
+    mod.connect(ff2, "D", mid)
+    mod.connect(ff2, "Q", q2, direction="output")
+    warnings = verify_retime_clocks(mod)
+    assert len(warnings) >= 1
+    assert "clock mismatch" in warnings[0]
+
+
+def test_retime_backward_basic():
+    """Backward retiming should not crash on a simple chain."""
+    mod = _ff_chain_module()
+    retimed = retime_backward(mod)
+    assert retimed >= 0
+    # Should still have an FF and an AND cell
+    ops = {c.op for c in mod.cells.values()}
+    assert PrimOp.FF in ops

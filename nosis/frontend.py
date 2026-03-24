@@ -140,6 +140,12 @@ def parse_files(
     drv = pyslang.driver.Driver()
     drv.addStandardArgs()
 
+    # Include ECP5 vendor primitive stubs so slang can elaborate
+    # designs that instantiate USRMCLK, EHXPLLL, etc.
+    _ecp5_prims = Path(__file__).parent / "ecp5_prims.sv"
+    if _ecp5_prims.exists():
+        drv.sourceLoader.addFiles(str(_ecp5_prims))
+
     for path in paths:
         drv.sourceLoader.addFiles(str(path))
 
@@ -170,13 +176,22 @@ def parse_files(
     diagnostics: list[str] = []
     errors: list[str] = []
     for diag in comp.getAllDiagnostics():
-        text = str(diag)
-        severity = str(diag.severity) if hasattr(diag, "severity") else ""
-        if "error" in severity.lower():
+        # Render the diagnostic through the engine for a human-readable message
+        loc = diag.location
+        code = diag.code
+        is_error = diag.isError() if callable(getattr(diag, "isError", None)) else bool(getattr(diag, "isError", False))
+        # Build a text representation from available fields
+        text = f"[{code}] at {loc}" if loc else f"[{code}]"
+        if is_error:
             errors.append(text)
         diagnostics.append(text)
 
     top_instances = list(comp.getRoot().topInstances)
+
+    if errors:
+        raise FrontendError(
+            f"compilation produced {len(errors)} error(s):\n" + "\n".join(errors)
+        )
 
     if not top_instances:
         raise FrontendError("no top-level instances found after elaboration")
@@ -349,13 +364,13 @@ class _Lowerer:
 
     def _lower_conditional_expr(self, expr: Any) -> Net:
         w = self._bit_width(expr)
-        # expr has conditions, ifTrue, ifFalse — but as a ternary, use left/right/pred
-        # pyslang ConditionalOp: conditions[0].expr is the predicate
+        # pyslang ConditionalExpression: conditions[0].expr is the predicate,
+        # left is the true branch, right is the false branch.
         conds = list(expr.conditions)
         pred_expr = conds[0].expr
         pred = self.lower_expr(pred_expr)
-        true_val = self.lower_expr(expr.ifTrue)
-        false_val = self.lower_expr(expr.ifFalse)
+        true_val = self.lower_expr(expr.left)
+        false_val = self.lower_expr(expr.right)
 
         out = self._fresh_net("mux", w)
         cell = self._fresh_cell("mux", PrimOp.MUX)

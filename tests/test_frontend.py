@@ -18,27 +18,27 @@ CRC32 = f"{RIME_ROOT}/core/cpu/rime_pcpi_crc32.sv"
 
 
 def test_parse_uart_tx():
-    result = parse_files([UART_TX])
-    assert len(result.top_instances) == 1
-    assert result.top_instances[0].name == "uart_tx"
+    result = parse_files([UART_TX], top="uart_tx")
+    names = [inst.name for inst in result.top_instances]
+    assert "uart_tx" in names
 
 
 def test_parse_uart_rx():
-    result = parse_files([UART_RX])
-    assert len(result.top_instances) == 1
-    assert result.top_instances[0].name == "uart_rx"
+    result = parse_files([UART_RX], top="uart_rx")
+    names = [inst.name for inst in result.top_instances]
+    assert "uart_rx" in names
 
 
 def test_parse_sdram_bridge():
-    result = parse_files([SDRAM_BRIDGE])
-    assert len(result.top_instances) == 1
-    assert result.top_instances[0].name == "sdram_bridge"
+    result = parse_files([SDRAM_BRIDGE], top="sdram_bridge")
+    names = [inst.name for inst in result.top_instances]
+    assert "sdram_bridge" in names
 
 
 def test_parse_crc32():
-    result = parse_files([CRC32])
-    assert len(result.top_instances) == 1
-    assert result.top_instances[0].name == "rime_pcpi_crc32"
+    result = parse_files([CRC32], top="rime_pcpi_crc32")
+    names = [inst.name for inst in result.top_instances]
+    assert "rime_pcpi_crc32" in names
 
 
 def test_parse_nonexistent_fails():
@@ -50,8 +50,8 @@ def test_parse_nonexistent_fails():
 
 
 def test_lower_uart_tx():
-    result = parse_files([UART_TX])
-    design = lower_to_ir(result)
+    result = parse_files([UART_TX], top="uart_tx")
+    design = lower_to_ir(result, top="uart_tx")
     mod = design.top_module()
     assert mod.name == "uart_tx"
     # Should have ports
@@ -74,8 +74,8 @@ def test_lower_uart_tx():
 
 
 def test_lower_sdram_bridge():
-    result = parse_files([SDRAM_BRIDGE])
-    design = lower_to_ir(result)
+    result = parse_files([SDRAM_BRIDGE], top="sdram_bridge")
+    design = lower_to_ir(result, top="sdram_bridge")
     mod = design.top_module()
     assert mod.name == "sdram_bridge"
     assert "clk" in mod.ports
@@ -90,8 +90,8 @@ def test_lower_sdram_bridge():
 
 
 def test_lower_crc32():
-    result = parse_files([CRC32])
-    design = lower_to_ir(result)
+    result = parse_files([CRC32], top="rime_pcpi_crc32")
+    design = lower_to_ir(result, top="rime_pcpi_crc32")
     mod = design.top_module()
     assert mod.name == "rime_pcpi_crc32"
     assert "clk" in mod.ports
@@ -102,8 +102,8 @@ def test_lower_crc32():
 
 
 def test_lower_produces_valid_design():
-    result = parse_files([UART_TX])
-    design = lower_to_ir(result)
+    result = parse_files([UART_TX], top="uart_tx")
+    design = lower_to_ir(result, top="uart_tx")
     mod = design.top_module()
     # Every cell output net should have exactly one driver
     for cell in mod.cells.values():
@@ -112,7 +112,7 @@ def test_lower_produces_valid_design():
 
 
 def test_lower_top_filter():
-    result = parse_files([UART_TX])
+    result = parse_files([UART_TX], top="uart_tx")
     design = lower_to_ir(result, top="uart_tx")
     assert design.top == "uart_tx"
     assert "uart_tx" in design.modules
@@ -120,9 +120,9 @@ def test_lower_top_filter():
 
 def test_lower_stats_nonzero():
     """Every lowered design should have nonzero cells, nets, and ports."""
-    for path in [UART_TX, UART_RX, SDRAM_BRIDGE, CRC32]:
-        result = parse_files([path])
-        design = lower_to_ir(result)
+    for path, top in [(UART_TX, "uart_tx"), (UART_RX, "uart_rx"), (SDRAM_BRIDGE, "sdram_bridge"), (CRC32, "rime_pcpi_crc32")]:
+        result = parse_files([path], top=top)
+        design = lower_to_ir(result, top=top)
         mod = design.top_module()
         stats = mod.stats()
         assert stats["cells"] > 0, f"{path}: no cells"

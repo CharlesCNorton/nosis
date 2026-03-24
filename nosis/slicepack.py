@@ -282,9 +282,17 @@ def simplify_constant_luts(netlist: ECP5Netlist) -> int:
 
 def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     """Run all slice packing and simplification passes. Returns counts."""
+    # Run constant simplification first (eliminates LUTs with const inputs),
+    # then dual-LUT packing, then PFUMX/L6MUX21.
+    # Second simplify pass catches constants exposed by packing.
+    s1 = simplify_constant_luts(netlist)
+    d = pack_dual_lut4(netlist)
+    p = pack_pfumx(netlist)
+    l = pack_l6mux21(netlist)
+    s2 = simplify_constant_luts(netlist)
     return {
-        "const_lut_simplify": simplify_constant_luts(netlist),
-        "dual_lut4": pack_dual_lut4(netlist),
-        "pfumx": pack_pfumx(netlist),
-        "l6mux21": pack_l6mux21(netlist),
+        "const_lut_simplify": s1 + s2,
+        "dual_lut4": d,
+        "pfumx": p,
+        "l6mux21": l,
     }

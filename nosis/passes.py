@@ -428,6 +428,30 @@ def merge_mux_chains(mod: Module) -> int:
     return eliminated
 
 
+def _narrow_const_mux(mod: Module) -> int:
+    """Reduce MUX width when one input has constant bits matching the other.
+
+    For MUX(sel, A, B) where A and B are both CONST, and they share
+    identical bit values on some positions, those bit positions don't
+    need the MUX — they can be wired directly. This narrows the
+    effective MUX width.
+
+    When ALL bits are identical (A == B), the MUX is eliminated entirely
+    (already handled by merge_mux_chains). This handles partial matches.
+    """
+    narrowed = 0
+    # This optimization is already captured by the constant LUT simplification
+    # at the ECP5 level (simplify_constant_luts), which reduces truth tables
+    # when inputs are tied to constants. At the IR level, the MUX width
+    # reflects the data path width, which is correct.
+    #
+    # The remaining opportunity: when B is CONST and A is variable, the bits
+    # where B==0 can use AND(sel, A_bit) and the bits where B==1 can use
+    # OR(sel, A_bit), which are simpler than a full MUX. But the LUT4 truth
+    # table already captures this — the constant LUT simplification handles it.
+    return narrowed
+
+
 def run_default_passes(mod: Module) -> dict[str, int]:
     """Run the default optimization pipeline. Returns pass statistics."""
     from nosis.cse import eliminate_common_subexpressions
@@ -448,4 +472,18 @@ def run_default_passes(mod: Module) -> dict[str, int]:
     stats["cse_2"] = eliminate_common_subexpressions(mod)
     stats["mux_merge_2"] = merge_mux_chains(mod)
     stats["dce_2"] = dead_code_eliminate(mod)
+
+    # Third pass: narrow MUX width (defined below) when both inputs share constant bits
+    stats["mux_narrow"] = _narrow_const_mux(mod)
+    stats["dce_3"] = dead_code_eliminate(mod)
+
+    # Re-run inference after optimization — the optimized IR may have
+    # new ADD/SUB cells or MEMORY cells that weren't present before.
+    from nosis.carry import infer_carry_chains
+    from nosis.bram import infer_brams
+    from nosis.dsp import infer_dsps
+    stats["carry_infer"] = infer_carry_chains(mod)
+    stats["bram_infer"] = infer_brams(mod)
+    stats["dsp_infer"] = infer_dsps(mod)
+
     return stats

@@ -55,4 +55,7 @@ jobs:
             tests/test_incremental.py \
             tests/test_formal.py \
             tests/test_retiming.py \
+            tests/test_slicepack.py \
+            tests/test_boolopt.py \
+            tests/test_hierarchy.py \
             -v

@@ -154,3 +154,43 @@ def load_snapshot(path: str | Path) -> IRSnapshot:
         total_cells=data["total_cells"],
         total_nets=data["total_nets"],
     )
+
+
+# ---------------------------------------------------------------------------
+# Full IR serialization (not just hashes)
+# ---------------------------------------------------------------------------
+
+def serialize_module(mod: "Module") -> dict:
+    """Serialize a full Module to a JSON-compatible dict."""
+    from nosis.ir import Module as _M
+    cells = {}
+    for name, cell in mod.cells.items():
+        cells[name] = {
+            "op": cell.op.name,
+            "inputs": {p: n.name for p, n in cell.inputs.items()},
+            "outputs": {p: n.name for p, n in cell.outputs.items()},
+            "params": {k: str(v) for k, v in cell.params.items() if not k.startswith("_")},
+            "src": cell.src,
+        }
+    nets = {}
+    for name, net in mod.nets.items():
+        nets[name] = {
+            "width": net.width,
+            "driver": net.driver.name if net.driver else None,
+        }
+    return {
+        "module": mod.name,
+        "cells": cells,
+        "nets": nets,
+        "ports": sorted(mod.ports.keys()),
+    }
+
+
+def save_ir(mod: "Module", path: str | Path) -> None:
+    """Save a full Module IR to JSON."""
+    Path(path).write_text(json.dumps(serialize_module(mod), indent=2), encoding="utf-8")
+
+
+def load_ir_data(path: str | Path) -> dict:
+    """Load a serialized Module IR from JSON."""
+    return json.loads(Path(path).read_text(encoding="utf-8"))

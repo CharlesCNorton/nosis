@@ -518,6 +518,92 @@ def _simplify_mux_with_zero(mod: Module) -> int:
     return replaced
 
 
+def _eliminate_functional_identities(mod: Module) -> int:
+    """Eliminate cells whose output is functionally identical to one of their inputs.
+
+    For each combinational cell with ≤4 inputs and 1-bit output, exhaustively
+    evaluate the truth table. If the output equals input[i] for all combinations
+    of the other inputs, the cell is an identity — replace with a wire to input[i].
+    If the output equals NOT(input[i]), replace with a NOT cell.
+
+    This catches algebraic identities that survive structural optimization:
+    AND(a, OR(a, b)) = a, MUX(sel, a, a) = a (already handled), and more
+    complex tautologies involving 3-4 variables.
+
+    Provable: verified by exhaustive truth table evaluation.
+    Returns the number of cells eliminated.
+    """
+    from nosis.eval import eval_cell
+
+    eliminated = 0
+    _ctr = [len(mod.nets) + len(mod.cells) + 200]
+
+    for cell in list(mod.cells.values()):
+        if cell.op in (PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.FF, PrimOp.CONST, PrimOp.MEMORY):
+            continue
+        out_nets = list(cell.outputs.values())
+        if not out_nets or out_nets[0].width != 1:
+            continue
+
+        input_nets = list(cell.inputs.values())
+        n_inputs = len(input_nets)
+        if n_inputs == 0 or n_inputs > 4:
+            continue
+
+        out_net = out_nets[0]
+
+        # Evaluate truth table
+        for inp_idx, inp_net in enumerate(input_nets):
+            is_identity = True
+            is_negation = True
+            for i in range(1 << n_inputs):
+                net_values = {}
+                for idx, net in enumerate(input_nets):
+                    net_values[net.name] = (i >> idx) & 1
+                results = eval_cell(cell, net_values)
+                val = 0
+                for v in results.values():
+                    val = v & 1
+                    break
+                inp_val = (i >> inp_idx) & 1
+                if val != inp_val:
+                    is_identity = False
+                if val != (1 - inp_val):
+                    is_negation = False
+                if not is_identity and not is_negation:
+                    break
+
+            if is_identity:
+                # Replace cell with wire: redirect consumers of out_net to inp_net
+                for other in mod.cells.values():
+                    if other is cell:
+                        continue
+                    for pn, pnet in list(other.inputs.items()):
+                        if pnet is out_net:
+                            other.inputs[pn] = inp_net
+                for pn, pnet in list(mod.ports.items()):
+                    if pnet is out_net:
+                        mod.ports[pn] = inp_net
+                out_net.driver = inp_net.driver
+                cell.inputs.clear()
+                cell.outputs.clear()
+                cell.op = PrimOp.CONST
+                cell.params = {"value": 0, "width": 1, "_dead": True}
+                eliminated += 1
+                break
+
+            # Negation conversions add a NOT cell — skip unless the cell
+            # currently uses more inputs than NOT (which always uses 1).
+            elif is_negation and n_inputs > 1:
+                cell.op = PrimOp.NOT
+                cell.inputs.clear()
+                cell.inputs["A"] = inp_net
+                eliminated += 1
+                break
+
+    return eliminated
+
+
 def _narrow_eq_width(mod: Module) -> int:
     """Reduce EQ comparison width when comparing against constants with leading zeros.
 
@@ -656,13 +742,14 @@ def run_default_passes(mod: Module) -> dict[str, int]:
         bo = boolean_optimize(mod)
         cff = remove_const_ffs(mod)
         cse = eliminate_common_subexpressions(mod)
+        fi = _eliminate_functional_identities(mod)
         mm = merge_mux_chains(mod)
         mz = _simplify_mux_with_zero(mod)
         mn = _narrow_const_mux(mod)
-        neq = 0  # _narrow_eq_width disabled: adds more cells than it saves
+        neq = 0
         dce = dead_code_eliminate(mod)
 
-        total = cf + ident + bo + cff + cse + mm + mz + mn + neq + dce
+        total = cf + ident + bo + cff + cse + fi + mm + mz + mn + neq + dce
         stats[f"round_{iteration}"] = total
 
         cur_cells = len(mod.cells)

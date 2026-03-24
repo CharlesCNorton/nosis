@@ -757,6 +757,11 @@ def run_default_passes(mod: Module) -> dict[str, int]:
             break
         prev_cells = cur_cells
 
+    # Backward don't-care propagation (duality principle)
+    from nosis.dontcare import propagate_dont_cares
+    stats["dont_care"] = propagate_dont_cares(mod)
+    stats["dce_dc"] = dead_code_eliminate(mod)
+
     # Reachable-state equivalence merging (HoTT quotient)
     from nosis.reqmerge import merge_reachable_equivalent
     stats["req_merge"] = merge_reachable_equivalent(mod, cycles=200)

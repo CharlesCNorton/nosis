@@ -443,6 +443,56 @@ def absorb_buffers(netlist: ECP5Netlist) -> int:
     return absorbed
 
 
+def _eliminate_dead_lut_bits(netlist: ECP5Netlist) -> int:
+    """Remove dead LUT functions from dual-LUT slices.
+
+    A LUT output bit that feeds no other cell's input is dead. If it's
+    the LUT1 in a dual-LUT slice, stripping it makes the slice single-LUT,
+    potentially enabling re-packing with a different partner.
+    """
+    # Collect all consumed bits
+    used: set[int] = set()
+    for cell in netlist.cells.values():
+        for port_name, bits in cell.ports.items():
+            # Input-type ports
+            if not any(port_name.startswith(p) for p in ("F", "Q", "CO", "S0", "S1", "DO", "P", "R", "Z")):
+                for b in bits:
+                    if isinstance(b, int) and b >= 2:
+                        used.add(b)
+    for port_info in netlist.ports.values():
+        for b in port_info.get("bits", []):
+            if isinstance(b, int) and b >= 2:
+                used.add(b)
+
+    stripped = 0
+    for cell in netlist.cells.values():
+        if cell.cell_type != "TRELLIS_SLICE":
+            continue
+        if "LUT1_INITVAL" not in cell.parameters:
+            continue
+        # Check if LUT1's output is dead
+        f1 = cell.ports.get("F1", [])
+        if f1 and isinstance(f1[0], int) and f1[0] not in used:
+            # Strip LUT1
+            del cell.parameters["LUT1_INITVAL"]
+            for pin in ("A1", "B1", "C1", "D1", "F1"):
+                cell.ports.pop(pin, None)
+            stripped += 1
+            continue
+        # Check if LUT0's output is dead (promote LUT1 to LUT0)
+        f0 = cell.ports.get("F0", [])
+        if f0 and isinstance(f0[0], int) and f0[0] not in used:
+            cell.parameters["LUT0_INITVAL"] = cell.parameters.pop("LUT1_INITVAL")
+            for pin in ("A", "B", "C", "D", "F"):
+                p1 = f"{pin}1"
+                p0 = f"{pin}0"
+                if p1 in cell.ports:
+                    cell.ports[p0] = cell.ports.pop(p1)
+            stripped += 1
+
+    return stripped
+
+
 def merge_lut_chains(netlist: ECP5Netlist) -> int:
     """Merge chained LUT4 pairs where the combined function fits in 4 inputs.
 
@@ -665,6 +715,8 @@ def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     s1 = simplify_constant_luts(netlist)
     dd = deduplicate_luts(netlist)
     ab = absorb_buffers(netlist)
+    # Eliminate dead LUT bits from dual-LUT slices
+    _eliminate_dead_lut_bits(netlist)
     # Priority-cut chain merging: absorb feeder LUTs into consumers
     mc = 0
     for _ in range(5):

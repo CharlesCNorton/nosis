@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nosis"
+version = "0.1.1"
+description = "Correctness-first FPGA synthesis targeting the Lattice ECP5"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "CharlesCNorton", email = "machineelv@gmail.com" }]
+keywords = ["fpga", "ecp5", "lattice", "synthesis", "systemverilog", "verilog", "eda", "nextpnr", "hdl"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+    "Operating System :: OS Independent",
+]
+dependencies = ["pyslang>=7,<9"]
+
+[project.urls]
+Homepage = "https://github.com/CharlesCNorton/nosis"
+Repository = "https://github.com/CharlesCNorton/nosis"
+Issues = "https://github.com/CharlesCNorton/nosis/issues"
+Changelog = "https://github.com/CharlesCNorton/nosis/blob/master/CHANGELOG.md"
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "hypothesis", "mypy"]
+docs = ["pdoc"]
+
+[project.scripts]
+nosis = "nosis.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["nosis*"]
+
+[tool.setuptools.package-data]
+# ecp5_prims.sv is the built-in ECP5 primitive library loaded at synthesis
+# time; without it an installed nosis cannot resolve ECP5 primitives.
+nosis = ["*.sv", "py.typed"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 160
+
+[tool.ruff.lint]
+select = ["F", "E", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

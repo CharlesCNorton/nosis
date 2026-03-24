@@ -1,0 +1,167 @@
+"""Nosis automatic test vector generation from design port constraints.
+
+Generates test vectors that exercise corner cases based on port widths,
+reset patterns, and boundary values rather than purely random inputs.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from nosis.ir import Module, PrimOp
+
+__all__ = [
+    "TestVector",
+    "generate_test_vectors",
+]
+
+
+@dataclass(slots=True)
+class TestVector:
+    cycle: int
+    inputs: dict[str, int]
+    description: str = ""
+
+
+def generate_test_vectors(
+    mod: Module,
+    *,
+    num_random: int = 50,
+    seed: int = 42,
+) -> list[TestVector]:
+    """Generate test vectors covering corner cases and random values.
+
+    Produces vectors in this order:
+      1. All-zeros (reset state)
+      2. All-ones (saturation)
+      3. Each input one-hot (single-bit activation)
+      4. Each input max value (overflow boundary)
+      5. Walking ones on each input
+      6. Random vectors
+    """
+    import random
+    rng = random.Random(seed)
+
+    # Identify input ports
+    input_ports: dict[str, int] = {}  # name -> width
+    for cell in mod.cells.values():
+        if cell.op == PrimOp.INPUT:
+            port_name = str(cell.params.get("port_name", ""))
+            for out_net in cell.outputs.values():
+                if port_name:
+                    input_ports[port_name] = out_net.width
+                else:
+                    input_ports[out_net.name] = out_net.width
+
+    if not input_ports:
+        return []
+
+    # Reset handling: without an initial reset the RTL reference simulates
+    # from all-X state, wanders through `case` defaults the hardware never
+    # reaches, and diverges from the synthesized netlist (which powers up
+    # at concrete register values). Assert reset for a preamble, and pin it
+    # inactive through the structured sections so they exercise logic
+    # instead of re-resetting; the random tail may still toggle it, which
+    # both simulations then see identically from defined state.
+    rst_name = None
+    rst_active = 1
+    for name in input_ports:
+        low = name.lower()
+        if low in ("rst", "reset"):
+            rst_name, rst_active = name, 1
+            break
+        if low in ("rstn", "rst_n", "reset_n", "resetn"):
+            rst_name, rst_active = name, 0
+            break
+
+    def _pin_reset(inputs: dict) -> dict:
+        if rst_name is not None:
+            inputs[rst_name] = 0 if rst_active else 1
+        return inputs
+
+    vectors: list[TestVector] = []
+    cycle = 0
+
+    # 0. Reset preamble
+    if rst_name is not None:
+        for _ in range(3):
+            inputs = {name: 0 for name in input_ports}
+            inputs[rst_name] = rst_active
+            vectors.append(TestVector(
+                cycle=cycle, inputs=inputs, description="reset",
+            ))
+            cycle += 1
+
+    # 1. All zeros
+    vectors.append(TestVector(
+        cycle=cycle,
+        inputs=_pin_reset({name: 0 for name in input_ports}),
+        description="all_zeros",
+    ))
+    cycle += 1
+
+    # 2. All ones
+    vectors.append(TestVector(
+        cycle=cycle,
+        inputs=_pin_reset({name: (1 << w) - 1 for name, w in input_ports.items()}),
+        description="all_ones",
+    ))
+    cycle += 1
+
+    # 3. Each input one-hot (others zero)
+    for target_name, target_width in input_ports.items():
+        if target_width <= 1:
+            vectors.append(TestVector(
+                cycle=cycle,
+                inputs=_pin_reset({name: (1 if name == target_name else 0) for name in input_ports}),
+                description=f"onehot_{target_name}",
+            ))
+            cycle += 1
+        else:
+            for bit in range(min(target_width, 8)):
+                vectors.append(TestVector(
+                    cycle=cycle,
+                    inputs=_pin_reset({
+                        name: ((1 << bit) if name == target_name else 0)
+                        for name in input_ports
+                    }),
+                    description=f"onehot_{target_name}_bit{bit}",
+                ))
+                cycle += 1
+
+    # 4. Each input at max (others zero)
+    for target_name, target_width in input_ports.items():
+        vectors.append(TestVector(
+            cycle=cycle,
+            inputs=_pin_reset({
+                name: ((1 << target_width) - 1 if name == target_name else 0)
+                for name in input_ports
+            }),
+            description=f"max_{target_name}",
+        ))
+        cycle += 1
+
+    # 5. Walking ones
+    for target_name, target_width in input_ports.items():
+        if target_width > 1:
+            for shift in range(min(target_width, 8)):
+                vectors.append(TestVector(
+                    cycle=cycle,
+                    inputs=_pin_reset({
+                        name: ((1 << shift) if name == target_name else 0)
+                        for name in input_ports
+                    }),
+                    description=f"walk_{target_name}_{shift}",
+                ))
+                cycle += 1
+
+    # 6. Random
+    for _ in range(num_random):
+        vectors.append(TestVector(
+            cycle=cycle,
+            inputs={name: rng.getrandbits(w) for name, w in input_ports.items()},
+            description="random",
+        ))
+        cycle += 1
+
+    return vectors

@@ -1,0 +1,444 @@
+# Nosis
+
+Correctness-first open-source FPGA synthesis targeting Lattice ECP5.
+
+Nosis synthesizes SystemVerilog and Verilog into technology-mapped netlists for the ECP5 FPGA family. It is the default synthesizer for the [RIME](https://github.com/CharlesCNorton/rime) project. Synthesis results have been verified on silicon (Lattice ECP5U-25F, CABGA256).
+
+On a minimal RIME-V SoC (RV32IMC + Zbb + Zicond + CRC32 + UART + 16 KB BRAM), nosis produces 3,753 LUT4 cells at 42.08 MHz post-route on ECP5-25F. The full production SoC with all peripherals synthesizes to 10,969 LUT4. Measured results and full methodology are in [BENCHMARK.md](BENCHMARK.md).
+
+## Architecture
+
+```
+  SystemVerilog / Verilog source
+           |
+     [1. Frontend]         pyslang IEEE 1800-2017 parse, elaborate, type-check
+           |
+     [2. IR Lowering]      behavioral HDL to technology-independent netlist
+           |
+     [3. Optimization]     11 passes in up to 6 iterative rounds + post-optimization
+           |
+     [4. Inference]        FSM, BRAM, DSP, carry chain annotation
+           |
+     [5. Tech Mapping]     IR primitives to ECP5 cells (LUT4, FF, carry, BRAM, DSP)
+           |
+     [6. Slice Packing]    chain merge, dedup, constant simplify, dead LUT strip
+           |
+     [7. JSON Backend]     nextpnr-compatible netlist
+           |
+     [8. Verification]     equivalence checking, formal BMC, RTL simulation
+           |
+     nextpnr-ecp5 --> ecppack --> bitstream
+```
+
+Nosis covers stages 1 through 8. Place-and-route (nextpnr) and bitstream packing (ecppack) are external.
+
+## Synthesis Results
+
+All designs from the [RIME](https://github.com/CharlesCNorton/rime) project (Resident IcePi Management Environment for Lattice ECP5). All numbers are post-optimization, post-slice-packing. Target: ECP5-25F.
+
+| Design | Files | LUT4 | FF | CCU2C | Slices | Logic Fmax |
+|--------|-------|------|----|-------|--------|------------|
+| uart_tx | 1 | 51 | 46 | 64 | 64 | 354.6 MHz |
+| uart_rx | 1 | 113 | 46 | 64 | 64 | 352.3 MHz |
+| sdram_bridge | 1 | 34 | 332 | 14 | 166 | 340.9 MHz |
+| sdram_controller | 1 | 225 | 174 | 34 | 113 | 93.7 MHz |
+| rime_pcpi_crc32 | 1 | 33 | 34 | 0 | 17 | 1046.2 MHz |
+| RIME-V (RV32IMC CPU) | 1 | 6,009 | 1,715 | 227 | 3,005 | 51.1 MHz |
+| Thaw (flash service) | 7 | 4,656 | 3,785 | 590 | 2,328 | 69.6 MHz |
+| Frost (BRAM grid) | 10 | 5,212 | 5,925 | 938 | 2,963 | 44.2 MHz |
+| Slush (register grid) | 10 | 10,052 | 20,592 | 770 | 10,296 | 44.5 MHz |
+| Ember (TRNG) | 4 | 1,365 | 1,847 | 600 | 924 | 61.2 MHz |
+| RIME-V SoC (minimal) | 5 | 3,753 | 2,179 | 451 | 1,877 | 82.9 MHz |
+| RIME-V SoC (full, 12 files) | 12 | 10,969 | 8,651 | 1,164 | 5,485 | — |
+
+The minimal SoC contains the RIME-V CPU (RV32IMC + Zbb + Zicond + CRC32), UART TX/RX, and 16 KB BRAM. The full SoC adds SPI flash engine, SD SPI engine, 32 MB SDRAM controller and bridge, CRC32 coprocessor, hardware watchdog, IRQ controller, boot ROM, and GPIO. The generated bitstream was verified on an IcePi Zero (Lattice ECP5U-25F).
+
+### CPU Core Comparison
+
+Both cores were synthesized through the full nosis pipeline into identical minimal SoC shells (16 KB BRAM, UART), placed and routed by nextpnr-ecp5 targeting ECP5-25F CABGA256 speed grade 6.
+
+| Metric | RIME-V SoC | PicoRV32 SoC |
+|--------|-----------|-------------|
+| LUT4 | 3,753 | 9,957 |
+| Fmax (post-route) | 42.08 MHz | 30.64 MHz |
+| Estimated MIPS | 7.06 | 5.02 |
+| Synthesis time | 3.7s | 32.7s |
+
+## Synthesis Pipeline
+
+### Stage 1: Frontend (`nosis/frontend.py`)
+
+Parses SystemVerilog and Verilog through [slang](https://github.com/MikePopoloski/slang), a complete IEEE 1800-2017 compiler. Slang handles preprocessing, parsing, elaboration, parameter resolution, type checking, and constant evaluation.
+
+The frontend:
+
+- Accepts `.sv` and `.v` source files with `-D` defines and `-I` include paths
+- Resolves parameters and generate blocks at elaboration
+- Type-checks all expressions with full width inference
+- Reports errors with exact source locations
+- Provides ECP5 vendor primitive stubs (`ecp5_prims.sv`) for USRMCLK, EHXPLLL, OSCG, DTR, SEDGA, MULT18X18D, DP16KD, CCU2C, BB, and 30+ other Lattice-specific cells
+- Strips simulation-only constructs (`$display`, `$finish`, `$readmemh`, etc.) with warnings
+- Detects latch inference from incomplete `if/case` in `always_comb`
+- Handles `defparam` with deprecation warnings
+- Respects `(* synthesis off *)` pragmas
+
+### Stage 2: IR Lowering (`nosis/frontend.py`, `nosis/ir.py`)
+
+Walks the elaborated AST and converts it into the Nosis intermediate representation: a flat, technology-independent netlist of 30 primitive operations connected by typed nets.
+
+| Category | Operations |
+|----------|------------|
+| Combinational logic | AND, OR, XOR, NOT, MUX, PMUX, REDUCE_AND, REDUCE_OR, REDUCE_XOR |
+| Arithmetic | ADD, SUB, MUL, DIV, MOD, SHL, SHR, SSHR |
+| Comparison | EQ, NE, LT, LE, GT, GE |
+| Bit manipulation | CONCAT, SLICE, REPEAT, ZEXT, SEXT |
+| Sequential | FF, LATCH |
+| Memory | MEMORY |
+| Constants / Ports | CONST, INPUT, OUTPUT |
+
+The lowering handles:
+
+- **`always_ff`:** Clock edge extraction, non-blocking assignment collection, FF creation with Q-redirect (all consumers of the target net are redirected to the FF Q output so DCE does not orphan live logic), synchronous and asynchronous reset inference from `if (rst)` patterns
+- **`always_comb` / `always @(*)`:** Pure combinational wiring with latch inference detection
+- **`if/else`:** MUX trees with constant selector folding at lowering time
+- **`case` / `casez` / `casex`:** Parallel MUX chains with EQ comparisons per case label
+- **Concatenation LHS decomposition:** `{a, b, c, d} <= val` splits into per-element SLICE assignments
+- **Continuous assignments:** `assign x = expr` wires the driver directly
+- **Hierarchy flattening:** Sub-module instances are recursively lowered with prefixed net/cell names. Port connections are wired by direction. Vendor primitives (USRMCLK, EHXPLLL, etc.) are skipped as black boxes.
+- **Multi-dimensional arrays:** Flattened to 1D MEMORY cells
+- **Packed structs/unions:** Treated as bitvectors (slang flattens them)
+- **Generate blocks:** Already unrolled by slang; members walked normally
+- **Interface instances:** Members extracted as regular nets
+- **Replication (`{N{expr}}`):** REPEAT cells with count parameter
+
+### Stage 3: Optimization (`nosis/passes/` and supporting modules)
+
+Eleven optimization passes run in up to six iterative rounds, followed by post-optimization stages. The pipeline runs to fixed point: iteration stops when no round reduces the cell count.
+
+**Iterative passes (per round):**
+
+1. **Constant folding** (`constant_fold`): Replace cells with all-constant inputs by their evaluated result. Runs to fixed point within each round. Handles all combinational PrimOps including MUX with constant selector.
+
+2. **Identity simplification** (`identity_simplify`): `a & 0xFF = a`, `a | 0 = a`, `a ^ 0 = a`, `a + 0 = a`, `a * 1 = a`, `a << 0 = a`, `MUX(0,a,b) = a`, `MUX(1,a,b) = b`, `NOT(NOT(a)) = a`. Redirects both cell consumers and module port references.
+
+3. **Boolean optimization** (`boolopt.py`): AND/OR distribution `(a & b) | (a & c) = a & (b | c)`, idempotent `a & a = a`, `a ^ a = 0`, complement `a & ~a = 0`. Technology-aware variant respects LUT4 input budget.
+
+4. **Constant FF removal** (`remove_const_ffs`): FFs with constant D input are replaced by the constant value.
+
+5. **Common subexpression elimination** (`cse.py`): Hash-based deduplication of cells with identical `(op, input_nets, params)` signatures.
+
+6. **Functional identity elimination** (`_eliminate_functional_identities`): Exhaustive truth table evaluation for cells with up to 4 inputs and 1-bit output. If the output equals any single input for all combinations, the cell is an identity and is bypassed.
+
+7. **HIT equivalence merging** (`_merge_hit_equivalent`): Two cells with the same input net set that compute the same Boolean function (identical truth table) are merged regardless of structural differences. Derived from the Higher Inductive Type principle: a function is defined by its action on inputs, not its syntactic form.
+
+8. **Don't-care input elimination** (`_eliminate_dont_care_inputs`): If toggling an input never changes the output (truth table is symmetric under that input), the input is dropped. Fewer inputs produce fewer LUT4 cells downstream.
+
+9. **MUX chain merging** (`merge_mux_chains`): Deduplicates EQ cells sharing the same `(selector, constant)` pair across different case targets. Eliminates MUX cells where both branches are identical.
+
+10. **Technology-aware merging** (`tech_aware_optimize`): Merges single-consumer chains (double-NOT cancellation and similar) when the combined function stays within the LUT4 input budget.
+
+11. **Dead code elimination** (`dead_code_eliminate`): Backward reachability from outputs and FF D inputs. Unreachable cells and nets are removed.
+
+**Post-optimization stages:**
+
+12. **Backward don't-care propagation** (`dontcare.py`): Identifies FFs whose outputs are always AND-masked, meaning their value outside the mask's active window is irrelevant. Derived from the duality principle of stable categories.
+
+13. **Reachable-state equivalence merging** (`reqmerge.py`): Simulates the design for 500+ clock cycles (adaptive based on FF chain depth) with random inputs via pre-compiled `FastSimulator`, tracking per-net value signatures. Nets that carry identical values across all reachable states are merged. Safety guards exclude nets in the output-reachable cone and nets feeding FF D inputs (sequential feedback). Derived from quotient types in HoTT.
+
+14. **SAT-proven constants and equivalences** (`satconst.py`): For nets observed as constant (or pairwise identical) during simulation, constructs the combinational logic cone and proves the observation by exhaustive evaluation or CNF unsatisfiability (up to 16-20 cone inputs). Proven constants are replaced with CONST cells; proven equivalences are merged. Cones containing FF boundaries are excluded.
+
+15. **BDD-inspired decode minimization** (`bdd.py`): Builds truth tables for bounded combinational cones and replaces provably constant cones; marks single-consumer intermediates for absorption.
+
+16. **Retiming and fanout duplication** (`retiming.py`): Moves FFs forward across single-fanout combinational cells and duplicates cells whose outputs exceed the fanout threshold, reducing routing pressure.
+
+### Stage 4: Inference
+
+Four annotation-only passes that tag cells for specialized technology mapping. No structural changes.
+
+- **FSM extraction** (`fsm.py`): Identifies state machine feedback loops through MUX/EQ trees. Classifies encoding (sequential, one-hot, Gray, binary). Does not re-encode.
+- **BRAM inference** (`bram.py`): Tags MEMORY cells for DP16KD (16Kx1 through 512x36) or TRELLIS_DPR16X4 (distributed RAM, 16x4). Detects write mode (read-before-write vs write-through) and output register absorption.
+- **DSP inference** (`dsp.py`): Tags MUL cells for MULT18X18D (up to 18x18) or decomposed 4x MULT18X18D (up to 36x36). Detects multiply-accumulate patterns for ALU54B mapping.
+- **Carry chain inference** (`carry.py`): Tags ADD/SUB cells for CCU2C carry chains (2 bits per cell, `ceil(N/2)` cells for N-bit arithmetic).
+
+### Stage 5: Technology Mapping (`nosis/techmap.py`)
+
+Converts the IR into ECP5-specific cells.
+
+- **LUT mapping:** Combinational cells map to LUT4 cells (one per output bit) with computed 16-bit INIT truth tables. nextpnr packs LUT4 and FF cells into physical slices during place and route.
+- **FF mapping:** One TRELLIS_FF per bit. Clock, data, reset, enable connections. Parameters: GSR, CEMUX, CLKMUX, LSRMUX, REGSET, SRMODE.
+- **Arithmetic:** ADD/SUB map to CCU2C carry chains with XOR/XNOR base INIT and carry propagation.
+- **Multiply:** Tagged MUL cells emit MULT18X18D or ALU54B (for MAC patterns).
+- **Memory:** Tagged MEMORY cells emit DP16KD (block RAM) or TRELLIS_DPR16X4 (distributed RAM) with full address/data/control wiring.
+- **PMUX:** Narrow cases (1-bit output, up to 4 cases) compute a single LUT4 truth table. Wider cases build balanced MUX trees with log2 depth.
+- **Comparison:** LT/GT map to bit-serial borrow/carry chains (1 LUT4 per bit, LSB to MSB). LE/GE add an equality chain and final OR. Signed comparisons invert the MSB comparison. Produces correct results for multi-bit unsigned and signed operands.
+- **Wiring:** CONCAT, SLICE, ZEXT, SEXT, REPEAT reassign bit indices without physical cells.
+- **Inout:** BB (bidirectional buffer) cells for inout ports.
+
+### Stage 6: Slice Packing (`nosis/slicepack.py`)
+
+Post-mapping optimization on the ECP5 netlist, run to a fixed point (up to 10 rounds).
+
+1. **Self-checking chain merging:** When LUT A's output feeds LUT B's input with single fanout and their combined variable inputs fit in 4, LUT B absorbs LUT A's function via a composed truth table. Every merge is verified by exhaustive evaluation of all 16 input combinations before it is committed. Buffers (single-input identity LUTs) merge away as a special case.
+2. **Constant LUT simplification:** Reduces truth tables when inputs are tied to constants. All-0 or all-1 results eliminate the LUT entirely.
+3. **LUT deduplication:** Eliminates LUT4 cells with identical INIT and input bits, redirecting all references (every cell type and module port) to the survivor.
+4. **Dead LUT elimination:** Removes LUT4 cells whose output bit is unconsumed, derived from the cofiber construction in stable categories (the difference between the full and simplified design is zero for dead cells).
+5. **Combinational loop breaking:** LUT4 or CCU2C inputs that feed back from the same cell's output are tied to constant 0 with the truth table adjusted accordingly.
+
+### Stage 7: JSON Backend (`nosis/json_backend.py`)
+
+Serializes the ECP5 netlist to the nextpnr JSON format. Handles parameter encoding (hex INIT values to 16-bit binary strings, other hex to 32-bit binary, string parameters passed through), connection bit encoding (integers for signals, strings `"0"`/`"1"`/`"x"` for constants), port direction classification by name convention, and `hide_name` annotation for internal nets.
+
+### Stage 8: Verification
+
+- **Equivalence checking** (`equiv.py`): Exhaustive simulation for designs up to 16 input bits (provably complete). SAT-based via PySAT Glucose3 for larger designs (CNF encoding of all PrimOps including full-adder chains for multi-bit ADD/SUB). Random simulation fallback with 10,000 vectors.
+- **Formal BMC** (`formal.py`): Bounded model checking via simulation and exhaustive evaluation. Assertion checking, reachability analysis, optimization equivalence verification, sequential equivalence with FF state carry-forward.
+- **RTL simulation** (`validate.py`): Generates deterministic Verilog testbenches, compiles through iverilog, compares cycle-by-cycle outputs between RTL and post-synthesis netlist.
+- **Post-synthesis Verilog** (`postsynth.py`): Generates behavioral Verilog from the ECP5 netlist with simulation models for LUT4, TRELLIS_FF, CCU2C, DP16KD, MULT18X18D, and ALU54B.
+
+## HoTT-Inspired Optimization
+
+Five optimization techniques are derived from concepts in Homotopy Type Theory:
+
+1. **Quotient types** (reachable-state equivalence merging): The net space is quotiented by a simulation-derived equivalence relation. Nets carrying identical values across all reachable states are merged.
+
+2. **Higher Inductive Types** (truth table equivalence): Two cells with identical truth tables are equivalent regardless of structural differences. A function is defined by its action on inputs, not its syntactic form.
+
+3. **Encode-decode method** (don't-care input elimination): Build the map from N-input to (N-1)-input function by dropping a candidate input. If the map is an equivalence (same truth table), the input is don't-care.
+
+4. **Cofiber / zero object** (dead LUT bit elimination): The cofiber of the map from simplified to full design is zero for dead LUT bits. Stripping them preserves all information.
+
+5. **Duality principle** (backward don't-care propagation): Forward constant propagation has a dual on the backward observation cone. Nets masked by downstream AND gates are don't-care in certain states.
+
+## Analysis Passes
+
+Beyond synthesis, nosis provides analysis passes on the IR and mapped netlist:
+
+| Pass | Module | Function |
+|------|--------|----------|
+| Static timing | `timing.py` | Forward-propagation delay model (ECP5 -6 speed grade), critical path traceback |
+| Routing estimation | `wirelength.py` | Wire-length model from cell count and fanout, dedicated clock/carry routing, combined logic+routing delay |
+| Area calculation | `resources.py` | Exact slice packing (2 LUT4 + 2 FF + 1 CCU2C per slice), BRAM/DSP tile counts, packing efficiency, binding resource identification |
+| Power estimation | `power.py` | Static leakage + dynamic switching per cell type (1.1V, -6 grade), clock tree power, simulation-based toggle rate measurement |
+| Congestion analysis | `congestion.py` | Fanout histogram, high-fanout net identification, density score |
+| Clock domain analysis | `clocks.py` | FF grouping by clock net, clock domain crossing detection with source/dest FF identification, 2-FF synchronizer insertion |
+| Design warnings | `warnings.py` | Undriven nets, floating outputs, multi-clock detection, high-fanout threshold violations |
+| Logic cone extraction | `cone.py` | Combinational fan-in isolation for targeted equivalence checking |
+| Netlist diff | `diff.py` | Cell count deltas, port changes, structural comparison between two synthesis runs |
+| Incremental synthesis | `incremental.py` | IR snapshots, cell-level hashing, delta computation for partial re-mapping |
+| Constraint parsing | `constraints.py`, `sdc.py` | LPF pin/IO/frequency constraints, SDC clock/delay/false-path/multicycle constraints, specify block timing arcs |
+| Test vector generation | `testvec.py` | Deterministic test vectors from port signatures for equivalence and validation |
+
+## ECP5 Primitive Coverage
+
+Nosis targets Lattice ECP5. Supported primitives:
+
+- **Logic:** LUT4 (packed into slices by nextpnr), CCU2C (carry chain), TRELLIS_FF, TRELLIS_DPR16X4 (distributed RAM)
+- **Block RAM:** DP16KD (true dual-port 16Kbit, all six width configurations)
+- **DSP:** MULT18X18D (18x18 signed/unsigned), ALU54B (54-bit ALU with accumulate)
+- **PLL/Clock:** EHXPLLL, EHXPLLJ, CLKDIVF, DCCA, DCC, DCSC, DQSCE, ECLKSYNCB, ECLKBRIDGECS, OSCG, PCSCLKDIV, EXTREFB
+- **I/O:** BB, IB, OB, OBZ, BBPU, BBPD, IBPU, IBPD
+- **DDR I/O:** IDDRX1F, IDDRX2F, IDDR71B, ODDRX1F, ODDRX2F, ODDR71B, OSHX2A, ISHX2A, TSHX2DQA, TSHX2DQSA
+- **I/O delay:** DELAYF, DELAYG, DQSBUFM
+- **I/O registers:** IFS1P3BX, IFS1P3DX, OFS1P3BX, OFS1P3DX
+- **System:** USRMCLK, GSR, SGSR, PUR, JTAGG, DTR, SEDGA, OSCG, START, TSALL, BCINRD
+- **SerDes:** DCUA (dual-channel 5G transceiver)
+
+All 30+ vendor primitives have stub declarations in `ecp5_prims.sv` for slang elaboration and black-box entries in `nosis/blackbox.py` for synthesis pass-through.
+
+## Repository
+
+| Module | Role |
+|--------|------|
+| `nosis/ir.py` | IR: `Design`, `Module`, `Cell`, `Net`, 30 `PrimOp` variants, Verilog emission |
+| `nosis/frontend.py` | pyslang frontend: parse, elaborate, lower to IR, hierarchy flattening |
+| `nosis/passes/` | Optimization pipeline split by pass category |
+| `nosis/passes/pipeline.py` | Pipeline orchestration: 13 iterative passes in 6 rounds + post-optimization |
+| `nosis/passes/folding.py` | Constant folding to fixed point |
+| `nosis/passes/identity.py` | Identity and absorbing simplification |
+| `nosis/passes/dce.py` | Dead code elimination via backward reachability |
+| `nosis/passes/constff.py` | Constant-input FF removal |
+| `nosis/passes/mux.py` | MUX chain merging, case chain collapse, constant mask simplification |
+| `nosis/passes/equiv.py` | Functional identity, HIT equivalence, don't-care inputs, MUX-to-AND |
+| `nosis/passes/misc.py` | EQ width narrowing, carry chain annotation |
+| `nosis/boolopt.py` | Boolean algebra: AND/OR distribution, complement, idempotent |
+| `nosis/cse.py` | Hash-based common subexpression elimination |
+| `nosis/dontcare.py` | Backward don't-care propagation |
+| `nosis/reqmerge.py` | Reachable-state equivalence merging via incremental FNV-1a hashing |
+| `nosis/satconst.py` | SAT-based constant proof via exhaustive cone evaluation |
+| `nosis/eval.py` | Single source of truth for PrimOp evaluation semantics (signed and unsigned) |
+| `nosis/sim.py` | Pre-compiled flat-array simulator for fast multi-cycle simulation |
+| `nosis/equiv.py` | Equivalence checking: exhaustive, SAT, random simulation |
+| `nosis/formal.py` | Bounded model checking and sequential equivalence |
+| `nosis/techmap/` | ECP5 technology mapping split into netlist types and mapper |
+| `nosis/techmap/netlist.py` | `ECP5Cell`, `ECP5Net`, `ECP5Netlist`, LUT4 INIT computation |
+| `nosis/techmap/mapper.py` | IR-to-ECP5 mapper: LUT4, TRELLIS_FF, CCU2C, MULT18X18D, ALU54B, DP16KD |
+| `nosis/slicepack.py` | Post-mapping: self-checked chain merge, dedup, constant simplify, dead LUT strip |
+| `nosis/json_backend.py` | nextpnr-compatible JSON serialization |
+| `nosis/fsm.py` | FSM extraction and encoding classification |
+| `nosis/bram.py` | BRAM inference: DP16KD and DPR16X4 |
+| `nosis/dsp.py` | DSP inference: MULT18X18D (with ZEXT look-through) and ALU54B MAC detection |
+| `nosis/carry.py` | Carry chain inference: CCU2C |
+| `nosis/lutpack.py` | IR-level cascaded operation merging |
+| `nosis/timing.py` | Static timing analysis with per-pin LUT4 delay model |
+| `nosis/wirelength.py` | Routing delay estimation via Rent's rule |
+| `nosis/resources.py` | Area calculation and device utilization reporting |
+| `nosis/power.py` | Static + dynamic power estimation with toggle rate measurement |
+| `nosis/congestion.py` | Fanout analysis and routing pressure estimation |
+| `nosis/clocks.py` | Clock domain analysis and CDC detection |
+| `nosis/cone.py` | Combinational fan-in cone extraction |
+| `nosis/blackbox.py` | Black box registry, vendor primitive skip list, full ECP5 port declarations |
+| `nosis/constraints.py` | LPF constraint parsing |
+| `nosis/sdc.py` | SDC constraint and specify block parsing |
+| `nosis/validate.py` | RTL simulation harness with cycle-accurate testbench generation |
+| `nosis/postsynth.py` | Post-synthesis Verilog with behavioral models (LUT4, FF, CCU2C, DP16KD, MULT18X18D, ALU54B) |
+| `nosis/incremental.py` | IR snapshots, delta computation, and warm-cache incremental synthesis |
+| `nosis/diff.py` | Netlist structural comparison |
+| `nosis/warnings.py` | Design warning detection |
+| `nosis/readmem.py` | `$readmemh`/`$readmemb` file parsing for BRAM initialization |
+| `nosis/retiming.py` | Register retiming (forward/backward) and high-fanout duplication |
+| `nosis/pnr_feedback.py` | Parse nextpnr logs for timing closure, critical path extraction |
+| `nosis/cli.py` | Command-line interface with `--stats`, `--benchmark`, `--ecppack`, `--incremental`, `--quiet`, `--timeout`, `--warn-unused` |
+| `nosis/ecp5_prims.sv` | ECP5 vendor primitive stubs for slang elaboration |
+
+## Design Principles
+
+1. **Correctness over optimization.** Every optimization pass preserves functional equivalence. The output is verifiable against the input through built-in equivalence checking.
+
+2. **Respect the RTL.** Designer intent is preserved. State encodings, explicit structure, and named signals survive into the netlist unchanged.
+
+3. **Single evaluation semantics.** Every PrimOp has exactly one evaluation function in `eval.py`. Constant folding, equivalence checking, simulation, and truth table computation all use the same code path. Signed operations (comparison, division, modulo) are handled via the `signed` parameter with correct two's complement conversion.
+
+4. **Provable where possible.** SAT-based constant proof, exhaustive truth table verification for small cones, formal BMC for assertions. Simulation-based methods are clearly labeled as probabilistic.
+
+5. **Pure Python.** Correctness is easier to verify in Python than C++. No C extensions beyond the pyslang dependency.
+
+## Dependencies
+
+**Runtime:**
+- Python 3.11+
+- pyslang (`pip install pyslang` for versions 7.x-10.x, or built from source)
+
+**Downstream (for place-and-route):**
+- nextpnr-ecp5 (OSS CAD Suite)
+- ecppack (OSS CAD Suite)
+
+**Validation (optional):**
+- iverilog and vvp (Icarus Verilog)
+- PySAT (`pip install python-sat`) for SAT-based equivalence checking
+
+**Development:**
+- pytest, hypothesis, ruff, mypy
+
+## Install
+
+```
+pip install nosis
+```
+
+This pulls pyslang. Place-and-route additionally needs `nextpnr-ecp5` and `ecppack`
+from the OSS CAD Suite on `PATH` (installed separately).
+
+From a source checkout for development:
+
+```
+pip install -e ".[dev]"
+```
+
+If pyslang is built from source rather than pip-installed:
+
+```
+export NOSIS_PYSLANG_PATH=/path/to/slang/build/lib
+```
+
+## Usage
+
+Synthesize a design:
+
+```
+nosis input.sv --top top --target ecp5 -o output.json
+```
+
+Multi-file with defines and includes:
+
+```
+nosis top.sv uart_rx.sv uart_tx.sv flash_spi.sv --top top -DWIDTH=32 -I./includes -o output.json
+```
+
+Statistics and timing:
+
+```
+nosis input.sv --top top --stats --verbose
+```
+
+Machine-readable benchmark output:
+
+```
+nosis input.sv --top top --benchmark
+```
+
+Feed to nextpnr and ecppack:
+
+```
+nextpnr-ecp5 --25k --package CABGA256 --lpf board.lpf --json output.json --textcfg output.config
+ecppack --compress output.config output.bit
+```
+
+End-to-end with integrated ecppack:
+
+```
+nosis input.sv --top top -o output.json --ecppack output.bit
+```
+
+Quiet mode for scripted pipelines:
+
+```
+nosis input.sv --top top -o output.json --quiet
+```
+
+Abort after a time limit:
+
+```
+nosis input.sv --top top -o output.json --timeout 60
+```
+
+## Environment Variables
+
+| Variable | Purpose |
+|----------|---------|
+| `NOSIS_PYSLANG_PATH` | Directory containing the pyslang `.pyd`/`.so` if built from source |
+
+## Development
+
+Full test suite:
+
+```
+pytest tests/ -v
+```
+
+Unit tests only (no pyslang dependency):
+
+```
+pytest tests/test_ir.py tests/test_ops.py tests/test_pipeline.py -v
+```
+
+Design tests (requires pyslang, bundled designs included):
+
+```
+pytest tests/test_designs.py tests/test_mapping.py tests/test_analysis.py -v
+```
+
+SoC tests (requires full RIME source tree):
+
+```
+pytest tests/test_soc.py -v
+```
+
+Lint:
+
+```
+ruff check .
+```
+
+## License
+
+MIT.

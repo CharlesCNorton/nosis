@@ -112,6 +112,21 @@ def _find_ff_feedback_loops(mod: Module) -> list[tuple[Cell, Net, Net]]:
     """
     results: list[tuple[Cell, Net, Net]] = []
 
+    # Build a map from ff_target names to FF cells/Q nets.
+    # The lowering creates fresh Q output nets ($ff_q_state) instead of
+    # wiring to the original state net, but records the original name in
+    # cell.params["ff_target"]. We need to match feedback loops through
+    # this indirection.
+    target_to_ff: dict[str, tuple[Cell, Net]] = {}
+    for cell in mod.cells.values():
+        if cell.op != PrimOp.FF:
+            continue
+        q_net = next(iter(cell.outputs.values()), None)
+        if q_net is None:
+            continue
+        target_name = str(cell.params.get("ff_target", q_net.name))
+        target_to_ff[target_name] = (cell, q_net)
+
     for cell in mod.cells.values():
         if cell.op != PrimOp.FF:
             continue
@@ -120,19 +135,22 @@ def _find_ff_feedback_loops(mod: Module) -> list[tuple[Cell, Net, Net]]:
         if d_net is None:
             continue
 
-        # Find the Q output net
-        q_net: Net | None = None
-        for out_net in cell.outputs.values():
-            q_net = out_net
-            break
+        q_net = next(iter(cell.outputs.values()), None)
         if q_net is None:
             continue
 
-        # Walk backward from D through the logic cone, looking for Q
-        # (i.e., the state register feeds back through combinational logic)
+        # The target net name — the original register this FF drives
+        target_name = str(cell.params.get("ff_target", q_net.name))
+
+        # Walk backward from D through the logic cone, looking for
+        # the target net (the original state register name, not the
+        # fresh $ff_q_ output net).
         visited: set[str] = set()
         worklist: list[Net] = [d_net]
         found_feedback = False
+
+        # Names that indicate feedback to this FF
+        feedback_names = {q_net.name, target_name}
 
         while worklist and not found_feedback:
             net = worklist.pop()
@@ -140,21 +158,21 @@ def _find_ff_feedback_loops(mod: Module) -> list[tuple[Cell, Net, Net]]:
                 continue
             visited.add(net.name)
 
-            # Check if this net is the FF's own output (or same-named state net)
-            if net.name == q_net.name:
+            # Check direct match
+            if net.name in feedback_names:
                 found_feedback = True
                 break
 
-            # Also check by looking at what drives this net
             if net.driver is not None:
                 driver = net.driver
                 if driver.op == PrimOp.FF:
-                    # Another FF — check if it's the same state
+                    # Another FF — check if it targets the same register
+                    other_target = str(driver.params.get("ff_target", ""))
                     for other_q in driver.outputs.values():
-                        if other_q.name == q_net.name:
+                        if other_q.name in feedback_names or other_target == target_name:
                             found_feedback = True
                             break
-                    continue  # Don't walk through other FFs
+                    continue
 
                 # Walk through combinational logic
                 for inp_net in driver.inputs.values():
@@ -162,7 +180,9 @@ def _find_ff_feedback_loops(mod: Module) -> list[tuple[Cell, Net, Net]]:
                         worklist.append(inp_net)
 
         if found_feedback:
-            results.append((cell, q_net, d_net))
+            # Use the target name as the canonical state net for the FSM
+            state_net = mod.nets.get(target_name, q_net)
+            results.append((cell, state_net, d_net))
 
     return results
 
@@ -196,13 +216,30 @@ def _collect_mux_tree(mod: Module, root_net: Net, state_net_name: str) -> tuple[
                 for port_name, eq_inp in eq_cell.inputs.items():
                     if eq_inp.name == state_net_name:
                         continue
-                    # The other input is a case label (constant)
+                    # The other input is a case label — may be a CONST cell
+                    # or a named parameter/enum constant
+                    val: int | None = None
+                    width: int = eq_inp.width
+                    label: str | None = None
                     if eq_inp.driver and eq_inp.driver.op == PrimOp.CONST:
                         val = int(eq_inp.driver.params.get("value", 0))
                         width = int(eq_inp.driver.params.get("width", 1))
-                        if val not in seen_values:
-                            seen_values.add(val)
-                            states.append(FSMState(name=None, value=val, width=width))
+                    else:
+                        # Look for a CONST cell in the module that drives
+                        # a net with this name (parameter/enum constants)
+                        for other_cell in mod.cells.values():
+                            if other_cell.op == PrimOp.CONST:
+                                for out_net in other_cell.outputs.values():
+                                    if out_net.name == eq_inp.name:
+                                        val = int(other_cell.params.get("value", 0))
+                                        width = int(other_cell.params.get("width", 1))
+                                        label = eq_inp.name
+                                        break
+                                if val is not None:
+                                    break
+                    if val is not None and val not in seen_values:
+                        seen_values.add(val)
+                        states.append(FSMState(name=label, value=val, width=width))
 
             # Recurse into MUX inputs (the true/false branches)
             for port in ("A", "B"):

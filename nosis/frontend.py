@@ -309,7 +309,21 @@ class _Lowerer:
         sym = expr.symbol
         name = sym.name
         w = self._bit_width(expr)
-        return self._get_or_create_net(name, w)
+        net = self._get_or_create_net(name, w)
+        # If the net has no driver, check whether the symbol resolves to
+        # a constant value (enum member, localparam, parameter).
+        if net.driver is None:
+            const_val = getattr(expr, "constant", None)
+            if const_val is None:
+                # Check the symbol itself (EnumValue, Parameter)
+                sym_val = getattr(sym, "value", None)
+                if sym_val is not None:
+                    const_val = sym_val
+            if const_val is not None:
+                int_val = _svint_to_int(const_val)
+                cell = self._fresh_cell(f"const_{name}", PrimOp.CONST, value=int_val, width=w)
+                self.mod.connect(cell, "Y", net, direction="output")
+        return net
 
     def _lower_binary(self, expr: Any) -> Net:
         op_str = str(expr.op)
@@ -497,7 +511,7 @@ class _Lowerer:
                 deduped[lhs_net.name] = (lhs_net, rhs_net, rst_net, rst_val_net)
 
             for lhs_net, rhs_net, rst_net, rst_val_net in deduped.values():
-                ff = self._fresh_cell(f"ff_{lhs_net.name}", PrimOp.FF)
+                ff = self._fresh_cell(f"ff_{lhs_net.name}", PrimOp.FF, ff_target=lhs_net.name)
                 self.mod.connect(ff, "D", rhs_net)
                 if clock_net:
                     self.mod.connect(ff, "CLK", clock_net)
@@ -505,7 +519,10 @@ class _Lowerer:
                     self.mod.connect(ff, "RST", rst_net)
                 if rst_val_net:
                     self.mod.connect(ff, "RST_VAL", rst_val_net)
-                # Use a fresh output net to avoid driver conflicts
+                # Use a fresh output net to avoid driver conflicts from
+                # multiple procedural blocks assigning the same register.
+                # The ff_target param records the original net name so the
+                # FSM detector can trace feedback loops.
                 q_net = self._fresh_net(f"ff_q_{lhs_net.name}", lhs_net.width)
                 self.mod.connect(ff, "Q", q_net, direction="output")
 
@@ -724,6 +741,16 @@ class _Lowerer:
                     net = self._get_or_create_net(node.name, w)
                     cell = self._fresh_cell(f"param_{node.name}", PrimOp.CONST, value=int_val, width=w)
                     self.mod.connect(cell, "Y", net, direction="output")
+
+            elif kind == "SymbolKind.TransparentMember":
+                # Enum values / localparam constants visible as members
+                if hasattr(node, "value") and node.value is not None:
+                    int_val = _svint_to_int(node.value)
+                    w = self._bit_width(node) if hasattr(node, "type") else 32
+                    net = self._get_or_create_net(node.name, w)
+                    if net.driver is None:
+                        cell = self._fresh_cell(f"enum_{node.name}", PrimOp.CONST, value=int_val, width=w)
+                        self.mod.connect(cell, "Y", net, direction="output")
 
             elif kind == "SymbolKind.ContinuousAssign":
                 assign_expr = node.body if hasattr(node, "body") else None

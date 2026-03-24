@@ -76,12 +76,18 @@ class TestUartTx:
         assert len(mod_json["ports"]) == 4
         assert len(mod_json["cells"]) > 0
 
+    def test_fsm_detected(self):
+        _, mod = self._synth(optimize=False)
+        fsms = extract_fsms(mod)
+        assert len(fsms) >= 1, f"expected FSM in uart_tx, got {len(fsms)}"
+        state_names = [f.state_net for f in fsms]
+        assert any("state" in n for n in state_names), f"no state FSM found: {state_names}"
+
     def test_fsm_annotation_preserves_cells(self):
         _, mod = self._synth(optimize=False)
         cells_before = set(mod.cells.keys())
         fsms = extract_fsms(mod)
         annotate_fsm_cells(mod, fsms)
-        # FSM pass must never add or remove cells
         assert set(mod.cells.keys()) == cells_before
 
 
@@ -132,6 +138,13 @@ class TestSdramBridge:
         mod = design.top_module()
         ffs = [c for c in mod.cells.values() if c.op == PrimOp.FF]
         assert len(ffs) >= 5, f"sdram_bridge should have state + data FFs"
+
+    def test_fsm_detected(self):
+        result = parse_files(self.SRC, top=self.TOP)
+        design = lower_to_ir(result, top=self.TOP)
+        mod = design.top_module()
+        fsms = extract_fsms(mod)
+        assert len(fsms) >= 1, f"sdram_bridge has S_IDLE/S_REQ/S_WAIT/S_CAPTURE FSM"
 
 
 class TestSdramController:
@@ -232,6 +245,13 @@ class TestRimeV:
         run_default_passes(mod)
         after = mod.stats()["cells"]
         assert after < before, f"optimization should reduce cells: {before} -> {after}"
+
+    def test_fsm_detected(self):
+        result = parse_files(self.SRC, top=self.TOP)
+        design = lower_to_ir(result, top=self.TOP)
+        mod = design.top_module()
+        fsms = extract_fsms(mod)
+        assert len(fsms) >= 1, f"RIME-V has a multi-state CPU FSM"
 
 
 # ---------------------------------------------------------------------------

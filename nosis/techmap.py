@@ -687,7 +687,44 @@ class _ECP5Mapper:
             bram.ports["CEB"] = ["1"]
             return
 
-        # No BRAM tag — fall back to FF-based mapping (placeholder)
+        if bram_config in ("DPR16X4", "DPR16X4_TILED"):
+            # Distributed RAM: TRELLIS_DPR16X4 (16 entries, 4 bits each)
+            dpr_count = int(cell.params.get("bram_count", 1))
+            width = int(cell.params.get("width", 4))
+            rdata_net = list(cell.outputs.values())[0] if cell.outputs else None
+            rdata_bits = self._get_bits(rdata_net) if rdata_net else []
+
+            raddr_net = cell.inputs.get("RADDR")
+            waddr_net = cell.inputs.get("WADDR")
+            wdata_net = cell.inputs.get("WDATA")
+            we_net = cell.inputs.get("WE")
+            clk_net = cell.inputs.get("CLK")
+
+            raddr_bits = self._get_bits(raddr_net) if raddr_net else []
+            waddr_bits = self._get_bits(waddr_net) if waddr_net else []
+            wdata_bits = self._get_bits(wdata_net) if wdata_net else []
+            we_bits = self._get_bits(we_net) if we_net else ["0"]
+            clk_bits = self._get_bits(clk_net) if clk_net else ["0"]
+
+            for d in range(dpr_count):
+                dpr = self.nl.add_cell(self._fresh_name("dpr"), "TRELLIS_DPR16X4")
+                if cell.src:
+                    dpr.attributes["src"] = cell.src
+                # Address ports (4 bits each for 16 entries)
+                for i in range(4):
+                    dpr.ports[f"RAD{i}"] = [raddr_bits[i] if i < len(raddr_bits) else "0"]
+                    dpr.ports[f"WAD{i}"] = [waddr_bits[i] if i < len(waddr_bits) else "0"]
+                # Data ports (4 bits)
+                for i in range(4):
+                    bit_idx = d * 4 + i
+                    dpr.ports[f"DI{i}"] = [wdata_bits[bit_idx] if bit_idx < len(wdata_bits) else "0"]
+                    out_bit = rdata_bits[bit_idx] if bit_idx < len(rdata_bits) else self.nl.alloc_bit()
+                    dpr.ports[f"DO{i}"] = [out_bit]
+                dpr.ports["WCK"] = [clk_bits[0] if clk_bits else "0"]
+                dpr.ports["WRE"] = [we_bits[0] if we_bits else "0"]
+            return
+
+        # No BRAM/DPR tag — fall back to FF-based mapping (placeholder)
         self._map_unknown(cell)
 
     def _map_unknown(self, cell: Cell) -> None:

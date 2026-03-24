@@ -55,8 +55,8 @@ def test_pack_mixed_ops():
     assert packed == 1
 
 
-def test_no_pack_multibit():
-    """Multi-bit operations should not be packed (yet)."""
+def test_pack_multibit():
+    """Multi-bit cascaded bitwise operations should be packed."""
     mod = Module(name="test")
     a = mod.add_net("a", 8)
     b = mod.add_net("b", 8)
@@ -75,7 +75,8 @@ def test_no_pack_multibit():
     mod.connect(cell2, "Y", out, direction="output")
 
     packed = pack_luts_ir(mod)
-    assert packed == 0  # multi-bit not supported
+    assert packed == 1  # multi-bit now supported
+    assert "and1" not in mod.cells
 
 
 def test_no_pack_multiple_consumers():

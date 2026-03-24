@@ -283,6 +283,43 @@ def dead_code_eliminate(mod: Module) -> int:
 # Default pass pipeline
 # ---------------------------------------------------------------------------
 
+def remove_const_ffs(mod: Module) -> int:
+    """Remove FFs whose D input is driven by a constant.
+
+    A FF with a constant D input will always hold the same value after
+    reset. Replace its Q output connections with the constant value.
+    Returns the number of FFs removed.
+    """
+    removed = 0
+    to_remove: list[str] = []
+
+    for cell in mod.cells.values():
+        if cell.op != PrimOp.FF:
+            continue
+        d_net = cell.inputs.get("D")
+        if d_net is None or d_net.driver is None:
+            continue
+        if d_net.driver.op != PrimOp.CONST:
+            continue
+
+        # D is constant — this FF always holds the same value
+        # Replace the FF output with the constant
+        q_nets = list(cell.outputs.values())
+        if not q_nets:
+            continue
+        q_net = q_nets[0]
+
+        # Point q_net's driver to the constant cell
+        q_net.driver = d_net.driver
+        to_remove.append(cell.name)
+        removed += 1
+
+    for name in to_remove:
+        del mod.cells[name]
+
+    return removed
+
+
 def run_default_passes(mod: Module) -> dict[str, int]:
     """Run the default optimization pipeline. Returns pass statistics."""
     from nosis.cse import eliminate_common_subexpressions
@@ -290,11 +327,12 @@ def run_default_passes(mod: Module) -> dict[str, int]:
     stats: dict[str, int] = {}
     stats["const_fold"] = constant_fold(mod)
     stats["identity"] = identity_simplify(mod)
+    stats["const_ff"] = remove_const_ffs(mod)
     stats["cse"] = eliminate_common_subexpressions(mod)
     stats["dce"] = dead_code_eliminate(mod)
-    # Second round after DCE may expose more constants
     stats["const_fold_2"] = constant_fold(mod)
     stats["identity_2"] = identity_simplify(mod)
+    stats["const_ff_2"] = remove_const_ffs(mod)
     stats["cse_2"] = eliminate_common_subexpressions(mod)
     stats["dce_2"] = dead_code_eliminate(mod)
     return stats

@@ -378,7 +378,7 @@ class TestPicoRV32Soc:
         for name, cell in mod_json["cells"].items():
             assert "type" in cell
             assert "connections" in cell
-            assert cell["type"] in ("TRELLIS_SLICE", "TRELLIS_FF", "CCU2C", "MULT18X18D", "DP16KD"), f"unexpected cell type: {cell['type']}"
+            assert cell["type"] in ("TRELLIS_SLICE", "TRELLIS_FF", "CCU2C", "MULT18X18D", "DP16KD", "TRELLIS_DPR16X4"), f"unexpected cell type: {cell['type']}"
 
 
 # ---------------------------------------------------------------------------

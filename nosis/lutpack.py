@@ -111,11 +111,11 @@ def pack_luts_ir(mod: Module) -> int:
             if outer_port not in ("A", "B"):
                 continue
 
-            # Both cells must be 1-bit width for simple composition
-            if inner_out_net.width != 1:
-                continue
+            # Both cells must have matching output width
             outer_outs = list(outer_cell.outputs.values())
-            if not outer_outs or outer_outs[0].width != 1:
+            if not outer_outs:
+                continue
+            if inner_out_net.width != outer_outs[0].width:
                 continue
 
             # Get the other input to the outer cell

@@ -126,20 +126,17 @@ def check_equivalence_exhaustive(
 
     Only feasible for small designs (total input bits <= max_input_bits).
     """
-    # Identify input and output ports by checking which cells drive/consume them
+    # Build input port set once — O(cells), not O(ports * cells)
+    input_net_names: set[str] = set()
+    for cell in mod_a.cells.values():
+        if cell.op == PrimOp.INPUT:
+            for out_net in cell.outputs.values():
+                input_net_names.add(out_net.name)
+
     input_ports_a: dict[str, Net] = {}
     output_ports_a: dict[str, Net] = {}
     for name, net in mod_a.ports.items():
-        is_input = False
-        for cell in mod_a.cells.values():
-            if cell.op == PrimOp.INPUT:
-                for out_net in cell.outputs.values():
-                    if out_net.name == name:
-                        is_input = True
-                        break
-            if is_input:
-                break
-        if is_input:
+        if name in input_net_names:
             input_ports_a[name] = net
         else:
             output_ports_a[name] = net
@@ -382,14 +379,14 @@ def check_equivalence(
     for larger designs (when PySAT is available), and random simulation
     as a fallback.
     """
-    input_ports: dict[str, Net] = {}
-    for name, net in mod_a.ports.items():
-        for cell in mod_a.cells.values():
-            if cell.op == PrimOp.INPUT:
-                for out_net in cell.outputs.values():
-                    if out_net.name == name:
-                        input_ports[name] = net
-                        break
+    input_net_names: set[str] = set()
+    for cell in mod_a.cells.values():
+        if cell.op == PrimOp.INPUT:
+            for out_net in cell.outputs.values():
+                input_net_names.add(out_net.name)
+    input_ports: dict[str, Net] = {
+        name: net for name, net in mod_a.ports.items() if name in input_net_names
+    }
     total_bits = sum(net.width for net in input_ports.values())
 
     if total_bits <= max_exhaustive_bits:

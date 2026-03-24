@@ -246,7 +246,7 @@ class _Lowerer:
 
     def _get_or_create_net(self, name: str, width: int) -> Net:
         if width <= 0:
-            width = 1  # prevent zero-width nets
+            width = 1  # safety: _bit_width should never return 0, but guard anyway
         if name in self.mod.nets:
             existing = self.mod.nets[name]
             if existing.width != width:
@@ -256,12 +256,22 @@ class _Lowerer:
         return self.mod.add_net(name, width)
 
     def _bit_width(self, node: Any) -> int:
-        """Extract bit width from a pyslang AST node."""
-        if hasattr(node, "type") and hasattr(node.type, "bitWidth"):
-            try:
-                return int(node.type.bitWidth)
-            except (TypeError, ValueError):
-                pass
+        """Extract bit width from a pyslang AST node.
+
+        Returns at least 1. Unpacked array types report bitWidth=0;
+        for those, the element type width is used if available.
+        """
+        if hasattr(node, "type"):
+            t = node.type
+            if hasattr(t, "bitWidth"):
+                w = int(t.bitWidth)
+                if w > 0:
+                    return w
+                # Unpacked array: try element type
+                if hasattr(t, "elementType") and hasattr(t.elementType, "bitWidth"):
+                    ew = int(t.elementType.bitWidth)
+                    if ew > 0:
+                        return ew
         return 1
 
     # --- Expression lowering ---
@@ -542,8 +552,9 @@ class _Lowerer:
     # --- Statement lowering ---
 
     def lower_procedural_block(self, block: Any) -> None:
-        """Lower a ProceduralBlock (always_ff, always_comb, always)."""
+        """Lower a ProceduralBlock (always_ff, always_comb, always, always @(*))."""
         proc_kind = str(block.procedureKind)
+        # "Always" covers both always_ff and always @(*) / always @(posedge ...)
         body = block.body
 
         if "AlwaysFF" in proc_kind or "Always" in proc_kind:

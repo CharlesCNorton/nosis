@@ -175,15 +175,17 @@ def eval_cell(
     for port_name, net in cell.inputs.items():
         inputs[port_name] = net_values.get(net.name, 0)
 
-    # Add width info for concat inputs
+    # Build params with concat width info without mutating cell.params
+    params = cell.params
     if cell.op == PrimOp.CONCAT:
-        count = int(cell.params.get("count", 0))
+        params = dict(cell.params)
+        count = int(params.get("count", 0))
         for i in range(count):
             inp = cell.inputs.get(f"I{i}")
             if inp:
-                cell.params[f"I{i}_width"] = inp.width
+                params[f"I{i}_width"] = inp.width
 
-    result = eval_const_op(cell.op, inputs, cell.params, width)
+    result = eval_const_op(cell.op, inputs, params, width)
     if result is None:
         return {}
 

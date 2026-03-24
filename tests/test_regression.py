@@ -370,6 +370,19 @@ class TestPicoRV32Soc:
         mod = design.top_module()
         assert len(mod.ports) >= 20
 
+    def test_memory_cells_emitted(self):
+        result = parse_files(self.SRC, top=self.TOP)
+        design = lower_to_ir(result, top=self.TOP)
+        mod = design.top_module()
+        mem_cells = [c for c in mod.cells.values() if c.op == PrimOp.MEMORY]
+        # rime_soc has progmem, uart_rx_fifo, uart_tx_fifo, sd_wbuf, bootrom
+        assert len(mem_cells) >= 3, f"expected >= 3 MEMORY cells, got {len(mem_cells)}"
+        # Check progmem dimensions
+        progmem = [c for c in mem_cells if c.params.get("mem_name") == "progmem"]
+        if progmem:
+            assert progmem[0].params["depth"] == 4096
+            assert progmem[0].params["width"] == 32
+
     def test_json_structural(self):
         result = parse_files(self.SRC, top=self.TOP)
         design = lower_to_ir(result, top=self.TOP)
@@ -382,7 +395,7 @@ class TestPicoRV32Soc:
         for name, cell in mod_json["cells"].items():
             assert "type" in cell
             assert "connections" in cell
-            assert cell["type"] in ("TRELLIS_SLICE", "TRELLIS_FF", "CCU2C", "MULT18X18D"), f"unexpected cell type: {cell['type']}"
+            assert cell["type"] in ("TRELLIS_SLICE", "TRELLIS_FF", "CCU2C", "MULT18X18D", "DP16KD"), f"unexpected cell type: {cell['type']}"
 
 
 # ---------------------------------------------------------------------------

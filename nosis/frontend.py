@@ -725,10 +725,37 @@ class _Lowerer:
 
             if kind == "SymbolKind.Variable":
                 w = self._bit_width(node)
-                self._get_or_create_net(node.name, w)
-                if node.initializer is not None:
+                # Check for unpacked arrays (memories)
+                t = node.type if hasattr(node, "type") else None
+                is_array = (
+                    t is not None
+                    and getattr(t, "bitWidth", None) == 0
+                    and hasattr(t, "fixedRange")
+                    and hasattr(t, "elementType")
+                )
+                if is_array:
+                    elem_type = t.elementType
+                    elem_w = getattr(elem_type, "bitWidth", 0)
+                    rng = t.fixedRange
+                    left = getattr(rng, "left", 0)
+                    right = getattr(rng, "right", 0)
+                    depth = abs(right - left) + 1
+                    if depth > 0 and elem_w > 0:
+                        rdata_net = self._fresh_net(f"mem_{node.name}_rdata", elem_w)
+                        mem_cell = self._fresh_cell(
+                            f"mem_{node.name}",
+                            PrimOp.MEMORY,
+                            depth=depth,
+                            width=elem_w,
+                            mem_name=node.name,
+                        )
+                        self.mod.connect(mem_cell, "RDATA", rdata_net, direction="output")
+                        # Create a net for the memory name reference
+                        self._get_or_create_net(node.name, elem_w)
+                else:
+                    self._get_or_create_net(node.name, w)
+                if not is_array and node.initializer is not None:
                     init_net = self.lower_expr(node.initializer)
-                    # Store initial value connection if needed
 
             elif kind == "SymbolKind.Net":
                 w = self._bit_width(node)

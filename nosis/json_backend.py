@@ -34,7 +34,7 @@ def _cell_to_json(cell: ECP5Cell) -> dict[str, Any]:
 
     for port_name, bits in cell.ports.items():
         # Classify port direction by name convention
-        if port_name in ("Q", "F0", "F1", "OFX0", "OFX1", "FCO", "CO", "COUT", "S0", "S1") or port_name.startswith("P"):
+        if port_name in ("Q", "F0", "F1", "OFX0", "OFX1", "FCO", "CO", "COUT", "S0", "S1") or port_name.startswith("P") or port_name.startswith("DO"):
             port_directions[port_name] = "output"
         else:
             port_directions[port_name] = "input"

@@ -243,12 +243,13 @@ class _ECP5Mapper:
             self._map_slice(cell)
         elif op in (PrimOp.ZEXT, PrimOp.SEXT):
             self._map_extend(cell)
+        elif op == PrimOp.MEMORY:
+            self._map_memory(cell)
         elif op == PrimOp.PMUX:
             self._map_pmux(cell)
         elif op == PrimOp.REPEAT:
             self._map_repeat(cell)
         else:
-            # Unsupported — emit as a LUT tied to 0
             self._map_unknown(cell)
 
     def _map_const(self, cell: Cell) -> None:
@@ -536,6 +537,99 @@ class _ECP5Mapper:
         out_ecp5 = self._get_net(out_net)
         for i in range(len(out_ecp5.bits)):
             out_ecp5.bits[i] = a_bits[i % len(a_bits)] if a_bits else "0"
+
+    def _map_memory(self, cell: Cell) -> None:
+        """Map MEMORY cells to DP16KD when tagged by BRAM inference, else to FFs."""
+        bram_config = cell.params.get("bram_config")
+        if bram_config == "DP16KD":
+            addr_bits = int(cell.params.get("bram_addr_bits", 10))
+            data_width = int(cell.params.get("bram_data_width", 18))
+            depth = int(cell.params.get("depth", 0))
+            width = int(cell.params.get("width", 0))
+
+            # Determine the DP16KD data width configuration string
+            width_map = {1: "X1", 2: "X2", 4: "X4", 9: "X9", 18: "X18", 36: "X36"}
+            data_str = width_map.get(data_width, "X18")
+
+            bram = self.nl.add_cell(self._fresh_name("bram"), "DP16KD")
+            if cell.src:
+                bram.attributes["src"] = cell.src
+            bram.parameters["DATA_WIDTH_A"] = str(data_width)
+            bram.parameters["DATA_WIDTH_B"] = str(data_width)
+            bram.parameters["REGMODE_A"] = "NOREG"
+            bram.parameters["REGMODE_B"] = "NOREG"
+            bram.parameters["CSDECODE_A"] = "0b000"
+            bram.parameters["CSDECODE_B"] = "0b000"
+            bram.parameters["WRITEMODE_A"] = "NORMAL"
+            bram.parameters["WRITEMODE_B"] = "NORMAL"
+            bram.parameters["GSR"] = "DISABLED"
+            # INIT values default to all zeros
+            for i in range(64):
+                bram.parameters[f"INITVAL_{i:02X}"] = "0x00000000000000000000"
+
+            # Wire address port A (read)
+            raddr_net = cell.inputs.get("RADDR")
+            raddr_bits = self._get_bits(raddr_net) if raddr_net else []
+            for i in range(14):
+                bit = raddr_bits[i] if i < len(raddr_bits) else "0"
+                bram.ports[f"ADA{i}"] = [bit]
+
+            # Wire address port B (write)
+            waddr_net = cell.inputs.get("WADDR")
+            waddr_bits = self._get_bits(waddr_net) if waddr_net else []
+            for i in range(14):
+                bit = waddr_bits[i] if i < len(waddr_bits) else "0"
+                bram.ports[f"ADB{i}"] = [bit]
+
+            # Wire data input (port B write)
+            wdata_net = cell.inputs.get("WDATA")
+            wdata_bits = self._get_bits(wdata_net) if wdata_net else []
+            for i in range(18):
+                bit = wdata_bits[i] if i < len(wdata_bits) else "0"
+                bram.ports[f"DIB{i}"] = [bit]
+            for i in range(18):
+                bram.ports[f"DIA{i}"] = ["0"]
+
+            # Wire data output (port A read)
+            rdata_net = list(cell.outputs.values())[0] if cell.outputs else None
+            rdata_bits = self._get_bits(rdata_net) if rdata_net else []
+            for i in range(18):
+                bit = rdata_bits[i] if i < len(rdata_bits) else self.nl.alloc_bit()
+                bram.ports[f"DOA{i}"] = [bit]
+            for i in range(18):
+                bram.ports[f"DOB{i}"] = [self.nl.alloc_bit()]
+
+            # Clock
+            clk_net = cell.inputs.get("CLK")
+            clk_bits = self._get_bits(clk_net) if clk_net else ["0"]
+            bram.ports["CLKA"] = [clk_bits[0] if clk_bits else "0"]
+            bram.ports["CLKB"] = [clk_bits[0] if clk_bits else "0"]
+
+            # Write enable
+            we_net = cell.inputs.get("WE")
+            we_bits = self._get_bits(we_net) if we_net else ["0"]
+            bram.ports["WEA"] = ["0"]
+            bram.ports["WEB"] = [we_bits[0] if we_bits else "0"]
+
+            # Chip select (active)
+            bram.ports["CSA0"] = ["1"]
+            bram.ports["CSA1"] = ["0"]
+            bram.ports["CSA2"] = ["0"]
+            bram.ports["CSB0"] = ["1"]
+            bram.ports["CSB1"] = ["0"]
+            bram.ports["CSB2"] = ["0"]
+
+            # Reset and output register clock enable
+            bram.ports["RSTA"] = ["0"]
+            bram.ports["RSTB"] = ["0"]
+            bram.ports["OCEA"] = ["1"]
+            bram.ports["OCEB"] = ["1"]
+            bram.ports["CEA"] = ["1"]
+            bram.ports["CEB"] = ["1"]
+            return
+
+        # No BRAM tag — fall back to FF-based mapping (placeholder)
+        self._map_unknown(cell)
 
     def _map_unknown(self, cell: Cell) -> None:
         """Emit a placeholder for unsupported operations."""

@@ -23,7 +23,7 @@ Source files (.sv, .v)
         │  Design { Module { cells: dict[str, Cell], nets: dict[str, Net] } }
         ▼
    ┌────────┐
-   │ passes │  nosis/passes.py — constant fold, DCE (Module mutated in place)
+   │ passes │  nosis/passes.py — constant fold, identity simplify, CSE, DCE
    └────┬───┘
         │  Same Design, fewer cells/nets
         ▼
@@ -33,6 +33,11 @@ Source files (.sv, .v)
    └──────┬───────┘
           │  Same Design, cells have inference annotations
           ▼
+   ┌─────────┐
+   │ lutpack │  nosis/lutpack.py — merge cascaded 2-input ops
+   └────┬────┘
+        │  Same Design, fewer cells
+        ▼
    ┌─────────┐
    │ techmap │  nosis/techmap.py — IR cells → ECP5Cell instances
    └────┬────┘
@@ -136,12 +141,47 @@ The reason for starting with simulation: it reuses the same `_eval_cell` functio
 
 Tests are split by scope:
 
-- **Unit tests** (`test_ir.py`, `test_passes.py`, `test_techmap.py`, `test_json_backend.py`, `test_fsm.py`, `test_bram.py`, `test_dsp.py`, `test_carry.py`, `test_equiv.py`): test individual modules in isolation using hand-constructed IR. No external dependencies beyond Python. Run in CI.
+- **Unit tests** (`test_ir.py`, `test_eval.py`, `test_passes.py`, `test_techmap.py`, `test_json_backend.py`, `test_fsm.py`, `test_bram.py`, `test_dsp.py`, `test_carry.py`, `test_equiv.py`, `test_cse.py`, `test_lutpack.py`, `test_clocks.py`, `test_blackbox.py`, `test_resources.py`, `test_timing.py`, `test_diff.py`, `test_readmem.py`): test individual modules in isolation using hand-constructed IR. No external dependencies beyond Python. Run in CI.
 
 - **Frontend tests** (`test_frontend.py`): test pyslang parsing and IR lowering against real SystemVerilog files from the RIME repository. Require pyslang and RIME source.
 
-- **Regression tests** (`test_regression.py`): end-to-end synthesis of real designs with structural assertions (port counts, cell counts, IR statistics, JSON validity). Each test class covers one design and makes increasingly specific claims about the synthesis output. A pipeline change that alters these claims must be reviewed.
+- **Regression tests** (`test_regression.py`): end-to-end synthesis of real designs with structural assertions (port counts, cell counts, IR statistics, JSON validity, FSM detection, CCU2C emission, SSHR/REPEAT handling, enum lowering, hierarchy prefixing, MEMORY dimensions, LUT packing, clock domains, distributed RAM). Each test class covers one design and makes increasingly specific claims about the synthesis output.
 
-- **Validation tests** (`test_validate.py`): test the iverilog simulation harness infrastructure. Require iverilog.
+- **Connectivity tests** (`test_connectivity.py`): 12 structural invariants verified on every design — net widths, driver counts, FF completeness, port presence. Plus JSON netlist invariant verification.
 
-The regression tests are the primary correctness gate. Every design that nosis has successfully synthesized has a regression test class that locks its structural properties. New designs are added as new test classes.
+- **Property-based tests** (`test_property.py`): Hypothesis-driven random testing of evaluation determinism, width masking, algebraic identities (De Morgan, add/sub inverse, double NOT), comparison complementarity, MUX selection, shift inverse, div/mod reconstruction, optimization correctness.
+
+- **Mutation tests** (`test_mutation.py`): verifies that every distinct pair of operations is distinguishable by the equivalence checker. Counterexample extraction validated. No false positives.
+
+- **Torture tests** (`test_torture.py`): adversarial inputs across every pipeline stage — degenerate IR structures, empty modules, 100-gate chains, wide fanout, deep MUX trees, optimization stress, equivalence checker edge cases, JSON edge cases, resource reporting boundaries.
+
+- **Validation tests** (`test_validate.py`): iverilog simulation harness infrastructure.
+
+All test paths are configurable via `NOSIS_RIME_ROOT` and `NOSIS_PYSLANG_PATH` environment variables (see `tests/conftest.py`).
+
+## Module Inventory
+
+| Module | Lines | Purpose |
+|--------|-------|---------|
+| `ir.py` | 160 | IR: Design, Module, Cell, Net, 32 PrimOps, attributes |
+| `eval.py` | 170 | Shared cell evaluation — single source of truth for all PrimOp semantics |
+| `frontend.py` | 1066 | pyslang IEEE 1800-2017 parse, elaborate, RTL-to-IR lowering, hierarchy |
+| `passes.py` | 300 | Constant fold, identity simplify, dead code elimination |
+| `cse.py` | 90 | Common subexpression elimination |
+| `fsm.py` | 280 | FSM extraction, encoding classification, cell annotation |
+| `bram.py` | 100 | DP16KD and DPR16X4 inference |
+| `dsp.py` | 65 | MULT18X18D inference |
+| `carry.py` | 65 | CCU2C carry chain inference |
+| `lutpack.py` | 150 | IR-level LUT packing — merge cascaded 2-input operations |
+| `clocks.py` | 110 | Clock domain analysis, CDC detection |
+| `techmap.py` | 600 | ECP5 mapping: TRELLIS_SLICE, TRELLIS_FF, CCU2C, MULT18X18D, DP16KD, PMUX |
+| `json_backend.py` | 120 | nextpnr-compatible JSON serialization |
+| `equiv.py` | 330 | Equivalence checking: exhaustive, SAT (PySAT Glucose3), random simulation |
+| `validate.py` | 250 | iverilog RTL simulation harness, testbench generation |
+| `resources.py` | 230 | Exact area calculation, slice packing, device utilization reporting |
+| `timing.py` | 200 | Static timing analysis, critical path identification |
+| `diff.py` | 90 | Netlist comparison between synthesis runs |
+| `readmem.py` | 55 | $readmemh / $readmemb parser for BRAM initialization |
+| `blackbox.py` | 350 | Black box registry, 48 ECP5 vendor primitives, user-defined black boxes |
+| `cli.py` | 200 | Command-line interface with 10 pipeline stages |
+| `ecp5_prims.sv` | 140 | Vendor primitive stubs for slang elaboration |

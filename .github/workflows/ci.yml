@@ -27,5 +27,26 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install pytest
-      - run: pytest tests/test_ir.py tests/test_passes.py tests/test_techmap.py tests/test_json_backend.py tests/test_fsm.py tests/test_bram.py tests/test_dsp.py tests/test_carry.py tests/test_equiv.py -v
+      - run: pip install pytest hypothesis
+      - run: |
+          pytest \
+            tests/test_ir.py \
+            tests/test_eval.py \
+            tests/test_passes.py \
+            tests/test_techmap.py \
+            tests/test_json_backend.py \
+            tests/test_fsm.py \
+            tests/test_bram.py \
+            tests/test_dsp.py \
+            tests/test_carry.py \
+            tests/test_equiv.py \
+            tests/test_cse.py \
+            tests/test_lutpack.py \
+            tests/test_clocks.py \
+            tests/test_blackbox.py \
+            tests/test_resources.py \
+            tests/test_timing.py \
+            tests/test_diff.py \
+            tests/test_readmem.py \
+            tests/test_mutation.py \
+            -v

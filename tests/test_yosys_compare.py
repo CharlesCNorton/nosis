@@ -99,9 +99,10 @@ def test_uart_tx_comparison():
     if yosys_luts > 0:
         ratio = nosis_area.lut_cells / yosys_luts
         print(f"  ratio: {ratio:.1f}x")
-        # Record the ratio — we expect nosis to be larger but not absurdly so
+        # Assert ratio bounds — nosis should not be more than 20x yosys
         assert nosis_area.lut_cells > 0
         assert nosis_area.ff_cells > 0
+        assert ratio < 20.0, f"LUT ratio {ratio:.1f}x exceeds 20x bound"
 
 
 def test_rime_v_comparison():
@@ -127,3 +128,4 @@ def test_rime_v_comparison():
     if yosys_luts > 0:
         ratio = nosis_area.lut_cells / yosys_luts
         print(f"  ratio: {ratio:.1f}x")
+        assert ratio < 20.0, f"rime_v LUT ratio {ratio:.1f}x exceeds 20x bound"

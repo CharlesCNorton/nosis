@@ -101,14 +101,36 @@ def _svint_to_int(val: Any) -> int:
 
 __all__ = [
     "FrontendError",
+    "SynthesisWarning",
     "ParseResult",
     "parse_files",
     "lower_to_ir",
 ]
 
+# System tasks that are simulation-only and must be stripped during synthesis
+_SIMULATION_TASKS = frozenset({
+    "$display", "$write", "$strobe", "$monitor", "$monitoron", "$monitoroff",
+    "$finish", "$stop", "$fatal", "$error", "$warning", "$info",
+    "$fopen", "$fclose", "$fdisplay", "$fwrite", "$fstrobe", "$fmonitor",
+    "$readmemh", "$readmemb", "$dumpfile", "$dumpvars", "$dumpoff", "$dumpon",
+    "$dumpall", "$dumplimit", "$dumpflush", "$time", "$stime", "$realtime",
+})
+
 
 class FrontendError(RuntimeError):
     """Raised when parsing or lowering fails."""
+
+
+class SynthesisWarning:
+    """A non-fatal warning emitted during lowering."""
+    def __init__(self, category: str, message: str, src: str = "") -> None:
+        self.category = category
+        self.message = message
+        self.src = src
+
+    def __repr__(self) -> str:
+        loc = f" at {self.src}" if self.src else ""
+        return f"SynthesisWarning({self.category}): {self.message}{loc}"
 
 
 @dataclass(slots=True)
@@ -226,6 +248,7 @@ class _Lowerer:
         self.mod = module
         self._net_counter = 0
         self._cell_counter = 0
+        self.warnings: list[SynthesisWarning] = []
 
     def _fresh_net(self, prefix: str, width: int) -> Net:
         name = f"${prefix}_{self._net_counter}"
@@ -250,6 +273,13 @@ class _Lowerer:
         if name in self.mod.nets:
             existing = self.mod.nets[name]
             if existing.width != width:
+                # Forward reference tolerance — if the existing net was
+                # created with default width 1 (forward reference placeholder)
+                # and the real width is now known, update in place instead of
+                # creating a conversion net.
+                if existing.width == 1 and width > 1 and existing.driver is None:
+                    existing.width = width
+                    return existing
                 # Width mismatch — create a conversion net
                 return self._fresh_net(f"{name}_w{width}", width)
             return existing
@@ -260,9 +290,19 @@ class _Lowerer:
 
         Returns at least 1. Unpacked array types report bitWidth=0;
         for those, the element type width is used if available.
+
+        Rejects ``real`` and floating-point types with an explicit error.
         """
         if hasattr(node, "type"):
             t = node.type
+            # Reject real/shortreal/realtime (not synthesizable)
+            type_name = str(getattr(t, "name", ""))
+            if type_name in ("real", "shortreal", "realtime"):
+                src = self._src_from_node(node)
+                raise FrontendError(
+                    f"floating-point type `{type_name}` is not synthesizable"
+                    f"{' at ' + src if src else ''}"
+                )
             if hasattr(t, "bitWidth"):
                 w = int(t.bitWidth)
                 if w > 0:
@@ -303,6 +343,23 @@ class _Lowerer:
         elif kind == "ExpressionKind.Assignment":
             return self._lower_assignment_expr(expr)
         elif kind == "ExpressionKind.Call":
+            # Strip simulation-only system tasks ($display, $finish, etc.)
+            call_name = ""
+            sub = getattr(expr, "subroutine", None)
+            if sub is not None:
+                call_name = getattr(sub, "name", "")
+            if call_name in _SIMULATION_TASKS:
+                src = self._src_from_node(expr)
+                self.warnings.append(SynthesisWarning(
+                    "simulation_task",
+                    f"stripped {call_name} (simulation-only, not synthesizable)",
+                    src=src,
+                ))
+                w = self._bit_width(expr) or 1
+                net = self._fresh_net("stripped_sim", w)
+                cell = self._fresh_cell("stripped_sim", PrimOp.CONST, value=0, width=w)
+                self.mod.connect(cell, "Y", net, direction="output")
+                return net
             # System function calls ($clog2, $bits, etc.) are typically
             # resolved to constants by slang during elaboration. If we
             # reach here, treat as constant 0.
@@ -557,7 +614,22 @@ class _Lowerer:
         # "Always" covers both always_ff and always @(*) / always @(posedge ...)
         body = block.body
 
-        if "AlwaysFF" in proc_kind or "Always" in proc_kind:
+        if "AlwaysComb" in proc_kind or "AlwaysLatch" in proc_kind:
+            # Combinational or latch — lower statements as wiring.
+            # Warn on incomplete if/case in always_comb (latch inference)
+            if "AlwaysComb" in proc_kind:
+                latch_targets = self._detect_latch_inference(body)
+                for target in latch_targets:
+                    src = self._src_from_node(body)
+                    self.warnings.append(SynthesisWarning(
+                        "latch_inference",
+                        f"incomplete assignment to `{target}` in always_comb — "
+                        f"infers a latch; use default assignment or cover all branches",
+                        src=src,
+                    ))
+            self._lower_statement(body)
+
+        elif "AlwaysFF" in proc_kind or "Always" in proc_kind:
             # Extract clock edge from timing control
             clock_net: Net | None = None
             reset_net: Net | None = None
@@ -609,12 +681,80 @@ class _Lowerer:
                 q_net = self._fresh_net(f"ff_q_{lhs_net.name}", lhs_net.width)
                 self.mod.connect(ff, "Q", q_net, direction="output")
 
-        elif "AlwaysComb" in proc_kind or "AlwaysLatch" in proc_kind:
-            # Combinational or latch — lower statements as wiring.
-            # If the block is AlwaysLatch, slang has already validated
-            # that latches are intentional. Incomplete if/case in
-            # AlwaysComb would be a slang warning/error.
-            self._lower_statement(body)
+    def _detect_latch_inference(self, stmt: Any) -> list[str]:
+        """Detect incomplete if/case in combinational blocks that would infer latches.
+
+        Returns a list of target signal names that are assigned in some but
+        not all branches of a conditional.
+        """
+        kind = str(stmt.kind)
+        targets: list[str] = []
+
+        if kind == "StatementKind.Conditional":
+            # if without else -> latch
+            if stmt.ifFalse is None:
+                true_targets = self._collect_assignment_targets(stmt.ifTrue)
+                targets.extend(true_targets)
+            else:
+                true_targets = set(self._collect_assignment_targets(stmt.ifTrue))
+                false_targets = set(self._collect_assignment_targets(stmt.ifFalse))
+                # Signals assigned in one branch but not the other
+                targets.extend(sorted(true_targets - false_targets))
+                targets.extend(sorted(false_targets - true_targets))
+
+        elif kind == "StatementKind.Case":
+            if stmt.defaultCase is None:
+                # Case without default -> latch for all assigned signals
+                for item in stmt.items:
+                    targets.extend(self._collect_assignment_targets(item.stmt))
+
+        elif kind in ("StatementKind.Block", "StatementKind.List"):
+            children = []
+            if kind == "StatementKind.Block" and stmt.body is not None:
+                children = [stmt.body]
+            elif kind == "StatementKind.List":
+                children = list(stmt.list)
+            for child in children:
+                targets.extend(self._detect_latch_inference(child))
+
+        elif kind == "StatementKind.Timed":
+            targets.extend(self._detect_latch_inference(stmt.stmt))
+
+        return targets
+
+    def _collect_assignment_targets(self, stmt: Any) -> list[str]:
+        """Collect signal names assigned in a statement tree."""
+        kind = str(stmt.kind)
+        targets: list[str] = []
+
+        if kind == "StatementKind.ExpressionStatement":
+            expr = stmt.expr
+            if str(expr.kind) == "ExpressionKind.Assignment":
+                left_sym = getattr(expr.left, "symbol", None)
+                if left_sym:
+                    targets.append(left_sym.name)
+
+        elif kind in ("StatementKind.Block", "StatementKind.List"):
+            children = []
+            if kind == "StatementKind.Block" and stmt.body is not None:
+                children = [stmt.body]
+            elif kind == "StatementKind.List":
+                children = list(stmt.list)
+            for child in children:
+                targets.extend(self._collect_assignment_targets(child))
+
+        elif kind == "StatementKind.Conditional":
+            targets.extend(self._collect_assignment_targets(stmt.ifTrue))
+            if stmt.ifFalse is not None:
+                targets.extend(self._collect_assignment_targets(stmt.ifFalse))
+
+        elif kind == "StatementKind.Case":
+            for item in stmt.items:
+                targets.extend(self._collect_assignment_targets(item.stmt))
+            if stmt.defaultCase is not None:
+                targets.extend(self._collect_assignment_targets(stmt.defaultCase))
+
+        return targets
 
     def _collect_nb_assignments(
         self, stmt: Any
@@ -817,8 +957,47 @@ class _Lowerer:
                 w = self._bit_width(node)
                 # Check for unpacked arrays (memories)
                 t = node.type if hasattr(node, "type") else None
+
+                # Multi-dimensional array support
+                # Check if this is a multi-dim array by walking elementType chain
+                is_multidim = False
+                if (t is not None and getattr(t, "bitWidth", None) == 0
+                        and hasattr(t, "elementType")):
+                    inner = t.elementType
+                    if (hasattr(inner, "elementType") and hasattr(inner, "fixedRange")
+                            and getattr(inner, "bitWidth", None) == 0):
+                        is_multidim = True
+                        # Flatten to 1D: total_depth = outer_depth * inner_depth
+                        outer_rng = t.fixedRange
+                        inner_rng = inner.fixedRange
+                        outer_depth = abs(getattr(outer_rng, "right", 0) - getattr(outer_rng, "left", 0)) + 1
+                        inner_depth = abs(getattr(inner_rng, "right", 0) - getattr(inner_rng, "left", 0)) + 1
+                        leaf = inner.elementType
+                        leaf_w = getattr(leaf, "bitWidth", 0) if hasattr(leaf, "bitWidth") else 1
+                        total_depth = outer_depth * inner_depth
+                        if total_depth > 0 and leaf_w > 0:
+                            rdata_net = self._fresh_net(f"mem_{node.name}_rdata", leaf_w)
+                            mem_cell = self._fresh_cell(
+                                f"mem_{node.name}", PrimOp.MEMORY,
+                                depth=total_depth, width=leaf_w, mem_name=node.name,
+                            )
+                            self.mod.connect(mem_cell, "RDATA", rdata_net, direction="output")
+                            self._get_or_create_net(node.name, leaf_w)
+                        else:
+                            self._get_or_create_net(node.name, w if w > 0 else 1)
+
+                # Packed struct support
+                # Packed structs have a non-zero bitWidth — slang flattens them
+                # to a single bitvector. We treat them as regular nets.
+                is_packed_struct = False
+                type_str = str(getattr(t, "kind", "")) if t else ""
+                if "PackedStruct" in type_str or "PackedUnion" in type_str:
+                    is_packed_struct = True
+                    # Already handled by _bit_width returning the total bitWidth
+
                 is_array = (
-                    t is not None
+                    not is_multidim
+                    and t is not None
                     and getattr(t, "bitWidth", None) == 0
                     and hasattr(t, "fixedRange")
                     and hasattr(t, "elementType")
@@ -872,16 +1051,85 @@ class _Lowerer:
             elif kind == "SymbolKind.ContinuousAssign":
                 assign_expr = node.body if hasattr(node, "body") else None
                 if assign_expr is None:
-                    # Try assignment attribute
                     assign_expr = node.assignment if hasattr(node, "assignment") else None
                 if assign_expr is not None:
+                    # Strip delay from continuous assignments (not synthesizable)
+                    # Delays (#N) are simulation-only; slang preserves them
+                    # but they have no synthesis meaning.
+                    delay = getattr(assign_expr, "timingControl", None)
+                    if delay is not None:
+                        src = self._src_from_node(node)
+                        self.warnings.append(SynthesisWarning(
+                            "delay_stripped",
+                            "delay stripped from continuous assignment (not synthesizable)",
+                            src=src,
+                        ))
                     self.lower_expr(assign_expr)
 
+            elif kind == "SymbolKind.Defparam":
+                # defparam — slang resolves at elaboration time.
+                # The parameter values are already propagated. Emit a warning
+                # since defparam is deprecated in IEEE 1800-2017.
+                src = self._src_from_node(node)
+                self.warnings.append(SynthesisWarning(
+                    "defparam",
+                    "defparam is deprecated in IEEE 1800-2017; use parameter overrides instead",
+                    src=src,
+                ))
+
             elif kind == "SymbolKind.ProceduralBlock":
+                # Check for (* synthesis off/on *) pragma
+                attrs = getattr(node, "attributes", None)
+                if attrs:
+                    for attr in attrs:
+                        attr_name = getattr(attr, "name", "")
+                        if attr_name == "synthesis" and str(getattr(attr, "value", "")).lower() == "off":
+                            src = self._src_from_node(node)
+                            self.warnings.append(SynthesisWarning(
+                                "synthesis_off",
+                                "block excluded from synthesis by (* synthesis off *) pragma",
+                                src=src,
+                            ))
+                            return  # skip this block entirely
                 self.lower_procedural_block(node)
+
+            elif kind == "SymbolKind.GenerateBlock":
+                # generate-for — slang fully unrolls generate blocks.
+                # If we see a GenerateBlock, it means slang has already unrolled
+                # the generate-for. Walk its members normally.
+                if hasattr(node, "members"):
+                    for member in node.members:
+                        walk_member(member)
 
             elif kind == "SymbolKind.Instance":
                 self._lower_sub_instance(node)
+
+            # Interface support — slang resolves interface port
+            # connections during elaboration, presenting interface members
+            # as regular ports/nets in the instance body. If we see an
+            # InterfaceInstance, walk its members as regular variables.
+            elif kind == "SymbolKind.InterfaceInstance":
+                if hasattr(node, "body"):
+                    def walk_interface(inode: Any) -> None:
+                        ikind = str(inode.kind)
+                        if ikind == "SymbolKind.Variable":
+                            iw = self._bit_width(inode)
+                            self._get_or_create_net(f"{node.name}.{inode.name}", iw)
+                        elif ikind == "SymbolKind.Net":
+                            iw = self._bit_width(inode)
+                            self._get_or_create_net(f"{node.name}.{inode.name}", iw)
+                    node.body.visit(walk_interface)
+
+            # library/config constructs — slang resolves these
+            # at compilation time. If they appear in the AST, skip them
+            # with a diagnostic.
+            elif kind in ("SymbolKind.ConfigBlock", "SymbolKind.LibraryMap"):
+                src = self._src_from_node(node)
+                self.warnings.append(SynthesisWarning(
+                    "unsupported_construct",
+                    f"{kind} is resolved by the frontend and does not affect synthesis",
+                    src=src,
+                ))
 
         body.visit(walk_member)
 
@@ -903,40 +1151,12 @@ class _Lowerer:
         # Create a prefix for all nets/cells in this sub-instance
         prefix = f"{sub_name}."
 
-        # Save current counter state to restore after sub-lowering
-        saved_net_counter = self._net_counter
-        saved_cell_counter = self._cell_counter
-
-        # Create a sub-lowerer that uses prefixed names
-        class _SubLowerer(_Lowerer):
-            def __init__(self2, mod, prefix):
-                super().__init__(mod)
-                self2._prefix = prefix
-                self2._net_counter = saved_net_counter
-                self2._cell_counter = saved_cell_counter
-
-            def _fresh_net(self2, name_prefix, width):
-                name = f"${self2._prefix}{name_prefix}_{self2._net_counter}"
-                self2._net_counter += 1
-                return self2.mod.add_net(name, width)
-
-            def _fresh_cell(self2, name_prefix, op, src="", **params):
-                name = f"${self2._prefix}{name_prefix}_{self2._cell_counter}"
-                self2._cell_counter += 1
-                return self2.mod.add_cell(name, op, src=src, **params)
-
-            def _get_or_create_net(self2, name, width):
-                if width <= 0:
-                    width = 1
-                prefixed = f"{self2._prefix}{name}"
-                if prefixed in self2.mod.nets:
-                    existing = self2.mod.nets[prefixed]
-                    if existing.width != width:
-                        return self2._fresh_net(f"{name}_w{width}", width)
-                    return existing
-                return self2.mod.add_net(prefixed, width)
-
-        sub = _SubLowerer(self.mod, prefix)
+        # Use the module-level prefixed lowerer for sub-instances
+        sub = _PrefixedLowerer(
+            self.mod, prefix,
+            net_counter=self._net_counter,
+            cell_counter=self._cell_counter,
+        )
 
         # Lower the sub-instance body (variables, parameters, procedural blocks)
         # but NOT ports — we wire those manually below
@@ -1014,9 +1234,10 @@ class _Lowerer:
 
         sub_body.visit(walk_sub)
 
-        # Update parent counters
+        # Update parent counters and merge warnings
         self._net_counter = sub._net_counter
         self._cell_counter = sub._cell_counter
+        self.warnings.extend(sub.warnings)
 
         # Wire port connections: parent net <-> sub-instance net
         for conn in inst.portConnections:
@@ -1052,13 +1273,55 @@ class _Lowerer:
                     parent_net.driver = sub_net.driver
 
 
+class _PrefixedLowerer(_Lowerer):
+    """Module-level sub-instance lowerer with net/cell name prefixing.
+
+    Handles hierarchical lowering by prefixing all net and cell names
+    with the instance path.
+    """
+
+    def __init__(self, module: Module, prefix: str, *, net_counter: int = 0, cell_counter: int = 0) -> None:
+        super().__init__(module)
+        self._prefix = prefix
+        self._net_counter = net_counter
+        self._cell_counter = cell_counter
+
+    def _fresh_net(self, name_prefix: str, width: int) -> Net:
+        name = f"${self._prefix}{name_prefix}_{self._net_counter}"
+        self._net_counter += 1
+        return self.mod.add_net(name, width)
+
+    def _fresh_cell(self, name_prefix: str, op: PrimOp, src: str = "", **params: Any) -> Cell:
+        name = f"${self._prefix}{name_prefix}_{self._cell_counter}"
+        self._cell_counter += 1
+        return self.mod.add_cell(name, op, src=src, **params)
+
+    def _get_or_create_net(self, name: str, width: int) -> Net:
+        if width <= 0:
+            width = 1
+        prefixed = f"{self._prefix}{name}"
+        if prefixed in self.mod.nets:
+            existing = self.mod.nets[prefixed]
+            if existing.width != width:
+                if existing.width == 1 and width > 1 and existing.driver is None:
+                    existing.width = width
+                    return existing
+                return self._fresh_net(f"{name}_w{width}", width)
+            return existing
+        return self.mod.add_net(prefixed, width)
+
+
 def lower_to_ir(result: ParseResult, *, top: str | None = None) -> Design:
     """Lower a parsed pyslang compilation into a Nosis IR Design.
 
     If *top* is specified, only that instance is lowered.
     Otherwise, all top instances are lowered.
+
+    Synthesis warnings (simulation task stripping, latch inference, etc.)
+    are collected and stored in ``design.warnings``.
     """
     design = Design()
+    all_warnings: list[SynthesisWarning] = []
 
     for inst in result.top_instances:
         name = inst.name
@@ -1068,10 +1331,14 @@ def lower_to_ir(result: ParseResult, *, top: str | None = None) -> Design:
         mod = design.add_module(name)
         lowerer = _Lowerer(mod)
         lowerer.lower_instance(inst)
+        all_warnings.extend(lowerer.warnings)
 
     if top:
         design.top = top
     elif len(design.modules) == 1:
         design.top = next(iter(design.modules))
+
+    # Attach warnings to design for inspection
+    design.synthesis_warnings = all_warnings
 
     return design

@@ -15,6 +15,7 @@ from nosis.ir import Cell, Module, PrimOp
 
 __all__ = [
     "infer_brams",
+    "infer_memory_ports",
 ]
 
 
@@ -104,3 +105,37 @@ def infer_brams(mod: Module) -> int:
                 tagged += 1
 
     return tagged
+
+
+def infer_memory_ports(mod: Module) -> int:
+    """Infer read/write port patterns for MEMORY cells from the surrounding logic.
+
+    Scans the IR for cells that read from or write to MEMORY cell addresses.
+    Tags MEMORY cells with ``mem_read_ports`` and ``mem_write_ports`` counts
+    derived from the number of distinct address nets connected to the cell.
+
+    Returns the number of MEMORY cells annotated.
+    """
+    annotated = 0
+
+    for cell in mod.cells.values():
+        if cell.op != PrimOp.MEMORY:
+            continue
+
+        read_addrs: set[str] = set()
+        write_addrs: set[str] = set()
+
+        raddr = cell.inputs.get("RADDR")
+        if raddr:
+            read_addrs.add(raddr.name)
+
+        waddr = cell.inputs.get("WADDR")
+        if waddr:
+            write_addrs.add(waddr.name)
+
+        cell.params["mem_read_ports"] = len(read_addrs)
+        cell.params["mem_write_ports"] = len(write_addrs)
+        cell.params["mem_dual_port"] = len(read_addrs) > 0 and len(write_addrs) > 0
+        annotated += 1
+
+    return annotated

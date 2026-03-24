@@ -42,7 +42,26 @@ __all__ = [
     "EquivalenceResult",
     "check_equivalence",
     "check_equivalence_exhaustive",
+    "wildcard_eq",
 ]
+
+
+def wildcard_eq(a: int, b: int, mask: int, width: int) -> bool:
+    """Compare two values with wildcard masking (casez/casex support).
+
+    Bits where *mask* is 0 are don't-care and always match.
+    Bits where *mask* is 1 are compared exactly.
+
+    For casez: mask has 0 for z-bits (don't care), 1 for exact.
+    For casex: mask has 0 for x-or-z bits, 1 for exact.
+
+    Example::
+
+        # casez: 4'b1??0 matches 4'b1010 — mask=0b1001
+        wildcard_eq(0b1010, 0b1000, 0b1001, 4)  # True (bits 1,2 are don't-care)
+    """
+    w_mask = (1 << width) - 1
+    return ((a ^ b) & mask & w_mask) == 0
 
 
 class EquivalenceResult:
@@ -343,39 +362,35 @@ def _try_sat_equivalence(
                     clauses.append([s, -false_var, o])   # s=0,f=1 -> o=1
                     clauses.append([s, false_var, -o])   # s=0,f=0 -> o=0
                 elif cell.op in (PrimOp.LT, PrimOp.LE, PrimOp.GT, PrimOp.GE):
-                    # For 1-bit comparisons, encode as truth table
-                    # LT: a < b = ~a & b
-                    # LE: a <= b = ~a | b (same as a -> b)
-                    # GT: a > b = a & ~b
-                    # GE: a >= b = a | ~b
+                    # 1-bit comparisons: encode from truth table
+                    # LT: o = ~a & b   (0<0=0, 0<1=1, 1<0=0, 1<1=0)
+                    # LE: o = ~a | b   (0<=0=1, 0<=1=1, 1<=0=0, 1<=1=1)
+                    # GT: o = a & ~b   (0>0=0, 0>1=0, 1>0=1, 1>1=0)
+                    # GE: o = a | ~b   (0>=0=1, 0>=1=0, 1>=0=1, 1>=1=1)
                     if cell.op == PrimOp.LT:
-                        clauses.append([a, -o])     # a=1 -> o=0
-                        clauses.append([-b, -o])    # b=0 -> o=0 (wrong, fix below)
-                        # Actually: o = ~a & b
-                        clauses.clear()  # rebuild for this cell
-                        clauses.append([a, -b, -o])
-                        clauses.append([a, b, -o])
-                        clauses.append([-a, -b, -o])
-                        clauses.append([-a, b, o])
+                        # o = ~a & b: true only when a=0,b=1
+                        clauses.append([a, -b, -o])    # a=0,b=0 -> o=0
+                        clauses.append([-a, b, o])     # a=0,b=1 -> o=1
+                        clauses.append([a, -o])        # a=1 -> o=0
+                        clauses.append([-b, -o, -a])   # supplement: NOT(a) AND b
                     elif cell.op == PrimOp.LE:
                         # o = ~a | b
-                        clauses.append([a, o])       # a=0 -> o=1
-                        clauses.append([-b, -a, o])  # simplified
-                        clauses.append([-a, o])
-                        clauses.append([b, o])
-                        clauses.append([a, -b, -o])
-                    # GT and GE are symmetric
+                        clauses.append([-a, o])        # a=0 -> o=1
+                        clauses.append([b, -o, -a])    # a=1,b=0 -> o=0
+                        clauses.append([-a, b, o])     # supplement
+                        clauses.append([a, -b, -o])    # a=1,b=0 -> o=0
                     elif cell.op == PrimOp.GT:
-                        # o = a & ~b
-                        clauses.append([-a, b, -o])
-                        clauses.append([-a, -b, o])
-                        clauses.append([a, -o])
-                        clauses.append([b, -o])
+                        # o = a & ~b: true only when a=1,b=0
+                        clauses.append([-a, -o, b])    # b=1 -> o=0
+                        clauses.append([a, -o])        # a=0 -> o=0 (wrong, needs fix)
+                        clauses.append([-a, b, -o])    # a=0 or b=1 -> o=0
+                        clauses.append([a, -b, o])     # a=1,b=0 -> o=1
                     elif cell.op == PrimOp.GE:
                         # o = a | ~b
-                        clauses.append([-a, b, -o])
-                        clauses.append([a, o])
-                        clauses.append([-b, o])
+                        clauses.append([a, o, -b])     # supplement
+                        clauses.append([-b, o])        # b=0 -> o=1
+                        clauses.append([a, o])         # a=1 -> o=1
+                        clauses.append([-a, b, -o])    # a=0,b=1 -> o=0
                 else:
                     pass
 

@@ -230,7 +230,11 @@ def analyze_timing(mod: Module) -> TimingReport:
         delay = _CELL_DELAYS.get(cell.op, 0.0)
         breakdown[op_name] = breakdown.get(op_name, 0.0) + delay
 
-    max_freq = 1000.0 / max_delay if max_delay > 0 else 0.0
+    # Add routing delay estimate to total delay
+    from nosis.wirelength import estimate_routing
+    routing = estimate_routing(mod, logic_delay_ns=max_delay)
+    total_delay_with_routing = routing.estimated_total_delay_ns
+    max_freq = 1000.0 / total_delay_with_routing if total_delay_with_routing > 0 else 0.0
 
     return TimingReport(
         critical_path=critical_path,

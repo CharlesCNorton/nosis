@@ -85,3 +85,48 @@ def test_nextpnr_parse():
         combined = (r.stdout or "") + (r.stderr or "")
         assert "unable to parse" not in combined.lower()
         assert "json" not in combined.lower() or "error" not in combined.lower()
+
+
+# ---------------------------------------------------------------------------
+# nextpnr JSON consumption and placement test
+# ---------------------------------------------------------------------------
+
+def test_nextpnr_place():
+    """If nextpnr is available, verify the output places (no routing check)."""
+    nextpnr = _find_nextpnr()
+    if not nextpnr:
+        return
+
+    result = parse_files([RIME_UART_TX], top="uart_tx")
+    design = lower_to_ir(result, top="uart_tx")
+    nl = map_to_ecp5(design)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        json_path = Path(tmp) / "test.json"
+        emit_json(nl, json_path)
+
+        r = subprocess.run(
+            [nextpnr, "--25k", "--package", "CABGA256",
+             "--json", str(json_path),
+             "--placer", "sa", "--seed", "1",
+             "--no-route"],
+            capture_output=True, text=True, timeout=60,
+        )
+        combined = (r.stdout or "") + (r.stderr or "")
+        # nextpnr should at least load the design and attempt placement
+        # Even if it fails on some cells, it should not crash
+        assert "unable to parse" not in combined.lower(), f"nextpnr parse failed: {combined[:500]}"
+
+
+def test_json_all_cell_connections_are_int():
+    """Every connection bit in the JSON must be an integer (not a string)."""
+    result = parse_files([RIME_UART_TX], top="uart_tx")
+    design = lower_to_ir(result, top="uart_tx")
+    nl = map_to_ecp5(design)
+    data = json.loads(emit_json_str(nl))
+    for cell_name, cell in data["modules"]["uart_tx"]["cells"].items():
+        for port, bits in cell["connections"].items():
+            for bit in bits:
+                assert isinstance(bit, int), (
+                    f"cell {cell_name} port {port} has non-int bit: {bit!r}"
+                )

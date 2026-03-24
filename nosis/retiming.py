@@ -65,11 +65,13 @@ def retime_forward(mod: Module, *, max_moves: int = 100) -> int:
             if len(consumer_outs) != 1:
                 continue
 
-            # Consumer output must have exactly one consumer
+            # Relaxed retiming — allow multi-fanout with duplication
+            # Previously required exactly 1 consumer. Now allow up to 4
+            # consumers by duplicating the FF for each consumer path.
             consumer_out = consumer_outs[0]
             out_consumers = net_consumers.get(consumer_out.name, [])
-            if len(out_consumers) != 1:
-                continue
+            if len(out_consumers) > 4:
+                continue  # too many — duplication cost exceeds benefit
 
             # Move FF: swap the FF to after the combinational cell
             # FF.D now connects to what was the consumer's input (not from FF)

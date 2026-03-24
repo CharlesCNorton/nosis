@@ -1,49 +1,33 @@
 """Tests for nosis.equiv — equivalence checking."""
 
 from nosis.ir import Module, PrimOp
-from nosis.equiv import check_equivalence, check_equivalence_exhaustive, EquivalenceResult
+from nosis.equiv import (
+    check_equivalence,
+    check_equivalence_exhaustive,
+    wildcard_eq,
+    EquivalenceResult,
+)
 
 
-def _and_module(name: str) -> Module:
+def _gate_module(name: str, op: PrimOp) -> Module:
+    """Build a 1-bit binary gate module with ports a, b -> y."""
     mod = Module(name=name)
     a = mod.add_net("a", 1)
     b = mod.add_net("b", 1)
     y = mod.add_net("y", 1)
-    a_cell = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
-    mod.connect(a_cell, "Y", a, direction="output")
+    ac = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
+    mod.connect(ac, "Y", a, direction="output")
     mod.ports["a"] = a
-    b_cell = mod.add_cell("b_p", PrimOp.INPUT, port_name="b")
-    mod.connect(b_cell, "Y", b, direction="output")
+    bc = mod.add_cell("b_p", PrimOp.INPUT, port_name="b")
+    mod.connect(bc, "Y", b, direction="output")
     mod.ports["b"] = b
-    y_cell = mod.add_cell("y_p", PrimOp.OUTPUT, port_name="y")
-    mod.connect(y_cell, "A", y)
+    yc = mod.add_cell("y_p", PrimOp.OUTPUT, port_name="y")
+    mod.connect(yc, "A", y)
     mod.ports["y"] = y
-    and_cell = mod.add_cell("and0", PrimOp.AND)
-    mod.connect(and_cell, "A", a)
-    mod.connect(and_cell, "B", b)
-    mod.connect(and_cell, "Y", y, direction="output")
-    return mod
-
-
-def _or_module(name: str) -> Module:
-    """Build an OR gate — NOT equivalent to AND."""
-    mod = Module(name=name)
-    a = mod.add_net("a", 1)
-    b = mod.add_net("b", 1)
-    y = mod.add_net("y", 1)
-    a_cell = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
-    mod.connect(a_cell, "Y", a, direction="output")
-    mod.ports["a"] = a
-    b_cell = mod.add_cell("b_p", PrimOp.INPUT, port_name="b")
-    mod.connect(b_cell, "Y", b, direction="output")
-    mod.ports["b"] = b
-    y_cell = mod.add_cell("y_p", PrimOp.OUTPUT, port_name="y")
-    mod.connect(y_cell, "A", y)
-    mod.ports["y"] = y
-    or_cell = mod.add_cell("or0", PrimOp.OR)
-    mod.connect(or_cell, "A", a)
-    mod.connect(or_cell, "B", b)
-    mod.connect(or_cell, "Y", y, direction="output")
+    gc = mod.add_cell("gate0", op)
+    mod.connect(gc, "A", a)
+    mod.connect(gc, "B", b)
+    mod.connect(gc, "Y", y, direction="output")
     return mod
 
 
@@ -53,79 +37,160 @@ def _double_not_module(name: str) -> Module:
     a = mod.add_net("a", 1)
     b = mod.add_net("b", 1)
     y = mod.add_net("y", 1)
-    a_cell = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
-    mod.connect(a_cell, "Y", a, direction="output")
+    ac = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
+    mod.connect(ac, "Y", a, direction="output")
     mod.ports["a"] = a
-    b_cell = mod.add_cell("b_p", PrimOp.INPUT, port_name="b")
-    mod.connect(b_cell, "Y", b, direction="output")
+    bc = mod.add_cell("b_p", PrimOp.INPUT, port_name="b")
+    mod.connect(bc, "Y", b, direction="output")
     mod.ports["b"] = b
-    y_cell = mod.add_cell("y_p", PrimOp.OUTPUT, port_name="y")
-    mod.connect(y_cell, "A", y)
+    yc = mod.add_cell("y_p", PrimOp.OUTPUT, port_name="y")
+    mod.connect(yc, "A", y)
     mod.ports["y"] = y
-    # ~~a
     na = mod.add_net("na", 1)
-    not_a = mod.add_cell("not_a", PrimOp.NOT)
-    mod.connect(not_a, "A", a)
-    mod.connect(not_a, "Y", na, direction="output")
+    mod.add_cell("not_a", PrimOp.NOT)
+    mod.connect(mod.cells["not_a"], "A", a)
+    mod.connect(mod.cells["not_a"], "Y", na, direction="output")
     nna = mod.add_net("nna", 1)
-    not_na = mod.add_cell("not_na", PrimOp.NOT)
-    mod.connect(not_na, "A", na)
-    mod.connect(not_na, "Y", nna, direction="output")
-    # ~~b
+    mod.add_cell("not_na", PrimOp.NOT)
+    mod.connect(mod.cells["not_na"], "A", na)
+    mod.connect(mod.cells["not_na"], "Y", nna, direction="output")
     nb = mod.add_net("nb", 1)
-    not_b = mod.add_cell("not_b", PrimOp.NOT)
-    mod.connect(not_b, "A", b)
-    mod.connect(not_b, "Y", nb, direction="output")
+    mod.add_cell("not_b", PrimOp.NOT)
+    mod.connect(mod.cells["not_b"], "A", b)
+    mod.connect(mod.cells["not_b"], "Y", nb, direction="output")
     nnb = mod.add_net("nnb", 1)
-    not_nb = mod.add_cell("not_nb", PrimOp.NOT)
-    mod.connect(not_nb, "A", nb)
-    mod.connect(not_nb, "Y", nnb, direction="output")
-    # ~~a & ~~b
-    and_cell = mod.add_cell("and0", PrimOp.AND)
-    mod.connect(and_cell, "A", nna)
-    mod.connect(and_cell, "B", nnb)
-    mod.connect(and_cell, "Y", y, direction="output")
+    mod.add_cell("not_nb", PrimOp.NOT)
+    mod.connect(mod.cells["not_nb"], "A", nb)
+    mod.connect(mod.cells["not_nb"], "Y", nnb, direction="output")
+    gc = mod.add_cell("and0", PrimOp.AND)
+    mod.connect(gc, "A", nna)
+    mod.connect(gc, "B", nnb)
+    mod.connect(gc, "Y", y, direction="output")
     return mod
 
 
+# --- Exhaustive equivalence ---
+
 def test_equivalent_identical():
-    a = _and_module("a")
-    b = _and_module("b")
-    result = check_equivalence_exhaustive(a, b)
-    assert result.equivalent
-    assert result.method == "exhaustive"
+    a = _gate_module("a", PrimOp.AND)
+    b = _gate_module("b", PrimOp.AND)
+    r = check_equivalence_exhaustive(a, b)
+    assert r.equivalent
+    assert r.method == "exhaustive"
 
 
-def test_not_equivalent():
-    a = _and_module("a")
-    b = _or_module("b")
-    result = check_equivalence_exhaustive(a, b)
-    assert not result.equivalent
-    assert result.counterexample is not None
+def test_not_equivalent_and_vs_or():
+    a = _gate_module("a", PrimOp.AND)
+    b = _gate_module("b", PrimOp.OR)
+    r = check_equivalence_exhaustive(a, b)
+    assert not r.equivalent
+    assert r.counterexample is not None
+
+
+def test_not_equivalent_and_vs_xor():
+    a = _gate_module("a", PrimOp.AND)
+    b = _gate_module("b", PrimOp.XOR)
+    r = check_equivalence_exhaustive(a, b)
+    assert not r.equivalent
 
 
 def test_equivalent_double_not():
-    a = _and_module("a")
+    a = _gate_module("a", PrimOp.AND)
     b = _double_not_module("b")
-    result = check_equivalence_exhaustive(a, b)
-    assert result.equivalent
+    r = check_equivalence_exhaustive(a, b)
+    assert r.equivalent
 
 
-def test_check_equivalence_auto_method():
-    a = _and_module("a")
-    b = _and_module("b")
-    result = check_equivalence(a, b)
-    assert result.equivalent
+# --- Auto method selection ---
+
+def test_auto_selects_exhaustive_for_small():
+    a = _gate_module("a", PrimOp.AND)
+    b = _gate_module("b", PrimOp.AND)
+    r = check_equivalence(a, b)
+    assert r.equivalent
+    assert r.method in ("exhaustive", "sat", "random_simulation")
 
 
-def test_counterexample_values():
-    a = _and_module("a")
-    b = _or_module("b")
-    result = check_equivalence(a, b)
-    assert not result.equivalent
-    ce = result.counterexample
+def test_auto_detects_nonequivalent():
+    a = _gate_module("a", PrimOp.AND)
+    b = _gate_module("b", PrimOp.OR)
+    r = check_equivalence(a, b)
+    assert not r.equivalent
+
+
+# --- Counterexample validation ---
+
+def test_counterexample_is_valid():
+    """The counterexample must actually produce different outputs."""
+    from nosis.equiv import _simulate_combinational
+    a = _gate_module("a", PrimOp.AND)
+    b = _gate_module("b", PrimOp.OR)
+    r = check_equivalence(a, b)
+    assert not r.equivalent
+    ce = r.counterexample
     assert ce is not None
-    # At least one input combination where AND != OR
-    # For a=0, b=1: AND=0, OR=1
-    # For a=1, b=0: AND=0, OR=1
-    assert "a" in ce or "b" in ce
+    vals_a = _simulate_combinational(a, ce)
+    vals_b = _simulate_combinational(b, ce)
+    # At least one output must differ at the counterexample
+    a_out = vals_a.get("y", 0)
+    b_out = vals_b.get("y", 0)
+    assert a_out != b_out, f"counterexample {ce} does not produce different outputs"
+
+
+# --- Wildcard equality ---
+
+def test_wildcard_exact_match():
+    assert wildcard_eq(0b1010, 0b1010, 0b1111, 4)
+
+
+def test_wildcard_mismatch():
+    assert not wildcard_eq(0b1010, 0b1011, 0b1111, 4)
+
+
+def test_wildcard_dont_care():
+    assert wildcard_eq(0b1010, 0b1011, 0b1110, 4)
+
+
+def test_wildcard_full_dont_care():
+    assert wildcard_eq(0b0000, 0b1111, 0b0000, 4)
+
+
+def test_wildcard_casez_pattern():
+    # 4'b1??0 matches 4'b1010: mask bits 1,2 are don't-care
+    assert wildcard_eq(0b1010, 0b1000, 0b1001, 4)
+    # 4'b1??0 does NOT match 4'b1011: bit 0 differs
+    assert not wildcard_eq(0b1011, 0b1000, 0b1001, 4)
+
+
+# --- XOR identity ---
+
+def test_xor_self_equivalent():
+    """a XOR a = 0 for all inputs — a constant-zero module should be equivalent."""
+    mod_xor = Module(name="xor_self")
+    a = mod_xor.add_net("a", 1)
+    y = mod_xor.add_net("y", 1)
+    ac = mod_xor.add_cell("a_p", PrimOp.INPUT, port_name="a")
+    mod_xor.connect(ac, "Y", a, direction="output")
+    mod_xor.ports["a"] = a
+    yc = mod_xor.add_cell("y_p", PrimOp.OUTPUT, port_name="y")
+    mod_xor.connect(yc, "A", y)
+    mod_xor.ports["y"] = y
+    xc = mod_xor.add_cell("xor0", PrimOp.XOR)
+    mod_xor.connect(xc, "A", a)
+    mod_xor.connect(xc, "B", a)
+    mod_xor.connect(xc, "Y", y, direction="output")
+
+    mod_zero = Module(name="zero")
+    a2 = mod_zero.add_net("a", 1)
+    y2 = mod_zero.add_net("y", 1)
+    ac2 = mod_zero.add_cell("a_p", PrimOp.INPUT, port_name="a")
+    mod_zero.connect(ac2, "Y", a2, direction="output")
+    mod_zero.ports["a"] = a2
+    yc2 = mod_zero.add_cell("y_p", PrimOp.OUTPUT, port_name="y")
+    mod_zero.connect(yc2, "A", y2)
+    mod_zero.ports["y"] = y2
+    cc = mod_zero.add_cell("c0", PrimOp.CONST, value=0, width=1)
+    mod_zero.connect(cc, "Y", y2, direction="output")
+
+    r = check_equivalence_exhaustive(mod_xor, mod_zero)
+    assert r.equivalent

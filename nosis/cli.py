@@ -150,6 +150,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"map: {netlist.stats()}")
         print(f"map: {t_map - t_pack:.3f}s")
 
+    # --- Slice packing (PFUMX + L6MUX21) after tech mapping ---
+    if not args.no_opt:
+        from nosis.slicepack import pack_slices
+        slice_stats = pack_slices(netlist)
+        t_slice = time.monotonic()
+        if args.verbose:
+            print(f"slicepack: {slice_stats}")
+            print(f"slicepack: {t_slice - t_map:.3f}s")
+    else:
+        t_slice = time.monotonic()
+
     # --- Emit JSON ---
     from nosis.json_backend import emit_json, emit_json_str
     if args.output:

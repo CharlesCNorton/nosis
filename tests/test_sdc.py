@@ -1,9 +1,9 @@
-"""Tests for nosis.sdc — SDC constraint parsing."""
+"""Tests for nosis.sdc — SDC constraint parsing and timing arcs."""
 
 import tempfile
 from pathlib import Path
 
-from nosis.sdc import parse_sdc
+from nosis.sdc import parse_sdc, parse_specify_block, apply_sdc_to_timing
 
 
 def _write_sdc(content: str) -> str:

@@ -1,52 +1,72 @@
 # Nosis — Cure List
 
-1. Add test that optimization never increases cell count on any design
-2. Lock exact cell counts in regression tests instead of only lower bounds
-3. Fix `eval_cell` CONCAT copy — use a per-call scratch dict instead of `dict(cell.params)` on every invocation
-4. Strip `$display`/`$monitor`/`$finish` during lowering with explicit synthesis warning
-5. Reject `real` and floating-point types with explicit error message during lowering
-6. Add latch inference warning for incomplete case/if in `always_comb`
-7. Add `assign` with delay stripping (remove `#N` from continuous assignments)
-8. Add `defparam` support
-9. Add `(* synthesis off/on *)` pragma handling
-10. Handle `generate for` at IR level if slang doesn't fully unroll
-11. Add `casez`/`casex` wildcard bit handling in equivalence checker
-12. Propagate `$readmemh` initialization data to DP16KD INITVAL parameters
-13. Add tri-state buffer inference from `inout` ports
-14. Add memory port inference from read/write patterns in procedural blocks
-15. Test DPR16X4 emission on real designs that produce DPR-tagged MEMORY cells
-16. Add parameterized port widths to ECP5 primitive stubs in `ecp5_prims.sv`
-17. Create explicit wire cells for hierarchy port connections instead of driver pointer assignment
-18. Refactor `_SubLowerer` out of nested class into a proper module-level class
-19. Split `frontend.py` into parse, lower, and hierarchy modules
-20. Add formal equivalence check between pre-optimization and post-optimization IR
-21. Add sequential equivalence checking — unroll FFs for K cycles in SAT
-22. Add SAT-based BMC with unrolled state instead of simulation approximation
-23. Expand SAT encoding to cover ADD, SUB, and multi-bit operations
-24. Wire automatic test vector generation into the validation harness
-25. Implement post-synthesis simulation comparison — compare RTL and post-synth Verilog outputs automatically
-26. Add nextpnr JSON consumption and placement test — verify the output places and routes
-27. Assert yosys comparison ratio bounds in regression tests
-28. Add clock gating inference
-29. Add clock tree power estimation separate from FF dynamic power
-30. Replace assumed 12.5% toggle rate with per-net activity estimation from simulation
-31. Replace congestion heuristic with physical routing metric using fanout + wire-length model
-32. Add routing delay to timing analysis critical path using wire-length estimation
-33. Add `specify` block parsing for timing arc extraction
-34. Add SDC timing arcs into static timing analysis
-35. Add incremental tech mapping — re-map only changed cells using IR delta
-36. Relax register retiming single-fanout constraint — allow retiming through multi-fanout with duplication
-37. Add multi-level Boolean factoring beyond single-level AND distribution
-38. Relax PFUMX packing — match LUT4 pairs that share any 3 of 4 inputs, not just exact A0/B0
-39. Add LUT4 sharing between independent signals occupying the same slice
-40. Wire PFUMX and L6MUX21 packing into the CLI pipeline after tech mapping
-41. Reduce SoC LUT count from 45K toward 7K through items 37-40
-42. Add multi-dimensional array support
-43. Add packed struct support
-44. Add interface support
-45. Add `library` and `config` construct handling
-46. Forward reference tolerance in frontend instead of requiring source fixes
-47. Generate HTML API documentation via pdoc and commit to repo
-48. Add inline docstring examples to all remaining modules
-49. Increase hypothesis max_examples to 5000+ for critical property tests
-50. Lock regression test exact cell counts after LUT optimization stabilizes
+1. Integrate dual-LUT4 packing into `_map_lut` so the mapper emits TRELLIS_SLICE with both LUT0 and LUT1 populated during mapping instead of as a post-pass
+2. Fix `identity_simplify` driver chain breakage — bypass must redirect all consumers of the output net to the source net before clearing the cell
+3. Add a fresh-copy lowering path so the CLI tech-maps an unoptimized IR copy while still reporting optimized IR statistics separately
+4. Flatten nested hierarchy recursively in `_lower_sub_instance` instead of the single-level no-op fallback
+5. Extend `_collect_nb_assignments` to emit PMUX cells for case statements instead of linear MUX chains
+6. Detect active-low reset patterns (`if (!rst_n)`) in the true branch of procedural blocks alongside the existing active-high detection
+7. Propagate constant MUX selectors during lowering — fold `MUX(const, a, b)` immediately instead of deferring to `identity_simplify`
+8. Synchronize the vendor-skip list in `_lower_sub_instance` with the full 48-name `blackbox.py` registry
+9. Add multi-bit constant propagation through CONCAT/SLICE chains in `constant_fold`
+10. Convert PMUX tech mapping from a linear priority chain to a balanced MUX tree (log2(N) depth instead of N)
+11. Encode multi-bit ADD, SUB, shift, and comparison operations in the SAT equivalence encoder via per-bit unrolling
+12. Remove redundant clauses from the SAT LE/GE encodings
+13. Absorb adjacent logic into CCU2C carry chain LUT INIT values instead of hardcoding XOR/XNOR
+14. Add 3-input LUT packing in `lutpack.py` — compose three cascaded 2-input operations into a single LUT4
+15. Add technology-aware Boolean optimization that evaluates LUT4 truth table capacity before deciding to merge or split
+16. Detect read-before-write vs write-before-read ordering in BRAM inference and set DP16KD WRITEMODE accordingly
+17. Infer BRAM output registers when an FF is directly connected to the DP16KD read data port — set REGMODE to REG
+18. Detect multiply-accumulate patterns and map to ALU54B instead of MULT18X18D + ADD
+19. Verify that retimed FFs share the same clock net as the surrounding logic before moving
+20. Add register balancing across pipeline stages — retime backward as well as forward to equalize path delays
+21. Insert synchronizer cell pairs at detected clock domain crossings
+22. Apply SDC `set_false_path` constraints to exclude paths from static timing analysis
+23. Model per-pin delay differences within LUT4 cells (A input is faster than D input on ECP5)
+24. Carry FF state between simulation vectors in `estimate_toggle_rates` for sequential designs
+25. Calibrate the Rent's rule exponent in `estimate_routing_metric` against actual ECP5 place-and-route data
+26. Account for dedicated clock routing, carry chain routing, and BRAM column placement in wirelength estimation
+27. Add area optimization feedback loop — iterate between optimization passes and area measurement until convergence
+28. Add behavioral simulation models for DP16KD and MULT18X18D in `postsynth.py`
+29. Replace the CCU2C comment placeholder in post-synth Verilog with a functional instantiation
+30. Wire actual post-synthesis simulation comparison into the validation harness instead of comparing RTL output against itself
+31. Handle bidirectional (inout) ports in the testbench generator
+32. Detect non-standard reset port names in the testbench generator using driver-cone analysis instead of name matching
+33. Classify JSON port directions from the IR port metadata instead of the name-based heuristic
+34. Set `hide_name` correctly for all internal nets in the JSON backend
+35. Add multi-clock static timing analysis — compute critical paths per clock domain
+36. Parse `set_max_delay` and `set_multicycle_path` command bodies in the SDC parser
+37. Handle multi-line statements and escaped quotes in the LPF parser
+38. Fix the specify block parser to handle the `=>` path operator without splitting on `=`
+39. Parse min:typ:max delay triples in specify blocks
+40. Implement the cell-level mapping cache in `incremental_remap` so small deltas skip full re-mapping
+41. Add a technology-independent area metric for architecture-neutral optimization decisions
+42. Handle signed negative literals in `_svint_to_int`
+43. Lower `for` loops inside `always_comb` blocks by unrolling at the IR level
+44. Lower `function` and `task` bodies that slang does not fully inline
+45. Propagate `casez`/`casex` don't-care bits through the IR as mask metadata on EQ cells
+46. Extend multi-dimensional array flattening to handle 3+ dimensions
+47. Track packed struct field-level access for partial-width read optimization
+48. Wire interface modport directions into the port connection logic
+49. Add `generate if` handling at the IR level as a fallback for conditional elaboration
+50. Add dead module elimination — remove unused modules from multi-module Design objects
+51. Add stubs for FIFO16KD, PDPW16KD, SP16KD, ALU54B, TRELLIS_COMB, and DCUA to `ecp5_prims.sv`
+52. Add Verilog text output for the IR (not just JSON and post-synth behavioral)
+53. Support multiple top modules and partial elaboration in the CLI
+54. Add on-disk incremental compilation cache keyed by source file hashes
+55. Parallelize independent optimization passes across multiple threads
+56. Wire snapshot/delta infrastructure into the CLI for automatic incremental re-synthesis
+57. Bundle standalone test designs with the repo so the test suite does not require RIME source files
+58. Add regression tests, connectivity tests, and property tests to the CI workflow
+59. Add a test for the CLI entry point (`nosis.cli:main`) covering parse, check, dump-ir, and full-pipeline modes
+60. Add benchmarking infrastructure to track synthesis time and cell count regressions per commit
+61. Run all 10 documented analysis passes by default in the CLI instead of only 6
+62. Add floorplanning region constraint support in the LPF parser
+63. Validate IO standards against ECP5 bank voltage rules after LPF parsing
+64. Add PLL configuration inference from target frequency constraints
+65. Add bitstream-level output via ecppack integration so the pipeline can produce a .bit file directly
+66. Add `$clog2` width inference awareness so computed widths survive into the IR as named constants
+67. Add area feedback to the optimization pipeline — re-run Boolean optimization when area increases
+68. Add IO timing validation — check that constrained input/output delays are achievable given the critical path
+69. Add formal sequential equivalence via SAT with unrolled transition relation (not simulation approximation)
+70. Add a `--benchmark` flag to the CLI that emits machine-readable JSON with cell counts, timing, and wall-clock time per stage

@@ -141,6 +141,74 @@ def boolean_optimize(mod: Module) -> int:
         to_remove.add(and_b.name)
         eliminated += 1
 
+    # --- OR distribution: (a | b) & (a | c) -> a | (b & c) ---
+    # Rebuild consumer map after AND distribution may have changed things
+    net_consumers2: dict[str, list[tuple[Cell, str]]] = {}
+    for cell in mod.cells.values():
+        if cell.name in to_remove:
+            continue
+        for port_name, net in cell.inputs.items():
+            if net.name not in net_consumers2:
+                net_consumers2[net.name] = []
+            net_consumers2[net.name].append((cell, port_name))
+
+    for cell in list(mod.cells.values()):
+        if cell.name in to_remove:
+            continue
+        if cell.op != PrimOp.AND:
+            continue
+        a_net = cell.inputs.get("A")
+        b_net = cell.inputs.get("B")
+        if not a_net or not b_net:
+            continue
+        if not a_net.driver or not b_net.driver:
+            continue
+        if a_net.driver.op != PrimOp.OR or b_net.driver.op != PrimOp.OR:
+            continue
+
+        or_a = a_net.driver
+        or_b = b_net.driver
+        if or_a.name in to_remove or or_b.name in to_remove:
+            continue
+
+        # Check for common input
+        aa, ab = or_a.inputs.get("A"), or_a.inputs.get("B")
+        ba, bb = or_b.inputs.get("A"), or_b.inputs.get("B")
+
+        common = None
+        a_other = None
+        b_other = None
+
+        for x, y in [(aa, ba), (aa, bb), (ab, ba), (ab, bb)]:
+            if x and y and x is y:
+                common = x
+                a_other = ab if x is aa else aa
+                b_other = bb if y is ba else ba
+                break
+
+        if common is None or a_other is None or b_other is None:
+            continue
+
+        a_consumers = net_consumers2.get(a_net.name, [])
+        b_consumers = net_consumers2.get(b_net.name, [])
+        a_live = [(c, p) for c, p in a_consumers if c.name not in to_remove]
+        b_live = [(c, p) for c, p in b_consumers if c.name not in to_remove]
+        if len(a_live) != 1 or len(b_live) != 1:
+            continue
+
+        # Rewrite: AND(OR(common, a_other), OR(common, b_other))
+        #       -> OR(common, AND(a_other, b_other))
+        cell.inputs["A"] = a_other
+        cell.inputs["B"] = b_other
+        # cell is now AND(a_other, b_other)
+
+        or_a.inputs["A"] = common
+        or_a.inputs["B"] = list(cell.outputs.values())[0]
+        # or_a is now OR(common, AND_output)
+
+        to_remove.add(or_b.name)
+        eliminated += 1
+
     for name in to_remove:
         if name in mod.cells:
             del mod.cells[name]

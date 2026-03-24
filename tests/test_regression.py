@@ -645,6 +645,139 @@ class TestStructural:
 # Strict error handling
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Optimization must never increase cell count
+# ---------------------------------------------------------------------------
+
+class TestOptimizationMonotonicity:
+    """Optimization must be monotonically non-increasing in cell count on every design."""
+
+    DESIGNS = [
+        ([f"{RIME}/core/uart/uart_tx.sv"], "uart_tx"),
+        ([f"{RIME}/core/uart/uart_rx.sv"], "uart_rx"),
+        ([f"{RIME}/core/service/sdram_bridge.sv"], "sdram_bridge"),
+        ([f"{RIME}/core/service/sdram_controller.sv"], "sdram_controller"),
+        ([f"{RIME}/core/cpu/rime_pcpi_crc32.sv"], "rime_pcpi_crc32"),
+        ([f"{RIME}/core/cpu/rime_v.sv"], "rime_v"),
+        (RIME_THAW_SOURCES, "top"),
+    ]
+
+    def test_opt_never_increases_cell_count(self):
+        """For every design, run_default_passes must not increase total cell count."""
+        for src, top in self.DESIGNS:
+            result = parse_files(src, top=top)
+            design = lower_to_ir(result, top=top)
+            mod = design.top_module()
+            before = mod.stats()["cells"]
+            run_default_passes(mod)
+            after = mod.stats()["cells"]
+            assert after <= before, (
+                f"{top}: optimization increased cells from {before} to {after}"
+            )
+
+    def test_opt_never_increases_net_count(self):
+        """For every design, run_default_passes must not increase net count."""
+        for src, top in self.DESIGNS:
+            result = parse_files(src, top=top)
+            design = lower_to_ir(result, top=top)
+            mod = design.top_module()
+            before = mod.stats()["nets"]
+            run_default_passes(mod)
+            after = mod.stats()["nets"]
+            assert after <= before, (
+                f"{top}: optimization increased nets from {before} to {after}"
+            )
+
+    def test_each_pass_individually_non_increasing(self):
+        """Each individual pass in the pipeline must not increase cell count."""
+        from nosis.passes import constant_fold, identity_simplify, dead_code_eliminate, remove_const_ffs
+        from nosis.cse import eliminate_common_subexpressions
+        from nosis.boolopt import boolean_optimize
+
+        result = parse_files([f"{RIME}/core/cpu/rime_v.sv"], top="rime_v")
+        design = lower_to_ir(result, top="rime_v")
+        mod = design.top_module()
+
+        passes = [
+            ("constant_fold", constant_fold),
+            ("identity_simplify", identity_simplify),
+            ("boolean_optimize", boolean_optimize),
+            ("remove_const_ffs", remove_const_ffs),
+            ("cse", eliminate_common_subexpressions),
+            ("dce", dead_code_eliminate),
+        ]
+        for name, fn in passes:
+            before = mod.stats()["cells"]
+            fn(mod)
+            after = mod.stats()["cells"]
+            assert after <= before, (
+                f"pass {name} increased cells from {before} to {after}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Locked exact cell counts (unoptimized ECP5 mapping)
+# ---------------------------------------------------------------------------
+
+class TestLockedCellCounts:
+    """Exact ECP5 cell counts locked to prevent undetected regressions.
+
+    These counts are from the unoptimized pipeline (lower → techmap, no passes).
+    If a commit changes any count, the test fails and the developer must
+    explicitly update the locked values after confirming the change is intentional.
+    """
+
+    def _ecp5_stats(self, src, top):
+        result = parse_files(src if isinstance(src, list) else [src], top=top)
+        design = lower_to_ir(result, top=top)
+        return map_to_ecp5(design).stats()
+
+    def test_uart_tx_exact(self):
+        s = self._ecp5_stats(f"{RIME}/core/uart/uart_tx.sv", "uart_tx")
+        assert s["TRELLIS_SLICE"] == 219, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["TRELLIS_FF"] == 46, f"FF count changed: {s['TRELLIS_FF']}"
+        assert s["CCU2C"] == 128, f"CCU2C count changed: {s['CCU2C']}"
+
+    def test_uart_rx_exact(self):
+        s = self._ecp5_stats(f"{RIME}/core/uart/uart_rx.sv", "uart_rx")
+        assert s["TRELLIS_SLICE"] == 283, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["TRELLIS_FF"] == 47, f"FF count changed: {s['TRELLIS_FF']}"
+        assert s["CCU2C"] == 128, f"CCU2C count changed: {s['CCU2C']}"
+
+    def test_sdram_bridge_exact(self):
+        s = self._ecp5_stats(f"{RIME}/core/service/sdram_bridge.sv", "sdram_bridge")
+        assert s["TRELLIS_SLICE"] == 477, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["TRELLIS_FF"] == 348, f"FF count changed: {s['TRELLIS_FF']}"
+        assert s["CCU2C"] == 14, f"CCU2C count changed: {s['CCU2C']}"
+
+    def test_crc32_exact(self):
+        s = self._ecp5_stats(f"{RIME}/core/cpu/rime_pcpi_crc32.sv", "rime_pcpi_crc32")
+        assert s["TRELLIS_SLICE"] == 1, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["TRELLIS_FF"] == 34, f"FF count changed: {s['TRELLIS_FF']}"
+
+    def test_rime_v_exact(self):
+        s = self._ecp5_stats(f"{RIME}/core/cpu/rime_v.sv", "rime_v")
+        assert s["TRELLIS_SLICE"] == 5173, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["TRELLIS_FF"] == 1727, f"FF count changed: {s['TRELLIS_FF']}"
+        assert s["CCU2C"] == 275, f"CCU2C count changed: {s['CCU2C']}"
+
+    def test_thaw_exact(self):
+        s = self._ecp5_stats(RIME_THAW_SOURCES, "top")
+        assert s["TRELLIS_SLICE"] == 16018, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["TRELLIS_FF"] == 6223, f"FF count changed: {s['TRELLIS_FF']}"
+        assert s["CCU2C"] == 1044, f"CCU2C count changed: {s['CCU2C']}"
+
+    def test_soc_exact(self):
+        s = self._ecp5_stats(RIME_SOC_SOURCES, "top")
+        assert s["TRELLIS_SLICE"] == 45134, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["TRELLIS_FF"] == 13238, f"FF count changed: {s['TRELLIS_FF']}"
+        assert s["CCU2C"] == 3099, f"CCU2C count changed: {s['CCU2C']}"
+
+
+# ---------------------------------------------------------------------------
+# Strict error handling
+# ---------------------------------------------------------------------------
+
 class TestErrorHandling:
     def test_undeclared_identifier_is_error(self):
         """A file with undeclared identifiers must produce an error, not a warning."""

@@ -3,6 +3,22 @@
 Without place-and-route data, true routing congestion cannot be known.
 This module provides a pre-PnR congestion proxy based on logic density
 metrics: fanout distribution, net degree histogram, and localized cell
+
+Example::
+
+    from nosis.ir import Module, PrimOp
+    from nosis.congestion import analyze_congestion
+
+    mod = Module(name="example")
+    a = mod.add_net("a", 1)
+    y = mod.add_net("y", 1)
+    c = mod.add_cell("not0", PrimOp.NOT)
+    mod.connect(c, "A", a)
+    mod.connect(c, "Y", y, direction="output")
+    report = analyze_congestion(mod)
+    print(f"Max fanout: {report.max_fanout}")
+
+
 density assuming a uniform placement.
 
 High fanout nets (one driver, many consumers) create routing pressure.
@@ -20,6 +36,7 @@ from nosis.ir import Module, PrimOp
 __all__ = [
     "CongestionReport",
     "analyze_congestion",
+    "estimate_routing_metric",
 ]
 
 
@@ -103,3 +120,37 @@ def analyze_congestion(mod: Module) -> CongestionReport:
         fanout_histogram=buckets,
         density_score=score,
     )
+
+
+def estimate_routing_metric(mod: Module) -> float:
+    """Physical routing metric using fanout + wire-length model.
+
+    Replaces the pure heuristic with a metric based on Rent's rule:
+    the number of external connections for a subcircuit of N cells
+    scales as N^p (Rent's exponent p ~ 0.6 for FPGAs).
+
+    The routing metric estimates the average wire length as:
+        avg_wirelength ~ sqrt(N) * (avg_fanout / 2)
+
+    where N is the cell count and avg_fanout is the mean net fanout.
+    Returns the estimated average wire length in grid units.
+    """
+    import math
+
+    fanout: dict[str, int] = {}
+    for cell in mod.cells.values():
+        for net in cell.inputs.values():
+            fanout[net.name] = fanout.get(net.name, 0) + 1
+
+    if not fanout:
+        return 0.0
+
+    n_cells = len(mod.cells)
+    avg_fo = sum(fanout.values()) / len(fanout)
+
+    # Rent's rule estimate: avg wire length ~ sqrt(N) * rent_factor
+    rent_exponent = 0.6
+    rent_factor = n_cells ** (rent_exponent / 2)
+    avg_wirelength = rent_factor * (avg_fo / 2.0)
+
+    return avg_wirelength

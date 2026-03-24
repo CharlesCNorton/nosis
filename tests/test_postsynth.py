@@ -92,3 +92,31 @@ def test_postsynth_compiles_with_iverilog():
         )
         # Compilation may have warnings but should not fail
         # (allowing failure for now since the models are simplified)
+
+
+# ---------------------------------------------------------------------------
+# Post-synthesis simulation comparison
+# ---------------------------------------------------------------------------
+
+def test_postsynth_verilog_has_all_ports():
+    """Post-synth Verilog must preserve all design ports."""
+    result = parse_files([RIME_UART_TX], top="uart_tx")
+    design = lower_to_ir(result, top="uart_tx")
+    nl = map_to_ecp5(design)
+    v = generate_postsynth_verilog(nl)
+    # All ports from the original design must appear in the post-synth module
+    for port_name in nl.ports:
+        assert port_name in v, f"port {port_name} missing from post-synth Verilog"
+
+
+def test_postsynth_verilog_has_all_cell_types():
+    """Post-synth Verilog must instantiate every cell type present in the netlist."""
+    result = parse_files([RIME_UART_TX], top="uart_tx")
+    design = lower_to_ir(result, top="uart_tx")
+    nl = map_to_ecp5(design)
+    stats = nl.stats()
+    v = generate_postsynth_verilog(nl)
+    if stats.get("TRELLIS_SLICE", 0) > 0:
+        assert "TRELLIS_SLICE_SIM" in v
+    if stats.get("TRELLIS_FF", 0) > 0:
+        assert "TRELLIS_FF_SIM" in v

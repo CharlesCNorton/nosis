@@ -1,7 +1,7 @@
-"""Tests for nosis.bram — BRAM inference."""
+"""Tests for nosis.bram — BRAM inference and DPR16X4 emission."""
 
 from nosis.ir import Module, PrimOp
-from nosis.bram import infer_brams, _fits_dp16kd, _count_brams_needed
+from nosis.bram import infer_brams, infer_memory_ports, _fits_dp16kd, _count_brams_needed
 
 
 def test_fits_small():
@@ -48,3 +48,85 @@ def test_skip_tiny_array():
 
     tagged = infer_brams(mod)
     assert tagged == 0  # 4 bits total, too small for any RAM
+
+
+# ---------------------------------------------------------------------------
+# DPR16X4 emission through full techmap pipeline
+# ---------------------------------------------------------------------------
+
+def test_dpr16x4_inference_and_emission():
+    """A 16x4 array must be tagged DPR16X4 and emit TRELLIS_DPR16X4 cells."""
+    from nosis.techmap import map_to_ecp5
+    from nosis.ir import Design
+
+    mod = Module(name="dpr_test")
+    # Create a 16-entry, 4-bit wide memory -> should fit DPR16X4
+    raddr = mod.add_net("raddr", 4)
+    waddr = mod.add_net("waddr", 4)
+    wdata = mod.add_net("wdata", 4)
+    rdata = mod.add_net("rdata", 4)
+    we = mod.add_net("we", 1)
+    clk = mod.add_net("clk", 1)
+
+    mem = mod.add_cell("mem0", PrimOp.MEMORY, depth=16, width=4, mem_name="fifo")
+    mod.connect(mem, "RADDR", raddr)
+    mod.connect(mem, "WADDR", waddr)
+    mod.connect(mem, "WDATA", wdata)
+    mod.connect(mem, "WE", we)
+    mod.connect(mem, "CLK", clk)
+    mod.connect(mem, "RDATA", rdata, direction="output")
+
+    # Input ports
+    for name, net in [("raddr", raddr), ("waddr", waddr), ("wdata", wdata),
+                      ("we", we), ("clk", clk)]:
+        inp = mod.add_cell(f"inp_{name}", PrimOp.INPUT, port_name=name)
+        mod.connect(inp, "Y", net, direction="output")
+        mod.ports[name] = net
+    out = mod.add_cell("out_rdata", PrimOp.OUTPUT, port_name="rdata")
+    mod.connect(out, "A", rdata)
+    mod.ports["rdata"] = rdata
+
+    # Infer BRAM
+    tagged = infer_brams(mod)
+    assert tagged == 1
+    assert mem.params["bram_config"] == "DPR16X4"
+
+    # Tech map — should produce TRELLIS_DPR16X4 cells
+    design = Design()
+    design.modules["dpr_test"] = mod
+    design.top = "dpr_test"
+    nl = map_to_ecp5(design)
+    stats = nl.stats()
+    assert stats.get("TRELLIS_DPR16X4", 0) >= 1, f"expected DPR16X4, got {stats}"
+
+
+def test_dpr16x4_tiled_wide():
+    """A 16x8 array must tile across 2 DPR16X4 cells."""
+    mod = Module(name="dpr_wide")
+    rdata = mod.add_net("rdata", 8)
+    mem = mod.add_cell("mem0", PrimOp.MEMORY, depth=16, width=8, mem_name="wide_fifo")
+    mod.connect(mem, "RDATA", rdata, direction="output")
+
+    tagged = infer_brams(mod)
+    assert tagged == 1
+    assert mem.params["bram_config"] == "DPR16X4_TILED"
+    assert mem.params["bram_count"] == 2
+
+
+def test_memory_port_inference():
+    """Memory port inference must annotate read/write port counts."""
+    mod = Module(name="test")
+    raddr = mod.add_net("raddr", 10)
+    waddr = mod.add_net("waddr", 10)
+    rdata = mod.add_net("rdata", 8)
+
+    mem = mod.add_cell("mem0", PrimOp.MEMORY, depth=1024, width=8)
+    mod.connect(mem, "RADDR", raddr)
+    mod.connect(mem, "WADDR", waddr)
+    mod.connect(mem, "RDATA", rdata, direction="output")
+
+    annotated = infer_memory_ports(mod)
+    assert annotated == 1
+    assert mem.params["mem_read_ports"] == 1
+    assert mem.params["mem_write_ports"] == 1
+    assert mem.params["mem_dual_port"] is True

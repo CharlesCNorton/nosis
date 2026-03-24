@@ -26,6 +26,7 @@ __all__ = [
     "ValidationResult",
     "validate_design",
     "generate_testbench",
+    "generate_testbench_from_vectors",
 ]
 
 
@@ -257,6 +258,83 @@ def generate_testbench(
     lines.append("  end")
     lines.append("endmodule")
 
+    return "\n".join(lines)
+
+
+def generate_testbench_from_vectors(
+    module_name: str,
+    ports: list[PortInfo],
+    vectors: list,
+    *,
+    output_file: str = "tb_output.txt",
+) -> str:
+    """Generate a testbench from pre-computed test vectors.
+
+    Accepts a list of TestVector instances from nosis.testvec and produces
+    a deterministic testbench that applies them in order.
+    """
+    lines: list[str] = []
+    lines.append("`timescale 1ns/1ps")
+    lines.append(f"module tb_{module_name};")
+    lines.append("")
+
+    clk_port = None
+    input_ports: list[PortInfo] = []
+    output_ports: list[PortInfo] = []
+
+    for port in ports:
+        if port.direction == "input":
+            w = f"[{port.width - 1}:0] " if port.width > 1 else ""
+            lines.append(f"  reg {w}{port.name};")
+            if port.name.lower() in ("clk", "clock"):
+                clk_port = port
+            else:
+                input_ports.append(port)
+        elif port.direction == "output":
+            w = f"[{port.width - 1}:0] " if port.width > 1 else ""
+            lines.append(f"  wire {w}{port.name};")
+            output_ports.append(port)
+
+    lines.append("")
+    port_connections = ", ".join(f".{p.name}({p.name})" for p in ports)
+    lines.append(f"  {module_name} dut ({port_connections});")
+    lines.append("")
+
+    if clk_port:
+        lines.append(f"  initial {clk_port.name} = 0;")
+        lines.append(f"  always #5 {clk_port.name} = ~{clk_port.name};")
+        lines.append("")
+
+    lines.append("  integer fd;")
+    lines.append("  initial begin")
+    lines.append(f'    fd = $fopen("{output_file}", "w");')
+
+    for vec in vectors:
+        for name, val in vec.inputs.items():
+            width = next((p.width for p in input_ports if p.name == name), 1)
+            if width > 1:
+                lines.append(f"    {name} = {width}'h{val:X};")
+            else:
+                lines.append(f"    {name} = {val & 1};")
+        if clk_port:
+            lines.append(f"    @(posedge {clk_port.name}); #1;")
+        else:
+            lines.append("    #10;")
+
+        fmt_parts = [f"cycle={vec.cycle}"]
+        arg_parts = []
+        for port in output_ports:
+            fmt_parts.append(f"{port.name}=%0h" if port.width > 1 else f"{port.name}=%0b")
+            arg_parts.append(port.name)
+        fmt_str = " ".join(fmt_parts)
+        arg_str = ", ".join(arg_parts)
+        if arg_parts:
+            lines.append(f'    $fdisplay(fd, "{fmt_str}", {arg_str});')
+
+    lines.append("    $fclose(fd);")
+    lines.append("    $finish;")
+    lines.append("  end")
+    lines.append("endmodule")
     return "\n".join(lines)
 
 

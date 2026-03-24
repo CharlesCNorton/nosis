@@ -17,7 +17,10 @@ from pathlib import Path
 __all__ = [
     "SdcClock",
     "SdcConstraints",
+    "SdcTimingArc",
     "parse_sdc",
+    "parse_specify_block",
+    "apply_sdc_to_timing",
 ]
 
 
@@ -175,3 +178,132 @@ def parse_sdc(path: str | Path) -> SdcConstraints:
                 constraints.false_paths.append(SdcFalsePath(from_port=from_port, to_port=to_port))
 
     return constraints
+
+
+# ---------------------------------------------------------------------------
+# Specify block parsing for timing arc extraction
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
+class SdcTimingArc:
+    """A timing arc from a specify block or SDC constraint."""
+    from_port: str
+    to_port: str
+    delay_ns: float
+    arc_type: str = "combinational"  # "combinational", "setup", "hold"
+
+
+def parse_specify_block(text: str) -> list[SdcTimingArc]:
+    """Parse a Verilog specify block and extract timing arcs.
+
+    Handles the common forms:
+      - ``(A => Z) = delay;``          — combinational path
+      - ``(A *> Z) = delay;``          — full connection
+      - ``$setup(D, posedge CLK, t);`` — setup constraint
+      - ``$hold(posedge CLK, D, t);``  — hold constraint
+
+    Returns a list of SdcTimingArc instances.
+    """
+    arcs: list[SdcTimingArc] = []
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip().rstrip(";")
+        if not line or line.startswith("//"):
+            continue
+
+        # Combinational path: (A => Z) = 1.5 or (A *> Z) = 1.5
+        if "=>" in line or "*>" in line:
+            # Extract ports and delay
+            try:
+                path_part, delay_part = line.split("=", 1)
+                if "=>" in path_part:
+                    # Already split correctly
+                    pass
+                else:
+                    # Re-split on the assignment =
+                    parts = line.rsplit("=", 1)
+                    if len(parts) == 2:
+                        path_part, delay_part = parts
+                # Parse delay value
+                delay_str = delay_part.strip().strip("()")
+                try:
+                    delay = float(delay_str)
+                except ValueError:
+                    # Try extracting first number
+                    import re
+                    m = re.search(r"[\d.]+", delay_str)
+                    delay = float(m.group()) if m else 0.0
+
+                # Parse ports from path
+                path_clean = path_part.strip().strip("()")
+                sep = "=>" if "=>" in path_clean else "*>"
+                from_to = path_clean.split(sep)
+                if len(from_to) == 2:
+                    from_port = from_to[0].strip().strip("()")
+                    to_port = from_to[1].strip().strip("()")
+                    arcs.append(SdcTimingArc(
+                        from_port=from_port, to_port=to_port,
+                        delay_ns=delay, arc_type="combinational",
+                    ))
+            except (ValueError, IndexError):
+                continue
+
+        # $setup constraint
+        elif line.startswith("$setup"):
+            inner = line[6:].strip().strip("()")
+            parts = [p.strip() for p in inner.split(",")]
+            if len(parts) >= 3:
+                try:
+                    delay = float(parts[2])
+                    arcs.append(SdcTimingArc(
+                        from_port=parts[0], to_port=parts[1],
+                        delay_ns=delay, arc_type="setup",
+                    ))
+                except ValueError:
+                    pass
+
+        # $hold constraint
+        elif line.startswith("$hold"):
+            inner = line[5:].strip().strip("()")
+            parts = [p.strip() for p in inner.split(",")]
+            if len(parts) >= 3:
+                try:
+                    delay = float(parts[2])
+                    arcs.append(SdcTimingArc(
+                        from_port=parts[0], to_port=parts[1],
+                        delay_ns=delay, arc_type="hold",
+                    ))
+                except ValueError:
+                    pass
+
+    return arcs
+
+
+# ---------------------------------------------------------------------------
+# Apply SDC timing arcs to static timing analysis
+# ---------------------------------------------------------------------------
+
+def apply_sdc_to_timing(
+    constraints: SdcConstraints,
+    timing_arcs: list[SdcTimingArc] | None = None,
+) -> dict[str, float]:
+    """Merge SDC constraints and specify timing arcs into delay overrides.
+
+    Returns ``{port_name: delay_ns}`` for input/output delays derived from
+    SDC ``set_input_delay`` / ``set_output_delay`` and specify block arcs.
+    These overrides can be applied to the STA arrival times.
+    """
+    delays: dict[str, float] = {}
+
+    # SDC input/output delays
+    for sdc_delay in constraints.delays:
+        delays[sdc_delay.port] = sdc_delay.delay_ns
+
+    # Specify arcs: add to the from-port delay if larger
+    if timing_arcs:
+        for arc in timing_arcs:
+            if arc.arc_type == "combinational":
+                current = delays.get(arc.from_port, 0.0)
+                delays[arc.from_port] = max(current, arc.delay_ns)
+
+    return delays

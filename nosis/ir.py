@@ -171,6 +171,7 @@ class Design:
     """Top-level container for one or more modules."""
     modules: dict[str, Module] = field(default_factory=dict)
     top: str | None = None
+    synthesis_warnings: list = field(default_factory=list)  # SynthesisWarning instances
 
     def add_module(self, name: str) -> Module:
         if name in self.modules:

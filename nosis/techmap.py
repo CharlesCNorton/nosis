@@ -219,6 +219,16 @@ class _ECP5Mapper:
         op = cell.op
 
         if op == PrimOp.INPUT or op == PrimOp.OUTPUT:
+            # Tri-state buffer inference for inout ports
+            if op == PrimOp.INPUT and cell.params.get("inout"):
+                # Emit a BB (bidirectional buffer) cell for inout ports
+                for out_net in cell.outputs.values():
+                    ecp5_net = self._get_net(out_net)
+                    bb = self.nl.add_cell(self._fresh_name("bb"), "BB")
+                    bb.ports["I"] = ["0"]
+                    bb.ports["T"] = ["1"]  # tristate by default
+                    bb.ports["O"] = ecp5_net.bits[:1] if ecp5_net.bits else ["0"]
+                    bb.ports["B"] = ecp5_net.bits[:1] if ecp5_net.bits else ["0"]
             return  # handled as ports
 
         if op == PrimOp.CONST:

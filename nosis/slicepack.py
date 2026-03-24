@@ -57,37 +57,46 @@ def pack_pfumx(netlist: ECP5Netlist) -> int:
     packed = 0
     used: set[str] = set()
 
-    # For each pair of LUT4 cells, check if they share 3 inputs
+    # Match LUT4 pairs that share any 3 of 4 inputs (relaxed from exact A0/B0)
     for i, (name_a, cell_a) in enumerate(slices):
         if name_a in used:
             continue
         a0_a, b0_a, c0_a, d0_a = _get_input_bits(cell_a)
-        inputs_a = {
-            "A0": a0_a[0] if a0_a else "0",
-            "B0": b0_a[0] if b0_a else "0",
-            "C0": c0_a[0] if c0_a else "0",
-            "D0": d0_a[0] if d0_a else "0",
+        inputs_a_set = {
+            a0_a[0] if a0_a else "0",
+            b0_a[0] if b0_a else "0",
+            c0_a[0] if c0_a else "0",
+            d0_a[0] if d0_a else "0",
         }
-        # Skip cells that use C0 or D0 (already using 3+ inputs)
-        if inputs_a["C0"] != "0" or inputs_a["D0"] != "0":
-            continue
+        # Remove constant "0" from the active input set
+        active_a = inputs_a_set - {"0"}
+        if len(active_a) < 1:
+            continue  # all-constant LUT, nothing to share
 
         for j, (name_b, cell_b) in enumerate(slices):
             if j <= i or name_b in used:
                 continue
             a0_b, b0_b, c0_b, d0_b = _get_input_bits(cell_b)
-            inputs_b = {
-                "A0": a0_b[0] if a0_b else "0",
-                "B0": b0_b[0] if b0_b else "0",
-                "C0": c0_b[0] if c0_b else "0",
-                "D0": d0_b[0] if d0_b else "0",
+            inputs_b_set = {
+                a0_b[0] if a0_b else "0",
+                b0_b[0] if b0_b else "0",
+                c0_b[0] if c0_b else "0",
+                d0_b[0] if d0_b else "0",
             }
-            if inputs_b["C0"] != "0" or inputs_b["D0"] != "0":
+            active_b = inputs_b_set - {"0"}
+            if len(active_b) < 1:
                 continue
 
-            # Check if they share both A0 and B0 inputs
-            if inputs_a["A0"] == inputs_b["A0"] and inputs_a["B0"] == inputs_b["B0"]:
-                # Create PFUMX: mux the two LUT4 outputs
+            # Count shared active inputs
+            shared = active_a & active_b
+            total_unique = active_a | active_b
+
+            # PFUMX can accommodate 5 inputs total (4 shared + 1 select).
+            # Two LUT4s can share a slice if their combined unique inputs ≤ 5
+            # (4 for the shared LUT inputs + 1 for the PFUMX select).
+            # The minimum sharing for this: at least 3 shared inputs,
+            # or all unique inputs fit in 5.
+            if len(total_unique) <= 5 and len(shared) >= max(len(active_a) - 1, 1):
                 out_a = _get_output_bit(cell_a)
                 out_b = _get_output_bit(cell_b)
                 pfumx_out = netlist.alloc_bit()
@@ -103,7 +112,7 @@ def pack_pfumx(netlist: ECP5Netlist) -> int:
                 packed += 1
                 break
 
-            if packed >= 1000:  # safety limit
+            if packed >= 2000:  # safety limit
                 break
 
     return packed
@@ -149,9 +158,71 @@ def pack_l6mux21(netlist: ECP5Netlist) -> int:
     return packed
 
 
+def pack_dual_lut4(netlist: ECP5Netlist) -> int:
+    """Pack two independent LUT4 cells into a single TRELLIS_SLICE dual-LUT.
+
+    Each TRELLIS_SLICE has two LUT4 slots (LUT0 and LUT1). When two
+    independent LUT4 cells don't need to share inputs, they can be
+    co-located in the same slice to reduce total slice count by up to 50%.
+
+    Packs independent LUT4 cells into dual-LUT slices.
+
+    Returns the number of cells eliminated by dual-packing.
+    """
+    slices = [
+        (name, cell) for name, cell in netlist.cells.items()
+        if cell.cell_type == "TRELLIS_SLICE"
+    ]
+    if len(slices) < 2:
+        return 0
+
+    packed = 0
+    used: set[str] = set()
+
+    for i, (name_a, cell_a) in enumerate(slices):
+        if name_a in used:
+            continue
+        for j, (name_b, cell_b) in enumerate(slices):
+            if j <= i or name_b in used:
+                continue
+
+            # Both cells must be simple LUT4 (MODE=LOGIC, no carry, no FF)
+            if cell_a.parameters.get("MODE") != "LOGIC":
+                break
+            if cell_b.parameters.get("MODE") != "LOGIC":
+                continue
+
+            # Pack cell_b's LUT into cell_a's LUT1 slot
+            # cell_a keeps LUT0, cell_b becomes LUT1
+            init_b = cell_b.parameters.get("LUT0_INITVAL", "0x0000")
+            cell_a.parameters["LUT1_INITVAL"] = init_b
+
+            # Wire cell_b's inputs to cell_a's LUT1 ports
+            cell_a.ports["A1"] = cell_b.ports.get("A0", ["0"])
+            cell_a.ports["B1"] = cell_b.ports.get("B0", ["0"])
+            cell_a.ports["C1"] = cell_b.ports.get("C0", ["0"])
+            cell_a.ports["D1"] = cell_b.ports.get("D0", ["0"])
+            cell_a.ports["F1"] = cell_b.ports.get("F0", ["0"])
+
+            # Mark cell_b as consumed
+            used.add(name_b)
+            packed += 1
+            break
+
+        if packed >= 5000:  # safety limit
+            break
+
+    # Remove consumed cells
+    for name in used:
+        del netlist.cells[name]
+
+    return packed
+
+
 def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
-    """Run PFUMX and L6MUX21 packing. Returns counts."""
+    """Run all slice packing passes. Returns counts."""
     return {
+        "dual_lut4": pack_dual_lut4(netlist),
         "pfumx": pack_pfumx(netlist),
         "l6mux21": pack_l6mux21(netlist),
     }

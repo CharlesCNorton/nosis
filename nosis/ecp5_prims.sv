@@ -131,3 +131,115 @@ module TSALL (
     input wire TSALL
 );
 endmodule
+
+// Additional primitives with parameterized port widths
+
+module EHXPLLJ #(
+    parameter CLKI_DIV      = 1,
+    parameter CLKFB_DIV     = 1,
+    parameter CLKOP_DIV     = 1,
+    parameter CLKOS_DIV     = 1,
+    parameter CLKOS2_DIV    = 1,
+    parameter CLKOS3_DIV    = 1,
+    parameter CLKOP_ENABLE  = "ENABLED",
+    parameter CLKOS_ENABLE  = "DISABLED",
+    parameter CLKOS2_ENABLE = "DISABLED",
+    parameter CLKOS3_ENABLE = "DISABLED",
+    parameter FEEDBK_PATH   = "CLKOP"
+) (
+    input  wire CLKI,
+    input  wire CLKFB,
+    input  wire RST,
+    input  wire STDBY,
+    input  wire PHASESEL0,
+    input  wire PHASESEL1,
+    input  wire PHASEDIR,
+    input  wire PHASESTEP,
+    input  wire PHASELOADREG,
+    output wire CLKOP,
+    output wire CLKOS,
+    output wire CLKOS2,
+    output wire CLKOS3,
+    output wire LOCK,
+    output wire INTLOCK
+);
+endmodule
+
+module MULT18X18D #(
+    parameter REG_INPUTA_CLK  = "NONE",
+    parameter REG_INPUTB_CLK  = "NONE",
+    parameter REG_OUTPUT_CLK  = "NONE",
+    parameter SOURCEB_MODE    = "B_INPUT",
+    parameter GSR             = "DISABLED"
+) (
+    input  wire [17:0] A,
+    input  wire [17:0] B,
+    input  wire CLK0, CLK1, CLK2, CLK3,
+    input  wire CE0, CE1, CE2, CE3,
+    input  wire RST0, RST1, RST2, RST3,
+    input  wire SIGNEDA, SIGNEDB,
+    output wire [35:0] P
+);
+endmodule
+
+module DP16KD #(
+    parameter DATA_WIDTH_A  = 18,
+    parameter DATA_WIDTH_B  = 18,
+    parameter REGMODE_A     = "NOREG",
+    parameter REGMODE_B     = "NOREG",
+    parameter CSDECODE_A    = "0b000",
+    parameter CSDECODE_B    = "0b000",
+    parameter WRITEMODE_A   = "NORMAL",
+    parameter WRITEMODE_B   = "NORMAL",
+    parameter GSR           = "DISABLED"
+) (
+    input  wire [13:0] ADA, ADB,
+    input  wire [17:0] DIA, DIB,
+    output wire [17:0] DOA, DOB,
+    input  wire CLKA, CLKB,
+    input  wire WEA, WEB,
+    input  wire CEA, CEB,
+    input  wire OCEA, OCEB,
+    input  wire RSTA, RSTB,
+    input  wire CSA0, CSA1, CSA2,
+    input  wire CSB0, CSB1, CSB2
+);
+endmodule
+
+module BB (
+    input  wire I,
+    input  wire T,
+    output wire O,
+    inout  wire B
+);
+endmodule
+
+module OBZ (
+    input  wire I,
+    input  wire T,
+    output wire O
+);
+endmodule
+
+module TRELLIS_DPR16X4 (
+    input  wire [3:0] RAD,
+    input  wire [3:0] WAD,
+    input  wire [3:0] DI,
+    output wire [3:0] DO,
+    input  wire WCK,
+    input  wire WRE
+);
+endmodule
+
+module CCU2C #(
+    parameter [15:0] INIT0     = 16'h0000,
+    parameter [15:0] INIT1     = 16'h0000,
+    parameter INJECT1_0        = "YES",
+    parameter INJECT1_1        = "YES"
+) (
+    input  wire CIN,
+    input  wire A0, B0, C0, D0,
+    input  wire A1, B1, C1, D1,
+    output wire S0, S1, COUT
+);
+endmodule

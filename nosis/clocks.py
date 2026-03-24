@@ -1,5 +1,15 @@
 """Nosis clock domain analysis — identify clock domains and detect crossings.
 
+Example::
+
+    from nosis.clocks import analyze_clock_domains
+
+    domains, crossings = analyze_clock_domains(mod)
+    for domain in domains:
+        print(f"Clock {domain.clock_net}: {len(domain.ff_cells)} FFs")
+    for crossing in crossings:
+        print(f"CDC: {crossing.source_domain} -> {crossing.dest_domain}")
+
 Scans the IR for FF cells and groups them by their CLK input net.
 Each unique CLK net defines a clock domain. When a net crosses from
 one domain to another (an FF in domain A drives combinational logic

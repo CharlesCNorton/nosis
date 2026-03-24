@@ -438,7 +438,7 @@ def _simplify_mux_with_zero(mod: Module) -> int:
     Returns the number of MUX cells replaced.
     """
     replaced = 0
-    _cell_counter = [max((int(n.split("_")[-1]) for n in mod.cells if n.startswith("$")), default=0) + 1]
+    _cell_counter = [len(mod.nets) + len(mod.cells) + 1]
 
     def _fresh(prefix: str) -> str:
         name = f"${prefix}_{_cell_counter[0]}"
@@ -489,6 +489,31 @@ def _simplify_mux_with_zero(mod: Module) -> int:
             cell.inputs["A"] = s_net
             cell.inputs["B"] = b_net
             replaced += 1
+            continue
+
+        # MUX(sel, A, all_ones) = OR(sel, A) per bit
+        b_is_ones = False
+        a_is_ones = False
+        if b_net.driver and b_net.driver.op == PrimOp.CONST:
+            bv = int(b_net.driver.params.get("value", 0))
+            mask = (1 << out_net.width) - 1
+            if (bv & mask) == mask:
+                b_is_ones = True
+        if a_net.driver and a_net.driver.op == PrimOp.CONST:
+            av = int(a_net.driver.params.get("value", 0))
+            mask = (1 << out_net.width) - 1
+            if (av & mask) == mask:
+                a_is_ones = True
+
+        if b_is_ones:
+            # MUX(sel, A, ones) = sel ? ones : A = OR(sel, A) per bit
+            cell.op = PrimOp.OR
+            cell.inputs.clear()
+            cell.inputs["A"] = s_net
+            cell.inputs["B"] = a_net
+            replaced += 1
+        # a_is_ones case (MUX(sel, ones, B)) would need NOT(sel)+OR,
+        # which adds a cell — not beneficial, so skip it.
 
     return replaced
 
@@ -523,28 +548,28 @@ def run_default_passes(mod: Module) -> dict[str, int]:
     from nosis.boolopt import boolean_optimize
 
     stats: dict[str, int] = {}
-    stats["const_fold"] = constant_fold(mod)
-    stats["identity"] = identity_simplify(mod)
-    stats["bool_opt"] = boolean_optimize(mod)
-    stats["const_ff"] = remove_const_ffs(mod)
-    stats["cse"] = eliminate_common_subexpressions(mod)
-    stats["mux_merge"] = merge_mux_chains(mod)
-    stats["dce"] = dead_code_eliminate(mod)
-    stats["const_fold_2"] = constant_fold(mod)
-    stats["identity_2"] = identity_simplify(mod)
-    stats["bool_opt_2"] = boolean_optimize(mod)
-    stats["const_ff_2"] = remove_const_ffs(mod)
-    stats["cse_2"] = eliminate_common_subexpressions(mod)
-    stats["mux_merge_2"] = merge_mux_chains(mod)
-    stats["dce_2"] = dead_code_eliminate(mod)
+    prev_cells = len(mod.cells)
 
-    # Third pass: narrow MUX width (defined below) when both inputs share constant bits
-    stats["mux_to_and"] = _simplify_mux_with_zero(mod)
-    stats["mux_narrow"] = _narrow_const_mux(mod)
-    stats["dce_3"] = dead_code_eliminate(mod)
+    for iteration in range(6):
+        cf = constant_fold(mod)
+        ident = identity_simplify(mod)
+        bo = boolean_optimize(mod)
+        cff = remove_const_ffs(mod)
+        cse = eliminate_common_subexpressions(mod)
+        mm = merge_mux_chains(mod)
+        mz = _simplify_mux_with_zero(mod)
+        mn = _narrow_const_mux(mod)
+        dce = dead_code_eliminate(mod)
 
-    # Re-run inference after optimization — the optimized IR may have
-    # new ADD/SUB cells or MEMORY cells that weren't present before.
+        total = cf + ident + bo + cff + cse + mm + mz + mn + dce
+        stats[f"round_{iteration}"] = total
+
+        cur_cells = len(mod.cells)
+        if cur_cells == prev_cells:
+            break
+        prev_cells = cur_cells
+
+    # Re-run inference after optimization
     from nosis.carry import infer_carry_chains
     from nosis.bram import infer_brams
     from nosis.dsp import infer_dsps

@@ -145,7 +145,7 @@ def test_run_default_passes():
     mod.connect(cell, "Y", out, direction="output")
 
     stats = run_default_passes(mod)
-    assert stats["const_fold"] >= 1
+    assert stats.get("round_0", 0) >= 1
 
 
 def test_identity_and_all_ones():

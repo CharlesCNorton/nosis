@@ -7,9 +7,6 @@ of these, the commit is rejected.
 """
 
 import json
-import os
-
-os.environ.setdefault("NOSIS_PYSLANG_PATH", "D:/slang/build/lib")
 
 from nosis.frontend import FrontendError, parse_files, lower_to_ir
 from nosis.passes import run_default_passes
@@ -17,8 +14,12 @@ from nosis.fsm import extract_fsms, annotate_fsm_cells
 from nosis.techmap import map_to_ecp5
 from nosis.json_backend import emit_json_str
 from nosis.ir import PrimOp
-
-RIME = "D:/rime/firmware"
+from tests.conftest import (
+    RIME_FW as RIME,
+    RIME_SOC_SOURCES,
+    RIME_THAW_SOURCES,
+    requires_rime,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -267,13 +268,7 @@ class TestRimeV:
 
 class TestThaw:
     SRC = [
-        f"{RIME}/images/thaw/top.sv",
-        f"{RIME}/images/thaw/thaw_service.sv",
-        f"{RIME}/core/uart/uart_rx.sv",
-        f"{RIME}/core/uart/uart_tx.sv",
-        f"{RIME}/core/service/flash_spi_master.sv",
-        f"{RIME}/core/service/sdram_controller.sv",
-        f"{RIME}/core/service/sdram_bridge.sv",
+        *RIME_THAW_SOURCES,
     ]
     TOP = "top"
 
@@ -329,19 +324,7 @@ class TestThaw:
 
 class TestPicoRV32Soc:
     SRC = [
-        f"{RIME}/images/picorv32/top.sv",
-        f"{RIME}/core/cpu/picorv32.v",
-        f"{RIME}/core/cpu/rime_soc.sv",
-        f"{RIME}/core/cpu/rime_pcpi_crc32.sv",
-        f"{RIME}/core/cpu/rime_v.sv",
-        f"{RIME}/core/cpu/rime_v_mini.sv",
-        f"{RIME}/core/cpu/rime_v_memif.sv",
-        f"{RIME}/core/uart/uart_rx.sv",
-        f"{RIME}/core/uart/uart_tx.sv",
-        f"{RIME}/core/service/flash_spi_master.sv",
-        f"{RIME}/core/service/sd_spi_master.sv",
-        f"{RIME}/core/service/sdram_controller.sv",
-        f"{RIME}/core/service/sdram_bridge.sv",
+        *RIME_SOC_SOURCES,
     ]
     TOP = "top"
 

@@ -1,15 +1,9 @@
 """Tests for nosis.resources — resource utilization reporting."""
 
-import os
-
-os.environ.setdefault("NOSIS_PYSLANG_PATH", "D:/slang/build/lib")
-
 from nosis.frontend import parse_files, lower_to_ir
 from nosis.techmap import map_to_ecp5
 from nosis.resources import ECP5_DEVICES, report_utilization
-
-
-RIME = "D:/rime/firmware"
+from tests.conftest import RIME_FW as RIME, RIME_UART_TX, RIME_V, requires_rime
 
 
 def test_device_database():
@@ -23,7 +17,7 @@ def test_device_database():
 
 
 def test_report_basic():
-    result = parse_files([f"{RIME}/core/uart/uart_tx.sv"], top="uart_tx")
+    result = parse_files([RIME_UART_TX], top="uart_tx")
     design = lower_to_ir(result, top="uart_tx")
     nl = map_to_ecp5(design)
     report = report_utilization(nl, "25k")
@@ -35,7 +29,7 @@ def test_report_basic():
 
 def test_report_overutilization_warning():
     """Synthesizing a large design against a small device should warn."""
-    result = parse_files([f"{RIME}/core/cpu/rime_v.sv"], top="rime_v")
+    result = parse_files([RIME_V], top="rime_v")
     design = lower_to_ir(result, top="rime_v")
     nl = map_to_ecp5(design)
     report = report_utilization(nl, "12k")
@@ -47,7 +41,7 @@ def test_report_overutilization_warning():
 
 
 def test_report_summary_lines():
-    result = parse_files([f"{RIME}/core/uart/uart_tx.sv"], top="uart_tx")
+    result = parse_files([RIME_UART_TX], top="uart_tx")
     design = lower_to_ir(result, top="uart_tx")
     nl = map_to_ecp5(design)
     report = report_utilization(nl, "25k")

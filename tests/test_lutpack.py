@@ -1,15 +1,9 @@
 """Tests for nosis.lutpack — LUT packing optimization."""
 
-import os
-
-os.environ.setdefault("NOSIS_PYSLANG_PATH", "D:/slang/build/lib")
-
 from nosis.ir import Module, PrimOp
 from nosis.frontend import parse_files, lower_to_ir
 from nosis.lutpack import pack_luts_ir
-
-
-RIME = "D:/rime/firmware"
+from tests.conftest import RIME_FW as RIME, RIME_V, requires_rime
 
 
 def test_pack_and_chain():

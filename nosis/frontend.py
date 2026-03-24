@@ -245,6 +245,8 @@ class _Lowerer:
         return ""
 
     def _get_or_create_net(self, name: str, width: int) -> Net:
+        if width <= 0:
+            width = 1  # prevent zero-width nets
         if name in self.mod.nets:
             existing = self.mod.nets[name]
             if existing.width != width:
@@ -913,6 +915,8 @@ class _Lowerer:
                 return self2.mod.add_cell(name, op, src=src, **params)
 
             def _get_or_create_net(self2, name, width):
+                if width <= 0:
+                    width = 1
                 prefixed = f"{self2._prefix}{name}"
                 if prefixed in self2.mod.nets:
                     existing = self2.mod.nets[prefixed]

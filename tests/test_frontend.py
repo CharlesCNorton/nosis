@@ -1,20 +1,14 @@
 """Tests for nosis.frontend — pyslang parsing and IR lowering."""
 
-import os
-import sys
-
-# Ensure pyslang is importable
-os.environ.setdefault("NOSIS_PYSLANG_PATH", "D:/slang/build/lib")
-
 from nosis.frontend import FrontendError, parse_files, lower_to_ir
 from nosis.ir import PrimOp
-
-
-RIME_ROOT = "D:/rime/firmware"
-UART_TX = f"{RIME_ROOT}/core/uart/uart_tx.sv"
-UART_RX = f"{RIME_ROOT}/core/uart/uart_rx.sv"
-SDRAM_BRIDGE = f"{RIME_ROOT}/core/service/sdram_bridge.sv"
-CRC32 = f"{RIME_ROOT}/core/cpu/rime_pcpi_crc32.sv"
+from tests.conftest import (
+    RIME_UART_TX as UART_TX,
+    RIME_UART_RX as UART_RX,
+    RIME_SDRAM_BRIDGE as SDRAM_BRIDGE,
+    RIME_CRC32 as CRC32,
+    requires_rime,
+)
 
 
 def test_parse_uart_tx():

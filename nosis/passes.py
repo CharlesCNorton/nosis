@@ -331,6 +331,103 @@ def remove_const_ffs(mod: Module) -> int:
     return removed
 
 
+def merge_mux_chains(mod: Module) -> int:
+    """Deduplicate EQ cells that share the same (selector, constant) pair.
+
+    In case statements, the lowering often produces duplicate EQ cells
+    for the same comparison across different target registers. CSE
+    catches exact duplicates, but after optimization the structure may
+    have diverged enough that CSE misses them.
+
+    Also eliminates EQ cells where the selector width exceeds the number
+    of distinct case values — the redundant EQs can never match.
+
+    Returns the number of cells eliminated.
+    """
+    eliminated = 0
+    from collections import defaultdict
+
+    # Group EQs by (A_net, B_const_value)
+    eq_groups: dict[tuple[str, int], list[Cell]] = defaultdict(list)
+    for cell in mod.cells.values():
+        if cell.op != PrimOp.EQ:
+            continue
+        a = cell.inputs.get("A")
+        b = cell.inputs.get("B")
+        if a is None or b is None:
+            continue
+        if b.driver is None or b.driver.op != PrimOp.CONST:
+            continue
+        b_val = int(b.driver.params.get("value", 0))
+        eq_groups[(a.name, b_val)].append(cell)
+
+    to_remove: set[str] = set()
+    for key, cells in eq_groups.items():
+        if len(cells) < 2:
+            continue
+        # Keep the first, redirect consumers of others to the first's output
+        keeper = cells[0]
+        keeper_out = list(keeper.outputs.values())
+        if not keeper_out:
+            continue
+        keeper_out_net = keeper_out[0]
+
+        for dup in cells[1:]:
+            dup_out = list(dup.outputs.values())
+            if not dup_out:
+                continue
+            dup_out_net = dup_out[0]
+            # Redirect all consumers of dup's output to keeper's output
+            for other in mod.cells.values():
+                if other is dup:
+                    continue
+                for pname, pnet in list(other.inputs.items()):
+                    if pnet is dup_out_net:
+                        other.inputs[pname] = keeper_out_net
+            to_remove.add(dup.name)
+            eliminated += 1
+
+    for name in to_remove:
+        if name in mod.cells:
+            del mod.cells[name]
+
+    # Second pass: eliminate MUX cells where both branches are identical
+    to_bypass: list[tuple[str, str]] = []
+    for cell in mod.cells.values():
+        if cell.op != PrimOp.MUX:
+            continue
+        a_net = cell.inputs.get("A")
+        b_net = cell.inputs.get("B")
+        if a_net and b_net and a_net is b_net:
+            out_nets = list(cell.outputs.values())
+            if out_nets:
+                to_bypass.append((cell.name, a_net.name))
+
+    for cell_name, src_name in to_bypass:
+        cell = mod.cells[cell_name]
+        src_net = mod.nets.get(src_name)
+        if src_net is None:
+            continue
+        for out_net in list(cell.outputs.values()):
+            for other in mod.cells.values():
+                if other is cell:
+                    continue
+                for pn, pnet in list(other.inputs.items()):
+                    if pnet is out_net:
+                        other.inputs[pn] = src_net
+            for port_name, port_net in list(mod.ports.items()):
+                if port_net is out_net:
+                    mod.ports[port_name] = src_net
+            out_net.driver = src_net.driver
+        cell.inputs.clear()
+        cell.outputs.clear()
+        cell.op = PrimOp.CONST
+        cell.params = {"value": 0, "width": 1, "_dead": True}
+        eliminated += 1
+
+    return eliminated
+
+
 def run_default_passes(mod: Module) -> dict[str, int]:
     """Run the default optimization pipeline. Returns pass statistics."""
     from nosis.cse import eliminate_common_subexpressions
@@ -342,11 +439,13 @@ def run_default_passes(mod: Module) -> dict[str, int]:
     stats["bool_opt"] = boolean_optimize(mod)
     stats["const_ff"] = remove_const_ffs(mod)
     stats["cse"] = eliminate_common_subexpressions(mod)
+    stats["mux_merge"] = merge_mux_chains(mod)
     stats["dce"] = dead_code_eliminate(mod)
     stats["const_fold_2"] = constant_fold(mod)
     stats["identity_2"] = identity_simplify(mod)
     stats["bool_opt_2"] = boolean_optimize(mod)
     stats["const_ff_2"] = remove_const_ffs(mod)
     stats["cse_2"] = eliminate_common_subexpressions(mod)
+    stats["mux_merge_2"] = merge_mux_chains(mod)
     stats["dce_2"] = dead_code_eliminate(mod)
     return stats

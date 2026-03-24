@@ -170,10 +170,10 @@ def check_equivalence_exhaustive(
         vals_a = _simulate_combinational(mod_a, inputs)
         vals_b = _simulate_combinational(mod_b, inputs)
 
-        # Compare outputs
+        # Compare outputs (look up by net name, which is what the simulator uses)
         for name, net in output_port_list:
-            va = vals_a.get(name, 0)
-            vb = vals_b.get(name, 0)
+            va = vals_a.get(net.name, vals_a.get(name, 0))
+            vb = vals_b.get(net.name, vals_b.get(name, 0))
             if va != vb:
                 return EquivalenceResult(
                     equivalent=False,

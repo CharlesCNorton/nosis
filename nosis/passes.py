@@ -178,20 +178,26 @@ def identity_simplify(mod: Module) -> int:
                 if inner_a:
                     to_bypass.append((cell.name, inner_a.name))
 
-    # Apply bypasses: redirect all consumers of the cell's output to use the source net
+    # Apply bypasses: redirect all consumers of the cell's output to the source net.
+    # This includes other cells' inputs AND module ports that reference the output net.
     for cell_name, src_net_name in to_bypass:
         cell = mod.cells[cell_name]
         src_net = mod.nets.get(src_net_name)
         if src_net is None:
             continue
-        for out_net in cell.outputs.values():
-            # Redirect every consumer that reads out_net to read src_net instead
+        for out_net in list(cell.outputs.values()):
+            # Redirect every consumer cell that reads out_net
             for other_cell in mod.cells.values():
                 if other_cell is cell:
                     continue
                 for port, net in list(other_cell.inputs.items()):
                     if net is out_net:
                         other_cell.inputs[port] = src_net
+            # Redirect module ports that reference out_net
+            for port_name, port_net in list(mod.ports.items()):
+                if port_net is out_net:
+                    mod.ports[port_name] = src_net
+            # Update the net's driver to maintain the graph invariant
             out_net.driver = src_net.driver
         cell.inputs.clear()
         cell.outputs.clear()

@@ -155,23 +155,39 @@ def analyze_timing(mod: Module) -> TimingReport:
                 arrival[net.name] = 0.0
                 predecessor[net.name] = None
 
-    # Forward propagation through combinational logic
-    changed = True
-    iterations = 0
-    max_iterations = len(mod.cells) + 10
+    # Collect FF Q output nets — these are timing boundaries
+    ff_q_nets: set[str] = set()
+    for cell in mod.cells.values():
+        if cell.op == PrimOp.FF:
+            for net in cell.outputs.values():
+                ff_q_nets.add(net.name)
 
-    while changed and iterations < max_iterations:
-        changed = False
-        iterations += 1
+    # Forward propagation — single pass, each cell visited at most once.
+    # Process cells whose inputs are all resolved. Break cycles by
+    # treating any net already in `arrival` as resolved.
+    processed: set[str] = set()
+    progress = True
+    while progress:
+        progress = False
         for cell in mod.cells.values():
+            if cell.name in processed:
+                continue
             if cell.op in (PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.FF, PrimOp.CONST):
+                processed.add(cell.name)
                 continue
 
-            # Maximum arrival time of all inputs
-            max_input_arrival = 0.0
-            for net in cell.inputs.values():
-                if net.name in arrival:
-                    max_input_arrival = max(max_input_arrival, arrival[net.name])
+            # Check if all inputs are resolved
+            all_resolved = all(net.name in arrival for net in cell.inputs.values())
+            if not all_resolved:
+                continue
+
+            processed.add(cell.name)
+            progress = True
+
+            max_input_arrival = max(
+                (arrival.get(net.name, 0.0) for net in cell.inputs.values()),
+                default=0.0,
+            )
 
             cell_delay = _CELL_DELAYS.get(cell.op, 0.4)
             output_arrival = max_input_arrival + cell_delay
@@ -180,7 +196,22 @@ def analyze_timing(mod: Module) -> TimingReport:
                 if net.name not in arrival or output_arrival > arrival[net.name]:
                     arrival[net.name] = output_arrival
                     predecessor[net.name] = cell.name
-                    changed = True
+
+    # Handle unprocessed cells (in cycles) — assign a conservative delay
+    for cell in mod.cells.values():
+        if cell.name in processed:
+            continue
+        if cell.op in (PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.FF, PrimOp.CONST):
+            continue
+        max_input_arrival = max(
+            (arrival.get(net.name, 0.0) for net in cell.inputs.values()),
+            default=0.0,
+        )
+        cell_delay = _CELL_DELAYS.get(cell.op, 0.4)
+        for net in cell.outputs.values():
+            if net.name not in arrival:
+                arrival[net.name] = max_input_arrival + cell_delay
+                predecessor[net.name] = cell.name
 
     # Find the critical path endpoint: the FF input or output port with
     # the largest arrival time
@@ -211,7 +242,9 @@ def analyze_timing(mod: Module) -> TimingReport:
         path_nets: list[str] = [critical_end_net]
         current = critical_end_net
 
-        while current and predecessor.get(current) is not None:
+        traceback_visited: set[str] = set()
+        while current and predecessor.get(current) is not None and current not in traceback_visited:
+            traceback_visited.add(current)
             cell_name = predecessor[current]
             if cell_name in mod.cells:
                 cell = mod.cells[cell_name]

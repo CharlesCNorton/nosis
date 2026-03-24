@@ -689,12 +689,23 @@ class _Lowerer:
                     self.mod.connect(ff, "RST", ff_rst)
                 if rst_val_net:
                     self.mod.connect(ff, "RST_VAL", rst_val_net)
-                # Use a fresh output net to avoid driver conflicts from
-                # multiple procedural blocks assigning the same register.
-                # The ff_target param records the original net name so the
-                # FSM detector can trace feedback loops.
+                # Create a fresh Q output net, then redirect all existing
+                # consumers of the target net to read from Q instead.
+                # This ensures the FF output is connected into the logic
+                # graph so DCE does not orphan it.
                 q_net = self._fresh_net(f"ff_q_{lhs_net.name}", lhs_net.width)
                 self.mod.connect(ff, "Q", q_net, direction="output")
+                # Redirect consumers of lhs_net to q_net
+                for other_cell in list(self.mod.cells.values()):
+                    if other_cell is ff:
+                        continue
+                    for pname, pnet in list(other_cell.inputs.items()):
+                        if pnet is lhs_net:
+                            other_cell.inputs[pname] = q_net
+                # Update port references
+                for pname, pnet in list(self.mod.ports.items()):
+                    if pnet is lhs_net:
+                        self.mod.ports[pname] = q_net
 
     def _detect_latch_inference(self, stmt: Any) -> list[str]:
         """Detect incomplete if/case in combinational blocks that would infer latches.

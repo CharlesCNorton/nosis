@@ -1,3 +1,4 @@
+`timescale 1ns/1ps
 // ECP5 vendor primitive stubs for slang elaboration.
 // These are black-box declarations that allow the frontend to parse
 // designs that instantiate ECP5-specific primitives. The actual

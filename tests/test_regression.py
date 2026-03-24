@@ -297,6 +297,68 @@ class TestThaw:
 
 
 # ---------------------------------------------------------------------------
+# Multi-file: PicoRV32 SoC (full board image)
+# ---------------------------------------------------------------------------
+
+class TestPicoRV32Soc:
+    SRC = [
+        f"{RIME}/images/picorv32/top.sv",
+        f"{RIME}/core/cpu/picorv32.v",
+        f"{RIME}/core/cpu/rime_soc.sv",
+        f"{RIME}/core/cpu/rime_pcpi_crc32.sv",
+        f"{RIME}/core/cpu/rime_v.sv",
+        f"{RIME}/core/cpu/rime_v_mini.sv",
+        f"{RIME}/core/cpu/rime_v_memif.sv",
+        f"{RIME}/core/uart/uart_rx.sv",
+        f"{RIME}/core/uart/uart_tx.sv",
+        f"{RIME}/core/service/flash_spi_master.sv",
+        f"{RIME}/core/service/sd_spi_master.sv",
+        f"{RIME}/core/service/sdram_controller.sv",
+        f"{RIME}/core/service/sdram_bridge.sv",
+    ]
+    TOP = "top"
+
+    def test_parse_zero_errors(self):
+        result = parse_files(self.SRC, top=self.TOP)
+        assert len(result.errors) == 0
+
+    def test_ir_cell_count(self):
+        result = parse_files(self.SRC, top=self.TOP)
+        design = lower_to_ir(result, top=self.TOP)
+        mod = design.top_module()
+        stats = mod.stats()
+        assert stats["cells"] >= 4000, f"full SoC expected >= 4000 IR cells, got {stats['cells']}"
+
+    def test_techmap(self):
+        result = parse_files(self.SRC, top=self.TOP)
+        design = lower_to_ir(result, top=self.TOP)
+        nl = map_to_ecp5(design)
+        stats = nl.stats()
+        assert stats.get("TRELLIS_SLICE", 0) >= 10000
+        assert stats.get("TRELLIS_FF", 0) >= 3000
+
+    def test_port_count(self):
+        result = parse_files(self.SRC, top=self.TOP)
+        design = lower_to_ir(result, top=self.TOP)
+        mod = design.top_module()
+        assert len(mod.ports) >= 20
+
+    def test_json_structural(self):
+        result = parse_files(self.SRC, top=self.TOP)
+        design = lower_to_ir(result, top=self.TOP)
+        nl = map_to_ecp5(design)
+        text = emit_json_str(nl)
+        data = json.loads(text)
+        assert self.TOP in data["modules"]
+        mod_json = data["modules"][self.TOP]
+        assert len(mod_json["cells"]) >= 10000
+        for name, cell in mod_json["cells"].items():
+            assert "type" in cell
+            assert "connections" in cell
+            assert cell["type"] in ("TRELLIS_SLICE", "TRELLIS_FF"), f"unexpected cell type: {cell['type']}"
+
+
+# ---------------------------------------------------------------------------
 # Strict error handling
 # ---------------------------------------------------------------------------
 

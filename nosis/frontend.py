@@ -150,7 +150,12 @@ def parse_files(
         drv.sourceLoader.addFiles(str(path))
 
     # Build command line for options
-    cmd_parts: list[str] = []
+    cmd_parts: list[str] = [
+        # Provide a default timescale for modules that don't specify one.
+        # Synthesis does not use timescale, but slang requires consistency
+        # when any module in the design has one (e.g. picorv32.v).
+        "--timescale=1ns/1ps",
+    ]
     if top:
         cmd_parts.append(f"--top={top}")
     if defines:
@@ -173,15 +178,20 @@ def parse_files(
 
     comp = drv.createCompilation()
 
+    # Diagnostic codes to suppress — these are not relevant to synthesis.
+    _SUPPRESS_CODES = {"DiagCode(MissingTimeScale)"}
+
     diagnostics: list[str] = []
     errors: list[str] = []
     for diag in comp.getAllDiagnostics():
-        # Render the diagnostic through the engine for a human-readable message
         loc = diag.location
         code = diag.code
+        code_str = str(code)
         is_error = diag.isError() if callable(getattr(diag, "isError", None)) else bool(getattr(diag, "isError", False))
-        # Build a text representation from available fields
         text = f"[{code}] at {loc}" if loc else f"[{code}]"
+        if code_str in _SUPPRESS_CODES:
+            diagnostics.append(text)
+            continue
         if is_error:
             errors.append(text)
         diagnostics.append(text)

@@ -142,9 +142,18 @@ def main(argv: list[str] | None = None) -> int:
     else:
         t_pack = time.monotonic()
 
-    # --- Technology map ---
+    # --- Technology map (on a fresh IR copy to avoid DCE-degraded module) ---
     from nosis.techmap import map_to_ecp5
-    netlist = map_to_ecp5(design)
+    design_for_map = lower_to_ir(result, top=args.top)
+    if not args.no_opt:
+        # Apply inference passes to the fresh copy
+        mod_map = design_for_map.top_module()
+        infer_brams(mod_map)
+        infer_dsps(mod_map)
+        infer_carry_chains(mod_map)
+        if not args.no_opt:
+            pack_luts_ir(mod_map)
+    netlist = map_to_ecp5(design_for_map)
     t_map = time.monotonic()
     if args.verbose:
         print(f"map: {netlist.stats()}")

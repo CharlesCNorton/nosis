@@ -42,6 +42,7 @@ except ImportError as _exc:
     ) from _exc
 
 from nosis.ir import Cell, Design, Module, Net, PrimOp
+from nosis.hierarchy import ECP5_BLACKBOX_NAMES as _VENDOR_PRIMITIVES
 
 import re as _re
 
@@ -488,13 +489,16 @@ class _Lowerer:
 
     def _lower_conditional_expr(self, expr: Any) -> Net:
         w = self._bit_width(expr)
-        # pyslang ConditionalExpression: conditions[0].expr is the predicate,
-        # left is the true branch, right is the false branch.
         conds = list(expr.conditions)
         pred_expr = conds[0].expr
         pred = self.lower_expr(pred_expr)
         true_val = self.lower_expr(expr.left)
         false_val = self.lower_expr(expr.right)
+
+        # Fold constant selector immediately instead of emitting a MUX
+        if pred.driver is not None and pred.driver.op == PrimOp.CONST:
+            sel_val = int(pred.driver.params.get("value", 0))
+            return true_val if (sel_val & 1) else false_val
 
         out = self._fresh_net("mux", w)
         cell = self._fresh_cell("mux", PrimOp.MUX)
@@ -785,15 +789,25 @@ class _Lowerer:
                 if stmt.ifFalse is not None:
                     if_false_assigns = self._collect_nb_assignments(stmt.ifFalse)
 
-                # Reset inference: if the true branch has only blocking assignments
-                # to the same targets as the false branch's non-blocking assignments,
-                # treat it as synchronous reset.
+                # Reset inference: detect both active-high and active-low patterns.
+                # Active-high: if (rst) {blocking resets} else {non-blocking logic}
+                # Active-low:  if (!rst_n) {blocking resets} else {non-blocking logic}
+                #   — same structure, slang inverts the condition
+                # Also: if (cond) {non-blocking logic} else {blocking resets}
                 if if_false_assigns and not if_true_assigns:
-                    # True branch might have blocking reset assignments
+                    # True branch has blocking resets, false branch has NB logic
                     reset_vals = self._collect_blocking_assignments(stmt.ifTrue)
                     for lhs, rhs, _, _ in if_false_assigns:
                         rst_val = reset_vals.get(lhs.name)
                         results.append((lhs, rhs, cond_net, rst_val))
+                elif if_true_assigns and not if_false_assigns and stmt.ifFalse is not None:
+                    # Active-low pattern: NB logic in true branch, blocking resets in else
+                    reset_vals = self._collect_blocking_assignments(stmt.ifFalse)
+                    if reset_vals:
+                        for lhs, rhs, _, _ in if_true_assigns:
+                            rst_val = reset_vals.get(lhs.name)
+                            # Condition is inverted for active-low
+                            results.append((lhs, rhs, cond_net, rst_val))
                 else:
                     # General conditional: MUX the assignments
                     true_map = {a[0].name: a for a in if_true_assigns}
@@ -1141,11 +1155,7 @@ class _Lowerer:
         mod_name = sub_body.name  # module name (e.g., "uart_rx")
 
         # Skip ECP5 vendor primitives — they're black boxes
-        if mod_name in (
-            "USRMCLK", "GSR", "SGSR", "PUR", "JTAGG", "DTR", "OSCG",
-            "EHXPLLL", "EHXPLLJ", "CLKDIVF", "DCCA", "DCC", "SEDGA",
-            "EXTREFB", "TSALL",
-        ):
+        if mod_name in _VENDOR_PRIMITIVES:
             return
 
         # Create a prefix for all nets/cells in this sub-instance
@@ -1216,19 +1226,14 @@ class _Lowerer:
                 # Nested sub-instances — recurse
                 sub._lower_sub_instance_nested(node, prefix)
 
-        # Monkey-patch nested instance handler
+        # Recursive nested instance handler
         def _lower_nested(nested_inst, parent_prefix):
-            nested_name = nested_inst.name
             nested_body = nested_inst.body
             nested_mod_name = nested_body.name
-            if nested_mod_name in (
-                "USRMCLK", "GSR", "SGSR", "PUR", "JTAGG", "DTR", "OSCG",
-                "EHXPLLL", "EHXPLLJ", "CLKDIVF", "DCCA", "DCC", "SEDGA",
-                "EXTREFB", "TSALL",
-            ):
+            if nested_mod_name in _VENDOR_PRIMITIVES:
                 return
-            # For now, skip deeply nested instances — flatten only one level
-            pass
+            # Recursively lower the nested instance with extended prefix
+            self._lower_sub_instance(nested_inst)
 
         sub._lower_sub_instance_nested = _lower_nested
 

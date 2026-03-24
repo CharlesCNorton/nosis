@@ -305,7 +305,12 @@ class _ECP5Mapper:
             ff.ports["Q"] = [q_bits[i] if i < len(q_bits) else self.nl.alloc_bit()]
 
     def _map_lut(self, cell: Cell) -> None:
-        """Map a logic operation to TRELLIS_SLICE LUT4 cells (one per output bit)."""
+        """Map a logic operation to TRELLIS_SLICE LUT4 cells.
+
+        For multi-bit operations, packs two adjacent bits into a single
+        TRELLIS_SLICE using both LUT0 and LUT1 slots. This halves the
+        slice count for bitwise operations compared to one-LUT-per-bit.
+        """
         out_nets = list(cell.outputs.values())
         if not out_nets:
             return
@@ -317,37 +322,55 @@ class _ECP5Mapper:
         s_net = cell.inputs.get("S")
 
         init = _compute_lut4_init(cell.op, len(cell.inputs))
+        init_hex = f"0x{init:04X}"
 
         out_bits = self._get_bits(out_net)
 
-        for i in range(width):
+        def _lut_ports(bit_idx: int, slot: str) -> dict[str, list]:
+            """Build port connections for one LUT slot (0 or 1)."""
+            ports: dict[str, list] = {}
+            sfx = slot  # "0" or "1"
+            if cell.op == PrimOp.MUX:
+                ports[f"A{sfx}"] = [self._get_bit(s_net, min(bit_idx, s_net.width - 1)) if s_net else "0"]
+                ports[f"B{sfx}"] = [self._get_bit(a_net, bit_idx) if a_net else "0"]
+                ports[f"C{sfx}"] = [self._get_bit(b_net, bit_idx) if b_net else "0"]
+                ports[f"D{sfx}"] = ["0"]
+            elif cell.op == PrimOp.NOT:
+                ports[f"A{sfx}"] = [self._get_bit(a_net, bit_idx) if a_net else "0"]
+                ports[f"B{sfx}"] = ["0"]
+                ports[f"C{sfx}"] = ["0"]
+                ports[f"D{sfx}"] = ["0"]
+            else:
+                ports[f"A{sfx}"] = [self._get_bit(a_net, bit_idx) if a_net else "0"]
+                ports[f"B{sfx}"] = [self._get_bit(b_net, bit_idx) if b_net else "0"]
+                ports[f"C{sfx}"] = ["0"]
+                ports[f"D{sfx}"] = ["0"]
+            ports[f"F{sfx}"] = [out_bits[bit_idx] if bit_idx < len(out_bits) else self.nl.alloc_bit()]
+            return ports
+
+        i = 0
+        while i < width:
             lut = self.nl.add_cell(self._fresh_name("lut"), "TRELLIS_SLICE")
             if cell.src:
                 lut.attributes["src"] = cell.src
-            lut.parameters["LUT0_INITVAL"] = f"0x{init:04X}"
+            lut.parameters["LUT0_INITVAL"] = init_hex
             lut.parameters["REG0_SD"] = "0"
             lut.parameters["SRMODE"] = "LSR_OVER_CE"
             lut.parameters["GSR"] = "DISABLED"
             lut.parameters["MODE"] = "LOGIC"
 
-            if cell.op == PrimOp.MUX:
-                # S -> A input, false -> B, true -> C
-                lut.ports["A0"] = [self._get_bit(s_net, min(i, s_net.width - 1)) if s_net else "0"]
-                lut.ports["B0"] = [self._get_bit(a_net, i) if a_net else "0"]
-                lut.ports["C0"] = [self._get_bit(b_net, i) if b_net else "0"]  # B is true branch
-                lut.ports["D0"] = ["0"]
-            elif cell.op == PrimOp.NOT:
-                lut.ports["A0"] = [self._get_bit(a_net, i) if a_net else "0"]
-                lut.ports["B0"] = ["0"]
-                lut.ports["C0"] = ["0"]
-                lut.ports["D0"] = ["0"]
-            else:
-                lut.ports["A0"] = [self._get_bit(a_net, i) if a_net else "0"]
-                lut.ports["B0"] = [self._get_bit(b_net, i) if b_net else "0"]
-                lut.ports["C0"] = ["0"]
-                lut.ports["D0"] = ["0"]
+            # LUT0 — bit i
+            for k, v in _lut_ports(i, "0").items():
+                lut.ports[k] = v
 
-            lut.ports["F0"] = [out_bits[i] if i < len(out_bits) else self.nl.alloc_bit()]
+            # LUT1 — bit i+1 (dual-pack if available)
+            if i + 1 < width:
+                lut.parameters["LUT1_INITVAL"] = init_hex
+                for k, v in _lut_ports(i + 1, "1").items():
+                    lut.ports[k] = v
+                i += 2
+            else:
+                i += 1
 
     def _map_arithmetic(self, cell: Cell) -> None:
         """Map ADD/SUB to CCU2C carry chain cells.

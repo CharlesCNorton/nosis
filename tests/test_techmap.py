@@ -166,7 +166,7 @@ def test_map_multibit_produces_per_bit_luts():
     mod.connect(gc, "B", b)
     mod.connect(gc, "Y", y, direction="output")
     nl = map_to_ecp5(design)
-    assert nl.stats()["TRELLIS_SLICE"] == 8
+    assert nl.stats()["TRELLIS_SLICE"] == 4  # dual-LUT: 8 bits / 2 per slice
 
 
 def test_map_add_produces_ccu2c():
@@ -209,7 +209,7 @@ def test_map_netlist_stats():
     mod.connect(gc, "Y", y, direction="output")
     nl = map_to_ecp5(design)
     stats = nl.stats()
-    assert stats["TRELLIS_SLICE"] == 8
+    assert stats["TRELLIS_SLICE"] == 4  # dual-LUT: 8 bits / 2 per slice
     assert stats["ports"] == 3
 
 

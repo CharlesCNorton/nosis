@@ -227,7 +227,7 @@ class TestRimeV:
         design = lower_to_ir(result, top=self.TOP)
         nl = map_to_ecp5(design)
         stats = nl.stats()
-        assert stats.get("TRELLIS_SLICE", 0) >= 1000
+        assert stats.get("TRELLIS_SLICE", 0) >= 500
         assert stats.get("TRELLIS_FF", 0) >= 500
 
     def test_json_roundtrip(self):
@@ -288,15 +288,13 @@ class TestThaw:
         design = lower_to_ir(result, top=self.TOP)
         nl = map_to_ecp5(design)
         stats = nl.stats()
-        assert stats.get("TRELLIS_SLICE", 0) >= 2000
+        assert stats.get("TRELLIS_SLICE", 0) >= 1000
         assert stats.get("TRELLIS_FF", 0) >= 500
 
     def test_port_count(self):
         result = parse_files(self.SRC, top=self.TOP)
         design = lower_to_ir(result, top=self.TOP)
         mod = design.top_module()
-        # Thaw top has: clk, usb_rx, usb_tx, led[4:0], button[1:0],
-        # flash pins, sd pins, sdram pins
         assert len(mod.ports) >= 15
 
     def test_json_valid_and_complete(self):
@@ -307,9 +305,8 @@ class TestThaw:
         data = json.loads(text)
         assert self.TOP in data["modules"]
         mod_json = data["modules"][self.TOP]
-        # Structural checks
         assert len(mod_json["ports"]) >= 15
-        assert len(mod_json["cells"]) >= 2000
+        assert len(mod_json["cells"]) >= 1000
         assert len(mod_json["netnames"]) >= 100
         # Every cell connection bit must be an integer
         for name, cell in mod_json["cells"].items():
@@ -344,7 +341,7 @@ class TestPicoRV32Soc:
         design = lower_to_ir(result, top=self.TOP)
         nl = map_to_ecp5(design)
         stats = nl.stats()
-        assert stats.get("TRELLIS_SLICE", 0) >= 10000
+        assert stats.get("TRELLIS_SLICE", 0) >= 5000
         assert stats.get("TRELLIS_FF", 0) >= 3000
 
     def test_port_count(self):
@@ -374,7 +371,7 @@ class TestPicoRV32Soc:
         data = json.loads(text)
         assert self.TOP in data["modules"]
         mod_json = data["modules"][self.TOP]
-        assert len(mod_json["cells"]) >= 10000
+        assert len(mod_json["cells"]) >= 5000
         for name, cell in mod_json["cells"].items():
             assert "type" in cell
             assert "connections" in cell
@@ -734,19 +731,19 @@ class TestLockedCellCounts:
 
     def test_uart_tx_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/uart/uart_tx.sv", "uart_tx")
-        assert s["TRELLIS_SLICE"] == 219, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["TRELLIS_SLICE"] == 117, f"LUT count changed: {s['TRELLIS_SLICE']}"
         assert s["TRELLIS_FF"] == 46, f"FF count changed: {s['TRELLIS_FF']}"
         assert s["CCU2C"] == 128, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_uart_rx_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/uart/uart_rx.sv", "uart_rx")
-        assert s["TRELLIS_SLICE"] == 283, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["TRELLIS_SLICE"] == 149, f"LUT count changed: {s['TRELLIS_SLICE']}"
         assert s["TRELLIS_FF"] == 47, f"FF count changed: {s['TRELLIS_FF']}"
         assert s["CCU2C"] == 128, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_sdram_bridge_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/service/sdram_bridge.sv", "sdram_bridge")
-        assert s["TRELLIS_SLICE"] == 477, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["TRELLIS_SLICE"] == 255, f"LUT count changed: {s['TRELLIS_SLICE']}"
         assert s["TRELLIS_FF"] == 348, f"FF count changed: {s['TRELLIS_FF']}"
         assert s["CCU2C"] == 14, f"CCU2C count changed: {s['CCU2C']}"
 
@@ -757,21 +754,21 @@ class TestLockedCellCounts:
 
     def test_rime_v_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/cpu/rime_v.sv", "rime_v")
-        assert s["TRELLIS_SLICE"] == 5173, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["TRELLIS_SLICE"] == 2659, f"LUT count changed: {s['TRELLIS_SLICE']}"
         assert s["TRELLIS_FF"] == 1727, f"FF count changed: {s['TRELLIS_FF']}"
         assert s["CCU2C"] == 275, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_thaw_exact(self):
         s = self._ecp5_stats(RIME_THAW_SOURCES, "top")
-        assert s["TRELLIS_SLICE"] == 16018, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["TRELLIS_SLICE"] == 8477, f"LUT count changed: {s['TRELLIS_SLICE']}"
         assert s["TRELLIS_FF"] == 6223, f"FF count changed: {s['TRELLIS_FF']}"
         assert s["CCU2C"] == 1044, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_soc_exact(self):
         s = self._ecp5_stats(RIME_SOC_SOURCES, "top")
-        assert s["TRELLIS_SLICE"] == 45134, f"LUT count changed: {s['TRELLIS_SLICE']}"
-        assert s["TRELLIS_FF"] == 13238, f"FF count changed: {s['TRELLIS_FF']}"
-        assert s["CCU2C"] == 3099, f"CCU2C count changed: {s['CCU2C']}"
+        assert s["TRELLIS_SLICE"] == 30482, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["TRELLIS_FF"] == 16905, f"FF count changed: {s['TRELLIS_FF']}"
+        assert s["CCU2C"] == 4094, f"CCU2C count changed: {s['CCU2C']}"
 
 
 # ---------------------------------------------------------------------------

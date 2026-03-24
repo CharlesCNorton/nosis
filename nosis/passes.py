@@ -178,16 +178,21 @@ def identity_simplify(mod: Module) -> int:
                 if inner_a:
                     to_bypass.append((cell.name, inner_a.name))
 
-    # Apply bypasses: redirect the output net's driver to the source net
+    # Apply bypasses: redirect all consumers of the cell's output to use the source net
     for cell_name, src_net_name in to_bypass:
         cell = mod.cells[cell_name]
         src_net = mod.nets.get(src_net_name)
         if src_net is None:
             continue
         for out_net in cell.outputs.values():
+            # Redirect every consumer that reads out_net to read src_net instead
+            for other_cell in mod.cells.values():
+                if other_cell is cell:
+                    continue
+                for port, net in list(other_cell.inputs.items()):
+                    if net is out_net:
+                        other_cell.inputs[port] = src_net
             out_net.driver = src_net.driver
-        # Convert cell to a wire-through by making it a CONST that will be DCE'd
-        # Actually, just clear it — DCE will remove it
         cell.inputs.clear()
         cell.outputs.clear()
         cell.op = PrimOp.CONST

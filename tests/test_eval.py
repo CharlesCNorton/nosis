@@ -189,18 +189,37 @@ def test_memory_returns_none():
     assert eval_const_op(PrimOp.MEMORY, {}, {}, 8) is None
 
 
-def test_unsupported_op_raises():
-    """An unrecognized PrimOp must raise UnsupportedOpError, not silently return 0."""
-    # PMUX is recognized but not fully implemented — it should still have defined behavior
-    # Create a truly fake op by patching
-    import enum
-    FakeOp = PrimOp.PMUX  # PMUX is in the enum but not handled by eval_const_op
-    # Actually, PMUX falls through to the raise. Test it.
-    try:
-        eval_const_op(PrimOp.PMUX, {"A": 1}, {}, 8)
-        assert False, "should have raised UnsupportedOpError"
-    except UnsupportedOpError as exc:
-        assert exc.op == PrimOp.PMUX
+def test_nonfoldable_ops_return_none():
+    """Non-foldable ops (FF, LATCH, INPUT, OUTPUT, MEMORY) return None."""
+    assert eval_const_op(PrimOp.LATCH, {"D": 1}, {}, 1) is None
+    assert eval_const_op(PrimOp.FF, {"D": 1, "CLK": 1}, {}, 1) is None
+    assert eval_const_op(PrimOp.MEMORY, {}, {}, 8) is None
+    assert eval_const_op(PrimOp.INPUT, {}, {}, 1) is None
+    assert eval_const_op(PrimOp.OUTPUT, {"A": 1}, {}, 1) is None
+
+
+def test_pmux_default():
+    """PMUX with no select active returns default."""
+    result = eval_const_op(PrimOp.PMUX, {"A": 42, "S": 0, "I0": 10, "I1": 20}, {"count": 2}, 8)
+    assert result == 42
+
+
+def test_pmux_select_0():
+    """PMUX with S[0]=1 returns I0."""
+    result = eval_const_op(PrimOp.PMUX, {"A": 42, "S": 1, "I0": 10, "I1": 20}, {"count": 2}, 8)
+    assert result == 10
+
+
+def test_pmux_select_1():
+    """PMUX with S[1]=1 returns I1."""
+    result = eval_const_op(PrimOp.PMUX, {"A": 42, "S": 2, "I0": 10, "I1": 20}, {"count": 2}, 8)
+    assert result == 20
+
+
+def test_pmux_priority():
+    """PMUX with multiple selects active: first (I0) wins."""
+    result = eval_const_op(PrimOp.PMUX, {"A": 42, "S": 3, "I0": 10, "I1": 20}, {"count": 2}, 8)
+    assert result == 10
 
 
 def test_width_masking():

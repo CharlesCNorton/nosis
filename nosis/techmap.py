@@ -524,8 +524,66 @@ class _ECP5Mapper:
                 out_ecp5.bits[i] = "0"
 
     def _map_pmux(self, cell: Cell) -> None:
-        """Map parallel MUX to LUT cascade."""
-        self._map_lut(cell)
+        """Map parallel MUX to a priority chain of LUT4 MUXes.
+
+        PMUX: default value on A, N case values on I0..I(N-1),
+        N select bits on S. When S[i] is high, output is I[i].
+        If no S bit is high, output is A (default).
+
+        Implemented as a chain: result = default, then for each
+        select bit, result = MUX(S[i], result, I[i]).
+        """
+        a_net = cell.inputs.get("A")  # default
+        s_net = cell.inputs.get("S")  # select bits
+        out_nets = list(cell.outputs.values())
+        if not a_net or not s_net or not out_nets:
+            self._map_lut(cell)
+            return
+
+        out_net = out_nets[0]
+        width = out_net.width
+        count = int(cell.params.get("count", 0))
+        if count == 0:
+            self._map_lut(cell)
+            return
+
+        out_bits = self._get_bits(out_net)
+        default_bits = self._get_bits(a_net)
+        s_bits = self._get_bits(s_net)
+
+        # For each output bit, build a priority MUX chain
+        for bit_idx in range(width):
+            current = default_bits[bit_idx] if bit_idx < len(default_bits) else "0"
+            for sel_idx in range(count):
+                case_net = cell.inputs.get(f"I{sel_idx}")
+                if case_net is None:
+                    continue
+                case_bits = self._get_bits(case_net)
+                case_bit = case_bits[bit_idx] if bit_idx < len(case_bits) else "0"
+                sel_bit = s_bits[sel_idx] if sel_idx < len(s_bits) else "0"
+
+                # MUX: if sel_bit, use case_bit, else use current
+                mux_out = self.nl.alloc_bit()
+                lut = self.nl.add_cell(self._fresh_name("pmux"), "TRELLIS_SLICE")
+                if cell.src:
+                    lut.attributes["src"] = cell.src
+                # MUX INIT: A=sel, B=current(false), C=case(true) -> 0xCACA
+                lut.parameters["LUT0_INITVAL"] = "0xCACA"
+                lut.parameters["MODE"] = "LOGIC"
+                lut.parameters["GSR"] = "DISABLED"
+                lut.ports["A0"] = [sel_bit]
+                lut.ports["B0"] = [current]
+                lut.ports["C0"] = [case_bit]
+                lut.ports["D0"] = ["0"]
+                lut.ports["F0"] = [mux_out]
+                current = mux_out
+
+            # Final result for this bit
+            if bit_idx < len(out_bits):
+                # Reassign the output bit to the chain result
+                # This requires the netname entry to be updated
+                out_ecp5 = self._get_net(out_net)
+                out_ecp5.bits[bit_idx] = current
 
     def _map_repeat(self, cell: Cell) -> None:
         """Map repeat — wiring."""

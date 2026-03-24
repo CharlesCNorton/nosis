@@ -409,6 +409,61 @@ class TestLanguageFeatures:
         call_unsupported = [c for c in unsupported if "Call" in c.name]
         assert len(call_unsupported) == 0, f"unresolved Call expressions: {[c.name for c in call_unsupported]}"
 
+    def test_sshr_in_picorv32(self):
+        """PicoRV32 uses arithmetic shift right — SSHR cells must be emitted."""
+        from tests.conftest import RIME_PICORV32
+        result = parse_files([RIME_PICORV32], top="picorv32")
+        design = lower_to_ir(result, top="picorv32")
+        mod = design.top_module()
+        sshr_cells = [c for c in mod.cells.values() if c.op == PrimOp.SSHR]
+        assert len(sshr_cells) >= 1, f"expected SSHR cells in picorv32, got {len(sshr_cells)}"
+        # Verify SSHR cells have A and B inputs
+        for cell in sshr_cells:
+            assert "A" in cell.inputs, f"SSHR {cell.name} missing A"
+            assert "B" in cell.inputs, f"SSHR {cell.name} missing B"
+
+    def test_sshr_techmap(self):
+        """SSHR cells must produce TRELLIS_SLICE cells after mapping."""
+        from tests.conftest import RIME_PICORV32
+        result = parse_files([RIME_PICORV32], top="picorv32")
+        design = lower_to_ir(result, top="picorv32")
+        nl = map_to_ecp5(design)
+        stats = nl.stats()
+        assert stats.get("TRELLIS_SLICE", 0) > 0
+
+    def test_repeat_in_picorv32(self):
+        """PicoRV32 uses replication — REPEAT cells must be emitted."""
+        from tests.conftest import RIME_PICORV32
+        result = parse_files([RIME_PICORV32], top="picorv32")
+        design = lower_to_ir(result, top="picorv32")
+        mod = design.top_module()
+        repeat_cells = [c for c in mod.cells.values() if c.op == PrimOp.REPEAT]
+        assert len(repeat_cells) >= 1, f"expected REPEAT cells in picorv32, got {len(repeat_cells)}"
+        # Verify REPEAT cells have A input and count param
+        for cell in repeat_cells:
+            assert "A" in cell.inputs, f"REPEAT {cell.name} missing A"
+            assert "count" in cell.params, f"REPEAT {cell.name} missing count param"
+
+    def test_repeat_eval_correctness(self):
+        """REPEAT must duplicate bits correctly."""
+        from nosis.eval import eval_const_op
+        # {4{1'b1}} = 4'b1111 = 0xF
+        result = eval_const_op(PrimOp.REPEAT, {"A": 1}, {"count": 4, "a_width": 1}, 4)
+        assert result == 0xF
+        # {2{4'b1010}} = 8'b10101010 = 0xAA
+        result = eval_const_op(PrimOp.REPEAT, {"A": 0xA}, {"count": 2, "a_width": 4}, 8)
+        assert result == 0xAA
+
+    def test_sshr_eval_correctness(self):
+        """SSHR must sign-extend on shift."""
+        from nosis.eval import eval_const_op
+        # 0x80 (8-bit, sign bit set) >> 1 = 0xC0 (sign-extended)
+        result = eval_const_op(PrimOp.SSHR, {"A": 0x80, "B": 1}, {}, 8)
+        assert result == 0xC0
+        # 0x40 (positive) >> 1 = 0x20 (no sign extension)
+        result = eval_const_op(PrimOp.SSHR, {"A": 0x40, "B": 1}, {}, 8)
+        assert result == 0x20
+
     def test_enum_constants_lowered(self):
         """Enum values (IDLE, START, etc.) must produce CONST cells."""
         SRC = [f"{RIME}/core/uart/uart_tx.sv"]

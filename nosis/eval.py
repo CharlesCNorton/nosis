@@ -110,6 +110,16 @@ def eval_const_op(
         s = inputs.get("S", 0)
         return (b if (s & 1) else a) & mask
 
+    if op == PrimOp.PMUX:
+        # Parallel MUX: A=default, S=select bits, I0..IN=case values
+        # First active select bit wins (priority from I0)
+        s = inputs.get("S", 0)
+        count = int(params.get("count", 0))
+        for i in range(count):
+            if (s >> i) & 1:
+                return inputs.get(f"I{i}", 0) & mask
+        return a & mask  # no select active -> default
+
     # --- Bit manipulation ---
     if op == PrimOp.SLICE:
         offset = int(params.get("offset", 0))

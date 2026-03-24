@@ -351,10 +351,103 @@ def deduplicate_luts(netlist: ECP5Netlist) -> int:
     return eliminated
 
 
+def absorb_buffers(netlist: ECP5Netlist) -> int:
+    """Absorb 1-input LUT4 cells (buffers/inverters) into their consumers.
+
+    A LUT4 with only 1 variable input is either a buffer (INIT where
+    f(0)=0, f(1)=1) or an inverter (f(0)=1, f(1)=0). These can be
+    absorbed into the consuming LUT by modifying its truth table to
+    include the buffer/inverter function on the corresponding input.
+
+    Returns the number of buffer LUTs eliminated.
+    """
+    absorbed = 0
+    to_remove: set[str] = set()
+
+    # Build output-bit -> cell map
+    bit_to_cell: dict[int | str, str] = {}
+    for name, cell in netlist.cells.items():
+        if cell.cell_type == "TRELLIS_SLICE":
+            f0 = cell.ports.get("F0", [])
+            if f0 and isinstance(f0[0], int):
+                bit_to_cell[f0[0]] = name
+
+    for name, cell in list(netlist.cells.items()):
+        if cell.cell_type != "TRELLIS_SLICE" or name in to_remove:
+            continue
+        if "LUT1_INITVAL" in cell.parameters:
+            continue  # dual-LUT, don't touch
+
+        # Count variable inputs
+        var_pins: list[tuple[str, int]] = []
+        for pin in ["A0", "B0", "C0", "D0"]:
+            bits = cell.ports.get(pin, ["0"])
+            if bits and isinstance(bits[0], int) and bits[0] >= 2:
+                var_pins.append((pin, bits[0]))
+
+        if len(var_pins) != 1:
+            continue  # not a 1-input LUT
+
+        _, input_bit = var_pins[0]
+        output_bits = cell.ports.get("F0", [])
+        if not output_bits or not isinstance(output_bits[0], int):
+            continue
+        output_bit = output_bits[0]
+
+        init_str = cell.parameters.get("LUT0_INITVAL", "0x0000")
+        try:
+            init = int(init_str, 16)
+        except (ValueError, TypeError):
+            continue
+
+        # Determine if buffer or inverter
+        # For a 1-input function on pin A0 (bit 0):
+        #   buffer: init bit 0 = 0, init bit 1 = 1 -> INIT & 0x3 == 0x2
+        #   inverter: init bit 0 = 1, init bit 1 = 0 -> INIT & 0x3 == 0x1
+        is_buffer = (init & 0x3) == 0x2
+        is_inverter = (init & 0x3) == 0x1
+
+        if not is_buffer and not is_inverter:
+            continue
+
+        # Find consumers of this LUT's output bit
+        consumers: list[tuple[str, str]] = []  # (cell_name, port_name)
+        for cname, ccell in netlist.cells.items():
+            if cname == name or cname in to_remove:
+                continue
+            for pname, pbits in ccell.ports.items():
+                if output_bit in pbits:
+                    consumers.append((cname, pname))
+
+        if len(consumers) != 1:
+            continue  # must have exactly 1 consumer to absorb safely
+
+        cons_name, cons_port = consumers[0]
+        cons_cell = netlist.cells[cons_name]
+
+        if is_buffer:
+            # Buffer: just replace the consumer's input with the original signal
+            cons_cell.ports[cons_port] = [
+                input_bit if b == output_bit else b
+                for b in cons_cell.ports[cons_port]
+            ]
+            to_remove.add(name)
+            absorbed += 1
+
+        # Inverter absorption requires modifying the consumer's truth table,
+        # which is more complex — skip for now to avoid correctness risk.
+
+    for name in to_remove:
+        del netlist.cells[name]
+
+    return absorbed
+
+
 def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     """Run all slice packing and simplification passes. Returns counts."""
     s1 = simplify_constant_luts(netlist)
     dd = deduplicate_luts(netlist)
+    ab = absorb_buffers(netlist)
     s2 = simplify_constant_luts(netlist)
     d = pack_dual_lut4(netlist)
     p = pack_pfumx(netlist)
@@ -363,6 +456,7 @@ def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     return {
         "const_lut_simplify": s1 + s2 + s3,
         "lut_dedup": dd,
+        "buffer_absorb": ab,
         "dual_lut4": d,
         "pfumx": p,
         "l6mux21": l,

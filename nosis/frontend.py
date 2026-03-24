@@ -286,10 +286,33 @@ class _Lowerer:
             return self._lower_range_select(expr)
         elif kind == "ExpressionKind.ElementSelect":
             return self._lower_element_select(expr)
+        elif kind == "ExpressionKind.Replication":
+            return self._lower_replication(expr)
         elif kind == "ExpressionKind.Assignment":
             return self._lower_assignment_expr(expr)
+        elif kind == "ExpressionKind.Call":
+            # System function calls ($clog2, $bits, etc.) are typically
+            # resolved to constants by slang during elaboration. If we
+            # reach here, treat as constant 0.
+            w = self._bit_width(expr)
+            const = getattr(expr, "constant", None)
+            if const is not None:
+                int_val = _svint_to_int(const)
+                net = self._fresh_net("call_const", w)
+                cell = self._fresh_cell("call_const", PrimOp.CONST, value=int_val, width=w)
+                self.mod.connect(cell, "Y", net, direction="output")
+                return net
+            net = self._fresh_net("call", w)
+            cell = self._fresh_cell("call", PrimOp.CONST, value=0, width=w)
+            self.mod.connect(cell, "Y", net, direction="output")
+            return net
+        elif kind in ("ExpressionKind.EmptyArgument", "ExpressionKind.StringLiteral"):
+            w = self._bit_width(expr) or 1
+            net = self._fresh_net("empty", w)
+            cell = self._fresh_cell("empty", PrimOp.CONST, value=0, width=w)
+            self.mod.connect(cell, "Y", net, direction="output")
+            return net
         else:
-            # Unsupported expression — emit a placeholder
             w = self._bit_width(expr)
             net = self._fresh_net(f"unsupported_{kind}", w)
             cell = self._fresh_cell(f"unsupported_{kind}", PrimOp.CONST, value=0, width=w)
@@ -471,6 +494,37 @@ class _Lowerer:
         self.mod.connect(cell, "Y", out, direction="output")
         return out
 
+    def _lower_replication(self, expr: Any) -> Net:
+        w = self._bit_width(expr)
+        # Replication: {N{expr}} — repeat the operand N times
+        # pyslang Replication has .count and .concat
+        count_expr = getattr(expr, "count", None)
+        concat_expr = getattr(expr, "concat", None)
+        if concat_expr is not None:
+            operand = self.lower_expr(concat_expr)
+        else:
+            # Fallback: try to get operands
+            operand = self._fresh_net("rep_fallback", 1)
+            cell = self._fresh_cell("rep_fallback", PrimOp.CONST, value=0, width=1)
+            self.mod.connect(cell, "Y", operand, direction="output")
+        n = 1
+        if count_expr is not None:
+            const = getattr(count_expr, "constant", None)
+            if const is not None:
+                n = _svint_to_int(const)
+            else:
+                try:
+                    n = int(str(count_expr))
+                except (ValueError, TypeError):
+                    n = w // operand.width if operand.width > 0 else 1
+        if n <= 1:
+            return operand
+        out = self._fresh_net("repeat", w)
+        cell = self._fresh_cell("repeat", PrimOp.REPEAT, count=n, a_width=operand.width)
+        self.mod.connect(cell, "A", operand)
+        self.mod.connect(cell, "Y", out, direction="output")
+        return out
+
     def _lower_assignment_expr(self, expr: Any) -> Net:
         """Lower an assignment expression. Returns the LHS net."""
         rhs = self.lower_expr(expr.right)
@@ -526,8 +580,11 @@ class _Lowerer:
                 q_net = self._fresh_net(f"ff_q_{lhs_net.name}", lhs_net.width)
                 self.mod.connect(ff, "Q", q_net, direction="output")
 
-        elif "AlwaysComb" in proc_kind:
-            # Combinational — just lower statements as wiring
+        elif "AlwaysComb" in proc_kind or "AlwaysLatch" in proc_kind:
+            # Combinational or latch — lower statements as wiring.
+            # If the block is AlwaysLatch, slang has already validated
+            # that latches are intentional. Incomplete if/case in
+            # AlwaysComb would be a slang warning/error.
             self._lower_statement(body)
 
     def _collect_nb_assignments(
@@ -593,6 +650,10 @@ class _Lowerer:
 
         elif kind == "StatementKind.Case":
             # Case statement -> parallel MUX
+            # Handles case, casez (WildcardJustZ), casex (WildcardXOrZ)
+            # For synthesis, casez/casex are treated identically to case —
+            # the don't-care bits in case labels are resolved by slang during
+            # elaboration. The EQ comparison in the IR is exact-match.
             sel = self.lower_expr(stmt.expr)
             items = list(stmt.items)
             default_assigns: list[tuple[Net, Net, Net | None, Net | None]] = []

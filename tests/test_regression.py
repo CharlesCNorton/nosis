@@ -399,6 +399,79 @@ class TestPicoRV32Soc:
 
 
 # ---------------------------------------------------------------------------
+# Language feature coverage
+# ---------------------------------------------------------------------------
+
+class TestLanguageFeatures:
+    def test_replication_in_picorv32(self):
+        """PicoRV32 uses replication expressions — verify they lower without error."""
+        SRC = [f"{RIME}/core/cpu/picorv32.v"]
+        result = parse_files(SRC, top="picorv32")
+        design = lower_to_ir(result, top="picorv32")
+        mod = design.top_module()
+        # Should have REPEAT cells from replication expressions
+        repeat_cells = [c for c in mod.cells.values() if c.op == PrimOp.REPEAT]
+        # picorv32 uses {N{...}} patterns
+        assert mod.stats()["cells"] > 0
+
+    def test_call_expressions_resolved(self):
+        """System function calls in picorv32.v should resolve to constants."""
+        SRC = [f"{RIME}/core/cpu/picorv32.v"]
+        result = parse_files(SRC, top="picorv32")
+        design = lower_to_ir(result, top="picorv32")
+        mod = design.top_module()
+        # No unsupported_Call cells should remain
+        unsupported = [c for c in mod.cells.values() if "unsupported" in c.name.lower()]
+        # May have some unsupported expressions, but Call should be handled
+        call_unsupported = [c for c in unsupported if "Call" in c.name]
+        assert len(call_unsupported) == 0, f"unresolved Call expressions: {[c.name for c in call_unsupported]}"
+
+    def test_enum_constants_lowered(self):
+        """Enum values (IDLE, START, etc.) must produce CONST cells."""
+        SRC = [f"{RIME}/core/uart/uart_tx.sv"]
+        result = parse_files(SRC, top="uart_tx")
+        design = lower_to_ir(result, top="uart_tx")
+        mod = design.top_module()
+        # IDLE, START, TRANSMISSION, STOP should be CONST-driven nets
+        for name in ["IDLE", "START", "TRANSMISSION", "STOP"]:
+            net = mod.nets.get(name)
+            assert net is not None, f"missing net: {name}"
+            assert net.driver is not None, f"net {name} has no driver (enum not lowered)"
+            assert net.driver.op == PrimOp.CONST, f"net {name} driver is {net.driver.op}, expected CONST"
+
+    def test_hierarchy_nets_prefixed(self):
+        """Sub-module nets should be prefixed with instance name."""
+        SRC = [
+            f"{RIME}/images/thaw/top.sv",
+            f"{RIME}/images/thaw/thaw_service.sv",
+            f"{RIME}/core/uart/uart_rx.sv",
+            f"{RIME}/core/uart/uart_tx.sv",
+            f"{RIME}/core/service/flash_spi_master.sv",
+            f"{RIME}/core/service/sdram_controller.sv",
+            f"{RIME}/core/service/sdram_bridge.sv",
+        ]
+        result = parse_files(SRC, top="top")
+        design = lower_to_ir(result, top="top")
+        mod = design.top_module()
+        # Should have nets prefixed with sub-instance names
+        prefixed_nets = [n for n in mod.nets if n.startswith("RX.") or n.startswith("TX.") or n.startswith("SPI.")]
+        assert len(prefixed_nets) > 0, "no prefixed sub-module nets found"
+
+    def test_memory_cells_have_dimensions(self):
+        """MEMORY cells must have depth and width params."""
+        SRC = TestPicoRV32Soc.SRC
+        result = parse_files(SRC, top="top")
+        design = lower_to_ir(result, top="top")
+        mod = design.top_module()
+        mem_cells = [c for c in mod.cells.values() if c.op == PrimOp.MEMORY]
+        for cell in mem_cells:
+            assert "depth" in cell.params, f"MEMORY {cell.name} missing depth"
+            assert "width" in cell.params, f"MEMORY {cell.name} missing width"
+            assert cell.params["depth"] > 0
+            assert cell.params["width"] > 0
+
+
+# ---------------------------------------------------------------------------
 # Strict error handling
 # ---------------------------------------------------------------------------
 

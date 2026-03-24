@@ -281,12 +281,13 @@ class _ECP5Mapper:
             ff = self.nl.add_cell(self._fresh_name("tff"), "TRELLIS_FF")
             if cell.src:
                 ff.attributes["src"] = cell.src
+            is_async = bool(cell.params.get("async_reset", False))
             ff.parameters["GSR"] = "DISABLED"
             ff.parameters["CEMUX"] = "1"
             ff.parameters["CLKMUX"] = "CLK"
             ff.parameters["LSRMUX"] = "LSR" if rst_net else "INV"
             ff.parameters["REGSET"] = "RESET"
-            ff.parameters["SRMODE"] = "LSR_OVER_CE"
+            ff.parameters["SRMODE"] = "ASYNC" if is_async else "LSR_OVER_CE"
             ff.ports["CLK"] = [clk_bits[0] if clk_bits else "0"]
             ff.ports["DI"] = [d_bits[i] if i < len(d_bits) else "0"]
             ff.ports["LSR"] = [rst_bits[0] if rst_bits else "0"]

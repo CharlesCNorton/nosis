@@ -68,9 +68,23 @@ def infer_brams(mod: Module) -> int:
         if depth <= 0 or width <= 0:
             continue
 
-        # Minimum threshold: don't waste a BRAM on tiny arrays
-        # that fit efficiently in distributed RAM (LUT-based)
         total_bits = depth * width
+
+        # Tiny arrays that fit in TRELLIS_DPR16X4 (distributed RAM):
+        # 16 entries, up to 4 bits wide per DPR cell.
+        if depth <= 16 and width <= 4 and total_bits >= 16:
+            cell.params["bram_config"] = "DPR16X4"
+            cell.params["bram_count"] = 1
+            tagged += 1
+            continue
+        if depth <= 16 and width > 4:
+            dpr_count = (width + 3) // 4
+            cell.params["bram_config"] = "DPR16X4_TILED"
+            cell.params["bram_count"] = dpr_count
+            tagged += 1
+            continue
+
+        # Below 256 bits: leave as LUT-based FFs
         if total_bits < 256:
             continue
 

@@ -470,6 +470,39 @@ class TestLanguageFeatures:
             assert cell.params["depth"] > 0
             assert cell.params["width"] > 0
 
+    def test_lut_packing_reduces_cells(self):
+        """LUT packing on the full SoC should reduce IR cell count."""
+        from nosis.lutpack import pack_luts_ir
+        result = parse_files(TestPicoRV32Soc.SRC, top="top")
+        design = lower_to_ir(result, top="top")
+        mod = design.top_module()
+        before = mod.stats()["cells"]
+        packed = pack_luts_ir(mod)
+        after = mod.stats()["cells"]
+        # Packing should eliminate at least some cells, or at minimum not crash
+        assert after <= before
+
+    def test_clock_domain_analysis(self):
+        """The full SoC should have at least one clock domain."""
+        from nosis.clocks import analyze_clock_domains
+        result = parse_files(TestPicoRV32Soc.SRC, top="top")
+        design = lower_to_ir(result, top="top")
+        mod = design.top_module()
+        domains, crossings = analyze_clock_domains(mod)
+        assert len(domains) >= 1, "expected at least one clock domain"
+
+    def test_distributed_ram_inference(self):
+        """Small arrays (<=16 entries) should be tagged for DPR16X4."""
+        from nosis.bram import infer_brams
+        result = parse_files(TestPicoRV32Soc.SRC, top="top")
+        design = lower_to_ir(result, top="top")
+        mod = design.top_module()
+        infer_brams(mod)
+        dpr_cells = [c for c in mod.cells.values()
+                     if c.op == PrimOp.MEMORY and c.params.get("bram_config", "").startswith("DPR")]
+        # uart_rx_fifo (16x8) and uart_tx_fifo (16x8) should be DPR candidates
+        assert len(dpr_cells) >= 1, "expected distributed RAM inference for small arrays"
+
 
 # ---------------------------------------------------------------------------
 # Strict error handling

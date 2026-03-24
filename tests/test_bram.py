@@ -42,9 +42,9 @@ def test_infer_tags_memory():
 
 def test_skip_tiny_array():
     mod = Module(name="test")
-    net = mod.add_net("mem_out", 4)
-    cell = mod.add_cell("mem0", PrimOp.MEMORY, depth=4, width=4)
+    net = mod.add_net("mem_out", 2)
+    cell = mod.add_cell("mem0", PrimOp.MEMORY, depth=2, width=2)
     mod.connect(cell, "RDATA", net, direction="output")
 
     tagged = infer_brams(mod)
-    assert tagged == 0  # 16 bits total, too small for BRAM
+    assert tagged == 0  # 4 bits total, too small for any RAM

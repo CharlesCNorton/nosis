@@ -83,6 +83,7 @@ class Net:
     name: str
     width: int
     driver: Cell | None = None
+    attributes: dict[str, str] = field(default_factory=dict)  # synthesis pragmas
 
     def __repr__(self) -> str:
         return f"Net({self.name!r}, w={self.width})"
@@ -97,6 +98,7 @@ class Cell:
     outputs: dict[str, Net] = field(default_factory=dict)
     params: dict[str, Any] = field(default_factory=dict)
     src: str = ""  # source location (file:line) for debug tracing
+    attributes: dict[str, str] = field(default_factory=dict)  # synthesis pragmas (* keep *) etc.
 
     def __repr__(self) -> str:
         return f"Cell({self.name!r}, {self.op.name})"

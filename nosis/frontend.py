@@ -548,12 +548,23 @@ class _Lowerer:
             # Extract clock edge from timing control
             clock_net: Net | None = None
             reset_net: Net | None = None
+            async_reset = False
             stmt = body
 
             if str(body.kind) == "StatementKind.Timed":
                 timing = body.timing
-                if str(timing.kind) == "TimingControlKind.SignalEvent":
+                timing_kind = str(timing.kind)
+                if timing_kind == "TimingControlKind.SignalEvent":
                     clock_net = self.lower_expr(timing.expr)
+                elif timing_kind == "TimingControlKind.EventList":
+                    # Multiple events: @(posedge clk or posedge rst)
+                    # First is clock, subsequent are async reset/set signals
+                    events = list(timing.events) if hasattr(timing, "events") else []
+                    if events:
+                        clock_net = self.lower_expr(events[0].expr)
+                        if len(events) > 1:
+                            reset_net = self.lower_expr(events[1].expr)
+                            async_reset = True
                 stmt = body.stmt
 
             # Collect all non-blocking assignments in this block
@@ -565,12 +576,17 @@ class _Lowerer:
                 deduped[lhs_net.name] = (lhs_net, rhs_net, rst_net, rst_val_net)
 
             for lhs_net, rhs_net, rst_net, rst_val_net in deduped.values():
-                ff = self._fresh_cell(f"ff_{lhs_net.name}", PrimOp.FF, ff_target=lhs_net.name)
+                ff_rst = rst_net if not async_reset else reset_net
+                ff = self._fresh_cell(
+                    f"ff_{lhs_net.name}", PrimOp.FF,
+                    ff_target=lhs_net.name,
+                    async_reset=async_reset,
+                )
                 self.mod.connect(ff, "D", rhs_net)
                 if clock_net:
                     self.mod.connect(ff, "CLK", clock_net)
-                if rst_net:
-                    self.mod.connect(ff, "RST", rst_net)
+                if ff_rst:
+                    self.mod.connect(ff, "RST", ff_rst)
                 if rst_val_net:
                     self.mod.connect(ff, "RST_VAL", rst_val_net)
                 # Use a fresh output net to avoid driver conflicts from

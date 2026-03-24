@@ -131,13 +131,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"infer: bram={n_bram} dsp={n_dsp} carry={n_carry} fsm={n_fsm} ({len(fsms)} FSMs)")
         print(f"infer: {t_infer - t_opt:.3f}s")
 
+    # --- LUT packing (IR level) ---
+    if not args.no_opt:
+        from nosis.lutpack import pack_luts_ir
+        n_packed = pack_luts_ir(mod)
+        t_pack = time.monotonic()
+        if args.verbose:
+            print(f"pack: merged {n_packed} LUT pairs")
+            print(f"pack: {t_pack - t_infer:.3f}s")
+    else:
+        t_pack = time.monotonic()
+
     # --- Technology map ---
     from nosis.techmap import map_to_ecp5
     netlist = map_to_ecp5(design)
     t_map = time.monotonic()
     if args.verbose:
         print(f"map: {netlist.stats()}")
-        print(f"map: {t_map - t_opt:.3f}s")
+        print(f"map: {t_map - t_pack:.3f}s")
 
     # --- Emit JSON ---
     from nosis.json_backend import emit_json, emit_json_str

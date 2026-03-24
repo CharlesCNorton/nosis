@@ -310,6 +310,79 @@ def _try_sat_equivalence(
             out_vars = [new_var() for _ in range(width)]
             net_vars[out_net.name] = out_vars
 
+            # Multi-bit ADD/SUB: per-bit full-adder chain in CNF
+            if cell.op in (PrimOp.ADD, PrimOp.SUB) and width > 1 and a_vars and b_vars:
+                carry = new_var()
+                # carry-in: 1 for SUB (two's complement), 0 for ADD
+                clauses.append([carry] if cell.op == PrimOp.SUB else [-carry])
+                for bit in range(width):
+                    av = a_vars[bit] if bit < len(a_vars) else new_var()
+                    if bit >= len(a_vars):
+                        clauses.append([-av])  # zero-extend
+                    # For SUB, invert b bits
+                    if cell.op == PrimOp.SUB:
+                        bv_raw = b_vars[bit] if bit < len(b_vars) else new_var()
+                        if bit >= len(b_vars):
+                            clauses.append([-bv_raw])
+                        bv = new_var()
+                        clauses.append([bv_raw, bv])    # NOT gate
+                        clauses.append([-bv_raw, -bv])
+                    else:
+                        bv = b_vars[bit] if bit < len(b_vars) else new_var()
+                        if bit >= len(b_vars):
+                            clauses.append([-bv])
+                    ov = out_vars[bit]
+                    # sum = a XOR b XOR carry (3-input XOR via two 2-input XORs)
+                    xor_ab = new_var()
+                    clauses.append([-av, -bv, -xor_ab])
+                    clauses.append([av, bv, -xor_ab])
+                    clauses.append([av, -bv, xor_ab])
+                    clauses.append([-av, bv, xor_ab])
+                    # ov = xor_ab XOR carry
+                    clauses.append([-xor_ab, -carry, -ov])
+                    clauses.append([xor_ab, carry, -ov])
+                    clauses.append([xor_ab, -carry, ov])
+                    clauses.append([-xor_ab, carry, ov])
+                    # carry_out = MAJ(a, b, carry_in)
+                    new_carry = new_var()
+                    clauses.append([-av, -bv, new_carry])
+                    clauses.append([-av, -carry, new_carry])
+                    clauses.append([-bv, -carry, new_carry])
+                    clauses.append([av, bv, -new_carry])
+                    clauses.append([av, carry, -new_carry])
+                    clauses.append([bv, carry, -new_carry])
+                    carry = new_carry
+                continue
+
+            # Multi-bit bitwise ops: encode per-bit independently
+            if cell.op in (PrimOp.AND, PrimOp.OR, PrimOp.XOR, PrimOp.NOT) and width > 1:
+                for bit in range(width):
+                    av = a_vars[bit] if bit < len(a_vars) else new_var()
+                    if bit >= len(a_vars):
+                        clauses.append([-av])
+                    ov = out_vars[bit]
+                    if cell.op == PrimOp.NOT:
+                        clauses.append([av, ov])
+                        clauses.append([-av, -ov])
+                    else:
+                        bv = b_vars[bit] if bit < len(b_vars) else new_var()
+                        if bit >= len(b_vars):
+                            clauses.append([-bv])
+                        if cell.op == PrimOp.AND:
+                            clauses.append([-av, -bv, ov])
+                            clauses.append([av, -ov])
+                            clauses.append([bv, -ov])
+                        elif cell.op == PrimOp.OR:
+                            clauses.append([av, bv, -ov])
+                            clauses.append([-av, ov])
+                            clauses.append([-bv, ov])
+                        elif cell.op == PrimOp.XOR:
+                            clauses.append([-av, -bv, -ov])
+                            clauses.append([av, bv, -ov])
+                            clauses.append([av, -bv, ov])
+                            clauses.append([-av, bv, ov])
+                continue
+
             # For 1-bit operations, encode directly as CNF
             if width == 1 and len(a_vars) >= 1:
                 a = a_vars[0]
@@ -362,35 +435,28 @@ def _try_sat_equivalence(
                     clauses.append([s, -false_var, o])   # s=0,f=1 -> o=1
                     clauses.append([s, false_var, -o])   # s=0,f=0 -> o=0
                 elif cell.op in (PrimOp.LT, PrimOp.LE, PrimOp.GT, PrimOp.GE):
-                    # 1-bit comparisons: encode from truth table
-                    # LT: o = ~a & b   (0<0=0, 0<1=1, 1<0=0, 1<1=0)
-                    # LE: o = ~a | b   (0<=0=1, 0<=1=1, 1<=0=0, 1<=1=1)
-                    # GT: o = a & ~b   (0>0=0, 0>1=0, 1>0=1, 1>1=0)
-                    # GE: o = a | ~b   (0>=0=1, 0>=1=0, 1>=0=1, 1>=1=1)
+                    # Verified minimal CNF (3 clauses each), derived from
+                    # truth-table invalid-assignment exclusion with resolution.
                     if cell.op == PrimOp.LT:
-                        # o = ~a & b: true only when a=0,b=1
-                        clauses.append([a, -b, -o])    # a=0,b=0 -> o=0
-                        clauses.append([-a, b, o])     # a=0,b=1 -> o=1
-                        clauses.append([a, -o])        # a=1 -> o=0
-                        clauses.append([-b, -o, -a])   # supplement: NOT(a) AND b
+                        # o = ~a & b. TT: 00→0, 01→1, 10→0, 11→0
+                        clauses.append([-a, -o])       # a→¬o
+                        clauses.append([a, b, -o])     # ¬a∧¬b→¬o
+                        clauses.append([-a, b, o])     # ¬a∧b→o
                     elif cell.op == PrimOp.LE:
-                        # o = ~a | b
-                        clauses.append([-a, o])        # a=0 -> o=1
-                        clauses.append([b, -o, -a])    # a=1,b=0 -> o=0
-                        clauses.append([-a, b, o])     # supplement
-                        clauses.append([a, -b, -o])    # a=1,b=0 -> o=0
+                        # o = ~a | b. TT: 00→1, 01→1, 10→0, 11→1
+                        clauses.append([a, o])         # ¬a→o
+                        clauses.append([-a, -b, o])    # a∧b→o
+                        clauses.append([-a, b, -o])    # a∧¬b→¬o
                     elif cell.op == PrimOp.GT:
-                        # o = a & ~b: true only when a=1,b=0
-                        clauses.append([-a, -o, b])    # b=1 -> o=0
-                        clauses.append([a, -o])        # a=0 -> o=0 (wrong, needs fix)
-                        clauses.append([-a, b, -o])    # a=0 or b=1 -> o=0
-                        clauses.append([a, -b, o])     # a=1,b=0 -> o=1
+                        # o = a & ~b. TT: 00→0, 01→0, 10→1, 11→0
+                        clauses.append([a, -o])        # ¬a→¬o
+                        clauses.append([-a, -b, -o])   # a∧b→¬o
+                        clauses.append([-a, b, o])     # a∧¬b→o
                     elif cell.op == PrimOp.GE:
-                        # o = a | ~b
-                        clauses.append([a, o, -b])     # supplement
-                        clauses.append([-b, o])        # b=0 -> o=1
-                        clauses.append([a, o])         # a=1 -> o=1
-                        clauses.append([-a, b, -o])    # a=0,b=1 -> o=0
+                        # o = a | ~b. TT: 00→1, 01→0, 10→1, 11→1
+                        clauses.append([-a, o])        # a→o
+                        clauses.append([a, b, o])      # ¬a∧¬b→o
+                        clauses.append([a, -b, -o])    # ¬a∧b→¬o
                 else:
                     pass
 

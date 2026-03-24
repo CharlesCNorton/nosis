@@ -194,3 +194,88 @@ def test_xor_self_equivalent():
 
     r = check_equivalence_exhaustive(mod_xor, mod_zero)
     assert r.equivalent
+
+
+# --- Multi-bit SAT encoding ---
+
+def _multibit_add_module(name: str, width: int) -> Module:
+    """Build an N-bit adder: y = a + b."""
+    mod = Module(name=name)
+    a = mod.add_net("a", width)
+    b = mod.add_net("b", width)
+    y = mod.add_net("y", width)
+    ac = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
+    mod.connect(ac, "Y", a, direction="output")
+    mod.ports["a"] = a
+    bc = mod.add_cell("b_p", PrimOp.INPUT, port_name="b")
+    mod.connect(bc, "Y", b, direction="output")
+    mod.ports["b"] = b
+    yc = mod.add_cell("y_p", PrimOp.OUTPUT, port_name="y")
+    mod.connect(yc, "A", y)
+    mod.ports["y"] = y
+    gc = mod.add_cell("add0", PrimOp.ADD)
+    mod.connect(gc, "A", a)
+    mod.connect(gc, "B", b)
+    mod.connect(gc, "Y", y, direction="output")
+    return mod
+
+
+def test_multibit_add_equivalent():
+    """Two identical 4-bit adders must be SAT-equivalent."""
+    a = _multibit_add_module("a", 4)
+    b = _multibit_add_module("b", 4)
+    r = check_equivalence(a, b, max_exhaustive_bits=0)  # force SAT path
+    assert r.equivalent
+
+
+def test_multibit_add_vs_sub_not_equivalent():
+    """A 4-bit adder and subtractor must NOT be equivalent."""
+    mod_add = _multibit_add_module("add", 4)
+
+    mod_sub = Module(name="sub")
+    a = mod_sub.add_net("a", 4)
+    b = mod_sub.add_net("b", 4)
+    y = mod_sub.add_net("y", 4)
+    ac = mod_sub.add_cell("a_p", PrimOp.INPUT, port_name="a")
+    mod_sub.connect(ac, "Y", a, direction="output")
+    mod_sub.ports["a"] = a
+    bc = mod_sub.add_cell("b_p", PrimOp.INPUT, port_name="b")
+    mod_sub.connect(bc, "Y", b, direction="output")
+    mod_sub.ports["b"] = b
+    yc = mod_sub.add_cell("y_p", PrimOp.OUTPUT, port_name="y")
+    mod_sub.connect(yc, "A", y)
+    mod_sub.ports["y"] = y
+    gc = mod_sub.add_cell("sub0", PrimOp.SUB)
+    mod_sub.connect(gc, "A", a)
+    mod_sub.connect(gc, "B", b)
+    mod_sub.connect(gc, "Y", y, direction="output")
+
+    r = check_equivalence(mod_add, mod_sub, max_exhaustive_bits=0)
+    assert not r.equivalent
+
+
+def test_multibit_and_equivalent():
+    """Two identical 8-bit AND gates must be equivalent via SAT."""
+    def _and_mod(name):
+        mod = Module(name=name)
+        a = mod.add_net("a", 8)
+        b = mod.add_net("b", 8)
+        y = mod.add_net("y", 8)
+        ac = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
+        mod.connect(ac, "Y", a, direction="output")
+        mod.ports["a"] = a
+        bc = mod.add_cell("b_p", PrimOp.INPUT, port_name="b")
+        mod.connect(bc, "Y", b, direction="output")
+        mod.ports["b"] = b
+        yc = mod.add_cell("y_p", PrimOp.OUTPUT, port_name="y")
+        mod.connect(yc, "A", y)
+        mod.ports["y"] = y
+        gc = mod.add_cell("and0", PrimOp.AND)
+        mod.connect(gc, "A", a)
+        mod.connect(gc, "B", b)
+        mod.connect(gc, "Y", y, direction="output")
+        return mod
+    a = _and_mod("a")
+    b = _and_mod("b")
+    r = check_equivalence(a, b, max_exhaustive_bits=0)
+    assert r.equivalent

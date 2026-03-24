@@ -88,10 +88,22 @@ def parse_lpf(path: str | Path) -> LpfConstraints:
     constraints = LpfConstraints()
     constraints.raw_lines = len(text.splitlines())
 
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or line.startswith("//"):
+    # Join multi-line statements: lines not ending with ';' are continuations
+    raw_lines = text.splitlines()
+    joined_lines: list[str] = []
+    current = ""
+    for raw_line in raw_lines:
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("//"):
             continue
+        current += " " + stripped if current else stripped
+        if stripped.endswith(";") or not any(c.isalpha() for c in stripped):
+            joined_lines.append(current)
+            current = ""
+    if current:
+        joined_lines.append(current)
+
+    for line in joined_lines:
 
         upper = line.upper()
 

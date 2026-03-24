@@ -158,13 +158,32 @@ def estimate_toggle_rates(
     toggle_counts: dict[str, int] = {}
     total_cycles = 0
 
+    # Carry FF state between simulation vectors for sequential designs.
+    ff_state: dict[str, int] = {}
+    for cell in mod.cells.values():
+        if cell.op == PrimOp.FF:
+            for out_net in cell.outputs.values():
+                ff_state[out_net.name] = 0
+
     for _ in range(num_vectors):
         inputs: dict[str, int] = {}
         for name, width in input_ports.items():
             inputs[name] = rng.getrandbits(width)
 
-        vals = _simulate_combinational(mod, inputs)
+        # Inject FF state into simulation
+        sim_inputs = dict(inputs)
+        sim_inputs.update(ff_state)
+
+        vals = _simulate_combinational(mod, sim_inputs)
         total_cycles += 1
+
+        # Update FF state: Q_next = current D value
+        for cell in mod.cells.values():
+            if cell.op == PrimOp.FF:
+                d_net = cell.inputs.get("D")
+                if d_net and d_net.name in vals:
+                    for out_net in cell.outputs.values():
+                        ff_state[out_net.name] = vals[d_net.name]
 
         for net_name, val in vals.items():
             if net_name in prev_vals and prev_vals[net_name] != val:

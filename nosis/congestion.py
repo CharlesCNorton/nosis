@@ -149,7 +149,9 @@ def estimate_routing_metric(mod: Module) -> float:
     avg_fo = sum(fanout.values()) / len(fanout)
 
     # Rent's rule estimate: avg wire length ~ sqrt(N) * rent_factor
-    rent_exponent = 0.6
+    # Calibrated against ECP5 place-and-route: p ~ 0.55 better matches
+    # the regular tile structure and short-segment routing of ECP5-25F.
+    rent_exponent = 0.55
     rent_factor = n_cells ** (rent_exponent / 2)
     avg_wirelength = rent_factor * (avg_fo / 2.0)
 

@@ -21,10 +21,12 @@ from nosis.ir import Module, PrimOp
 __all__ = [
     "IRSnapshot",
     "IRDelta",
+    "CellMappingCache",
     "snapshot_module",
     "compute_delta",
     "save_snapshot",
     "load_snapshot",
+    "build_cell_mapping_cache",
     "incremental_remap",
 ]
 
@@ -195,6 +197,43 @@ def save_ir(mod: "Module", path: str | Path) -> None:
 def load_ir_data(path: str | Path) -> dict:
     """Load a serialized Module IR from JSON."""
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+class CellMappingCache:
+    """Cell-level mapping cache: IR cell hash -> list of ECP5 cell names."""
+
+    def __init__(self) -> None:
+        self._entries: dict[str, list[str]] = {}
+
+    def store(self, ir_hash: str, ecp5_names: list[str]) -> None:
+        self._entries[ir_hash] = list(ecp5_names)
+
+    def lookup(self, ir_hash: str) -> list[str] | None:
+        return self._entries.get(ir_hash)
+
+    def remove(self, ir_hash: str) -> None:
+        self._entries.pop(ir_hash, None)
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+
+def build_cell_mapping_cache(
+    snapshot: IRSnapshot,
+    netlist: "ECP5Netlist",
+) -> CellMappingCache:
+    """Build a cache mapping IR cell hashes to their ECP5 cell names."""
+    cache = CellMappingCache()
+    ecp5_names = list(netlist.cells.keys())
+    for ir_name, ir_hash in snapshot.cell_hashes.items():
+        matched = [n for n in ecp5_names if ir_name in n]
+        if not matched:
+            matched = [ir_name]
+        cache.store(ir_hash, matched)
+    return cache
 
 
 def incremental_remap(

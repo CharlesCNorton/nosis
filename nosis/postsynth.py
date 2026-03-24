@@ -74,6 +74,67 @@ module CCU2C_SIM #(
     assign S1 = lut1 ^ carry0;
     assign COUT = carry1;
 endmodule
+
+module DP16KD_SIM #(
+    parameter DATA_WIDTH_A = 18,
+    parameter DATA_WIDTH_B = 18,
+    parameter REGMODE_A    = "NOREG",
+    parameter REGMODE_B    = "NOREG",
+    parameter WRITEMODE_A  = "NORMAL",
+    parameter WRITEMODE_B  = "NORMAL"
+) (
+    input [13:0] ADA, ADB,
+    input [17:0] DIA, DIB,
+    output reg [17:0] DOA, DOB,
+    input CLKA, CLKB,
+    input WEA, WEB,
+    input CEA, CEB,
+    input OCEA, OCEB,
+    input RSTA, RSTB,
+    input CSA0, CSA1, CSA2,
+    input CSB0, CSB1, CSB2
+);
+    reg [17:0] mem [0:1023];
+    integer i;
+    initial begin
+        for (i = 0; i < 1024; i = i + 1)
+            mem[i] = 18'b0;
+        DOA = 0;
+        DOB = 0;
+    end
+    always @(posedge CLKA) begin
+        if (CEA) begin
+            if (WEA)
+                mem[ADA[13:4]] <= DIA;
+            DOA <= mem[ADA[13:4]];
+        end
+        if (RSTA) DOA <= 0;
+    end
+    always @(posedge CLKB) begin
+        if (CEB) begin
+            if (WEB)
+                mem[ADB[13:4]] <= DIB;
+            DOB <= mem[ADB[13:4]];
+        end
+        if (RSTB) DOB <= 0;
+    end
+endmodule
+
+module MULT18X18D_SIM #(
+    parameter REG_INPUTA_CLK = "NONE",
+    parameter REG_INPUTB_CLK = "NONE",
+    parameter REG_OUTPUT_CLK = "NONE"
+) (
+    input signed [17:0] A, B,
+    input CLK0, CLK1, CLK2, CLK3,
+    input CE0, CE1, CE2, CE3,
+    input RST0, RST1, RST2, RST3,
+    input SIGNEDA, SIGNEDB,
+    output [35:0] P
+);
+    wire signed [35:0] product = A * B;
+    assign P = product;
+endmodule
 """
 
 

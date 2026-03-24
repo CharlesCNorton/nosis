@@ -61,11 +61,30 @@ def estimate_routing(mod: Module, logic_delay_ns: float = 0.0) -> RoutingEstimat
     base_delay = 0.3  # ns per hop
     scale = min(sqrt_cells / 50.0, 2.0)  # larger designs have longer wires
 
+    # Identify nets that use dedicated routing resources (lower delay)
+    clock_nets: set[str] = set()
+    carry_nets: set[str] = set()
+    for cell in mod.cells.values():
+        if cell.op == PrimOp.FF:
+            clk = cell.inputs.get("CLK")
+            if clk:
+                clock_nets.add(clk.name)
+        if cell.params.get("carry_config"):
+            for net in cell.outputs.values():
+                carry_nets.add(net.name)
+
     delays: list[float] = []
     for net_name, fo in fanout.items():
-        net_delay = base_delay * math.sqrt(fo) * scale
-        if fo > 16:
-            net_delay += 0.5  # global routing overhead
+        if net_name in clock_nets:
+            # Dedicated clock routing — much lower delay than general routing
+            net_delay = 0.05 * math.sqrt(fo)
+        elif net_name in carry_nets:
+            # Carry chain routing — dedicated column, very short
+            net_delay = 0.02
+        else:
+            net_delay = base_delay * math.sqrt(fo) * scale
+            if fo > 16:
+                net_delay += 0.5  # global routing overhead
         delays.append(net_delay)
 
     avg_delay = sum(delays) / len(delays) if delays else 0.0

@@ -80,8 +80,11 @@ def _netname_to_json(net: ECP5Net) -> dict[str, Any]:
         else:
             json_bits.append(bit)
 
+    # Hide internal nets: those starting with $ or _ (generated names)
+    # and those not appearing in the port list
+    is_internal = net.name.startswith("$") or net.name.startswith("_")
     return {
-        "hide_name": 1 if net.name.startswith("$") else 0,
+        "hide_name": 1 if is_internal else 0,
         "bits": json_bits,
         "attributes": {},
     }

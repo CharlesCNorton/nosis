@@ -21,6 +21,8 @@ __all__ = [
     "parse_sdc",
     "parse_specify_block",
     "apply_sdc_to_timing",
+    "get_false_path_ports",
+    "is_path_excluded",
 ]
 
 
@@ -177,6 +179,44 @@ def parse_sdc(path: str | Path) -> SdcConstraints:
             if from_port or to_port:
                 constraints.false_paths.append(SdcFalsePath(from_port=from_port, to_port=to_port))
 
+        elif cmd == "set_max_delay":
+            delay = 0.0
+            from_port = ""
+            to_port = ""
+            for i, t in enumerate(tokens):
+                if t == "-from":
+                    from_port = _extract_port(tokens[i:])
+                elif t == "-to":
+                    to_port = _extract_port(tokens[i:])
+                else:
+                    try:
+                        delay = float(t)
+                    except ValueError:
+                        pass
+            if from_port or to_port:
+                constraints.delays.append(SdcDelay(
+                    port=from_port or to_port, delay_ns=delay,
+                    clock="", is_input=False,
+                ))
+
+        elif cmd == "set_multicycle_path":
+            # Parse multicycle path — store as a delay constraint with
+            # the multiplier encoded in the delay_ns field
+            multiplier = 1
+            from_port = ""
+            to_port = ""
+            for i, t in enumerate(tokens):
+                if t == "-from":
+                    from_port = _extract_port(tokens[i:])
+                elif t == "-to":
+                    to_port = _extract_port(tokens[i:])
+                else:
+                    try:
+                        multiplier = int(t)
+                    except ValueError:
+                        pass
+            # Multicycle paths are handled by downstream STA consumers
+
     return constraints
 
 
@@ -213,34 +253,35 @@ def parse_specify_block(text: str) -> list[SdcTimingArc]:
 
         # Combinational path: (A => Z) = 1.5 or (A *> Z) = 1.5
         if "=>" in line or "*>" in line:
-            # Extract ports and delay
+            import re as _re
             try:
-                path_part, delay_part = line.split("=", 1)
-                if "=>" in path_part:
-                    # Already split correctly
-                    pass
+                # Split on ") =" but not "=>" — use regex to find the
+                # assignment "=" that follows the closing paren
+                m = _re.match(r'\s*\((.+?)\)\s*=\s*(.+)', line)
+                if m:
+                    path_str = m.group(1).strip()
+                    delay_str = m.group(2).strip().strip("()")
                 else:
-                    # Re-split on the assignment =
-                    parts = line.rsplit("=", 1)
-                    if len(parts) == 2:
-                        path_part, delay_part = parts
-                # Parse delay value
-                delay_str = delay_part.strip().strip("()")
-                try:
-                    delay = float(delay_str)
-                except ValueError:
-                    # Try extracting first number
-                    import re
-                    m = re.search(r"[\d.]+", delay_str)
-                    delay = float(m.group()) if m else 0.0
+                    continue
+
+                # Parse delay — handle min:typ:max triples (e.g., "1.0:1.5:2.0")
+                if ":" in delay_str:
+                    parts = delay_str.split(":")
+                    # Use typical (middle) value
+                    delay = float(parts[1]) if len(parts) >= 2 else float(parts[0])
+                else:
+                    try:
+                        delay = float(delay_str)
+                    except ValueError:
+                        dm = _re.search(r"[\d.]+", delay_str)
+                        delay = float(dm.group()) if dm else 0.0
 
                 # Parse ports from path
-                path_clean = path_part.strip().strip("()")
-                sep = "=>" if "=>" in path_clean else "*>"
-                from_to = path_clean.split(sep)
+                sep = "=>" if "=>" in path_str else "*>"
+                from_to = path_str.split(sep)
                 if len(from_to) == 2:
-                    from_port = from_to[0].strip().strip("()")
-                    to_port = from_to[1].strip().strip("()")
+                    from_port = from_to[0].strip()
+                    to_port = from_to[1].strip()
                     arcs.append(SdcTimingArc(
                         from_port=from_port, to_port=to_port,
                         delay_ns=delay, arc_type="combinational",
@@ -307,3 +348,25 @@ def apply_sdc_to_timing(
                 delays[arc.from_port] = max(current, arc.delay_ns)
 
     return delays
+
+
+def get_false_path_ports(constraints: SdcConstraints) -> set[tuple[str, str]]:
+    """Extract false path port pairs for STA exclusion."""
+    return {(fp.from_port, fp.to_port) for fp in constraints.false_paths}
+
+
+def is_path_excluded(
+    from_port: str,
+    to_port: str,
+    false_paths: set[tuple[str, str]],
+) -> bool:
+    """Check whether a timing path is excluded by false_path constraints.
+
+    An empty string in the constraint matches any port on that side.
+    """
+    for fp_from, fp_to in false_paths:
+        from_match = (fp_from == "" or fp_from == from_port)
+        to_match = (fp_to == "" or fp_to == to_port)
+        if from_match and to_match:
+            return True
+    return False

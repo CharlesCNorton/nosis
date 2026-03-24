@@ -428,6 +428,71 @@ def merge_mux_chains(mod: Module) -> int:
     return eliminated
 
 
+def _simplify_mux_with_zero(mod: Module) -> int:
+    """Replace MUX(sel, A, 0) with AND(NOT(sel), A) and MUX(sel, 0, B) with AND(sel, B).
+
+    These substitutions reduce the LUT input count from 3 to 2 per bit,
+    improving dual-LUT packing efficiency. A 2-input AND can share a
+    slice with another 2-input operation, where a 3-input MUX cannot.
+
+    Returns the number of MUX cells replaced.
+    """
+    replaced = 0
+    _cell_counter = [max((int(n.split("_")[-1]) for n in mod.cells if n.startswith("$")), default=0) + 1]
+
+    def _fresh(prefix: str) -> str:
+        name = f"${prefix}_{_cell_counter[0]}"
+        _cell_counter[0] += 1
+        return name
+
+    to_remove: list[str] = []
+
+    for cell in list(mod.cells.values()):
+        if cell.op != PrimOp.MUX:
+            continue
+        a_net = cell.inputs.get("A")
+        b_net = cell.inputs.get("B")
+        s_net = cell.inputs.get("S")
+        if not a_net or not b_net or not s_net:
+            continue
+
+        out_nets = list(cell.outputs.values())
+        if not out_nets:
+            continue
+        out_net = out_nets[0]
+
+        b_is_zero = (b_net.driver and b_net.driver.op == PrimOp.CONST
+                     and int(b_net.driver.params.get("value", -1)) == 0)
+        a_is_zero = (a_net.driver and a_net.driver.op == PrimOp.CONST
+                     and int(a_net.driver.params.get("value", -1)) == 0)
+
+        if b_is_zero:
+            # MUX(sel, A, 0) = ~sel & A per bit
+            # Create NOT(sel) then AND(NOT_sel, A)
+            not_name = _fresh("mux_not")
+            not_out = mod.add_net(f"{not_name}_o", s_net.width)
+            not_cell = mod.add_cell(not_name, PrimOp.NOT)
+            mod.connect(not_cell, "A", s_net)
+            mod.connect(not_cell, "Y", not_out, direction="output")
+
+            # Rewrite the MUX cell as AND
+            cell.op = PrimOp.AND
+            cell.inputs.clear()
+            cell.inputs["A"] = not_out
+            cell.inputs["B"] = a_net
+            replaced += 1
+
+        elif a_is_zero:
+            # MUX(sel, 0, B) = sel & B per bit
+            cell.op = PrimOp.AND
+            cell.inputs.clear()
+            cell.inputs["A"] = s_net
+            cell.inputs["B"] = b_net
+            replaced += 1
+
+    return replaced
+
+
 def _narrow_const_mux(mod: Module) -> int:
     """Reduce MUX width when one input has constant bits matching the other.
 
@@ -474,6 +539,7 @@ def run_default_passes(mod: Module) -> dict[str, int]:
     stats["dce_2"] = dead_code_eliminate(mod)
 
     # Third pass: narrow MUX width (defined below) when both inputs share constant bits
+    stats["mux_to_and"] = _simplify_mux_with_zero(mod)
     stats["mux_narrow"] = _narrow_const_mux(mod)
     stats["dce_3"] = dead_code_eliminate(mod)
 

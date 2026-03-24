@@ -168,6 +168,53 @@ def test_simplify_constant_lut_partial():
     assert new_init != 0x8888
 
 
+def test_dual_lut4_no_repack_already_packed():
+    """A slice that already has LUT1 populated must not be packed again."""
+    nl = ECP5Netlist(top="test")
+    c1 = nl.add_cell("lut0", "TRELLIS_SLICE")
+    c1.parameters["LUT0_INITVAL"] = "0x8888"
+    c1.parameters["LUT1_INITVAL"] = "0x6666"  # already dual-packed
+    c1.parameters["MODE"] = "LOGIC"
+    c1.ports["A0"] = [2]
+    c1.ports["B0"] = [3]
+    c1.ports["F0"] = [10]
+    c1.ports["A1"] = [4]
+    c1.ports["B1"] = [5]
+    c1.ports["F1"] = [11]
+
+    c2 = nl.add_cell("lut1", "TRELLIS_SLICE")
+    c2.parameters["LUT0_INITVAL"] = "0xEEEE"
+    c2.parameters["MODE"] = "LOGIC"
+    c2.ports["A0"] = [6]
+    c2.ports["B0"] = [7]
+    c2.ports["F0"] = [12]
+
+    packed = pack_dual_lut4(nl)
+    # c1 already has LUT1 — must not absorb c2
+    assert packed == 0
+    assert len(nl.cells) == 2
+
+
+def test_dual_lut4_idempotent():
+    """Running pack_dual_lut4 twice must produce the same result as once."""
+    nl = ECP5Netlist(top="test")
+    for i in range(6):
+        c = nl.add_cell(f"lut{i}", "TRELLIS_SLICE")
+        c.parameters["LUT0_INITVAL"] = f"0x{(0x8888 + i):04X}"
+        c.parameters["MODE"] = "LOGIC"
+        c.ports["A0"] = [nl.alloc_bit()]
+        c.ports["B0"] = [nl.alloc_bit()]
+        c.ports["C0"] = ["0"]
+        c.ports["D0"] = ["0"]
+        c.ports["F0"] = [nl.alloc_bit()]
+
+    pack_dual_lut4(nl)
+    count_after_first = len(nl.cells)
+    pack_dual_lut4(nl)
+    count_after_second = len(nl.cells)
+    assert count_after_second == count_after_first
+
+
 def test_simplify_constant_lut_no_constants():
     """A LUT4 with no constant inputs should not be modified."""
     nl = ECP5Netlist(top="test")

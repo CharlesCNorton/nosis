@@ -187,10 +187,15 @@ def pack_dual_lut4(netlist: ECP5Netlist) -> int:
                 continue
 
             # Both cells must be simple LUT4 (MODE=LOGIC, no carry, no FF)
+            # and cell_a must not already have LUT1 populated
             if cell_a.parameters.get("MODE") != "LOGIC":
                 break
+            if "LUT1_INITVAL" in cell_a.parameters:
+                break  # already dual-packed
             if cell_b.parameters.get("MODE") != "LOGIC":
                 continue
+            if "LUT1_INITVAL" in cell_b.parameters:
+                continue  # already dual-packed
 
             # Pack cell_b's LUT into cell_a's LUT1 slot
             # cell_a keeps LUT0, cell_b becomes LUT1

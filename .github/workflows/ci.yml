@@ -61,4 +61,8 @@ jobs:
             tests/test_cone.py \
             tests/test_postsynth.py \
             tests/test_nextpnr.py \
+            tests/test_testvec.py \
+            tests/test_wirelength.py \
+            tests/test_sdc.py \
+            tests/test_warnings.py \
             -v

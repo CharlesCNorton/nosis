@@ -39,7 +39,7 @@ values_32 = st.integers(min_value=0, max_value=0xFFFFFFFF)
     b=values_32,
     width=widths,
 )
-@settings(max_examples=500)
+@settings(max_examples=1000)
 def test_binary_eval_deterministic(op, a, b, width):
     """Evaluating the same op with the same inputs must always produce the same result."""
     mask = (1 << width) - 1
@@ -56,7 +56,7 @@ def test_binary_eval_deterministic(op, a, b, width):
     b=values_32,
     width=widths,
 )
-@settings(max_examples=500)
+@settings(max_examples=1000)
 def test_binary_eval_within_width(op, a, b, width):
     """Every evaluation result must fit within the specified width."""
     mask = (1 << width) - 1
@@ -70,7 +70,7 @@ def test_binary_eval_within_width(op, a, b, width):
     a=values_32,
     width=widths,
 )
-@settings(max_examples=200)
+@settings(max_examples=1000)
 def test_unary_eval_within_width(op, a, width):
     """Unary evaluation results must fit within width."""
     mask = (1 << width) - 1
@@ -80,7 +80,7 @@ def test_unary_eval_within_width(op, a, width):
 
 
 @given(a=values_8, b=values_8)
-@settings(max_examples=200)
+@settings(max_examples=1000)
 def test_add_sub_inverse(a, b):
     """(a + b) - b == a for 8-bit values."""
     add_result = eval_const_op(PrimOp.ADD, {"A": a, "B": b}, {}, 8)
@@ -89,7 +89,7 @@ def test_add_sub_inverse(a, b):
 
 
 @given(a=values_8, b=values_8)
-@settings(max_examples=200)
+@settings(max_examples=1000)
 def test_and_or_demorgan(a, b):
     """NOT(a AND b) == (NOT a) OR (NOT b) — De Morgan's law."""
     and_result = eval_const_op(PrimOp.AND, {"A": a, "B": b}, {}, 8)
@@ -103,7 +103,7 @@ def test_and_or_demorgan(a, b):
 
 
 @given(a=values_8, b=values_8)
-@settings(max_examples=200)
+@settings(max_examples=1000)
 def test_xor_self_is_zero(a, b):
     """a XOR a == 0."""
     result = eval_const_op(PrimOp.XOR, {"A": a, "B": a}, {}, 8)
@@ -111,7 +111,7 @@ def test_xor_self_is_zero(a, b):
 
 
 @given(a=values_8)
-@settings(max_examples=200)
+@settings(max_examples=1000)
 def test_double_not_identity(a):
     """NOT(NOT(a)) == a."""
     not_a = eval_const_op(PrimOp.NOT, {"A": a}, {}, 8)
@@ -120,7 +120,7 @@ def test_double_not_identity(a):
 
 
 @given(a=values_8, b=values_8)
-@settings(max_examples=200)
+@settings(max_examples=1000)
 def test_eq_ne_complementary(a, b):
     """EQ and NE are complementary."""
     eq = eval_const_op(PrimOp.EQ, {"A": a, "B": b}, {}, 1)
@@ -129,7 +129,7 @@ def test_eq_ne_complementary(a, b):
 
 
 @given(a=values_8, b=values_8)
-@settings(max_examples=200)
+@settings(max_examples=1000)
 def test_lt_ge_complementary(a, b):
     """LT and GE are complementary."""
     lt = eval_const_op(PrimOp.LT, {"A": a, "B": b}, {}, 1)
@@ -142,7 +142,7 @@ def test_lt_ge_complementary(a, b):
     a=values_8,
     b=values_8,
 )
-@settings(max_examples=200)
+@settings(max_examples=1000)
 def test_mux_selects_correctly(sel, a, b):
     """MUX(sel, a, b) returns a when sel=0, b when sel=1."""
     result = eval_const_op(PrimOp.MUX, {"S": sel, "A": a, "B": b}, {}, 8)
@@ -151,7 +151,7 @@ def test_mux_selects_correctly(sel, a, b):
 
 
 @given(a=values_32, b=st.integers(min_value=0, max_value=31))
-@settings(max_examples=200)
+@settings(max_examples=1000)
 def test_shl_shr_inverse(a, b):
     """(a << b) >> b recovers the lower bits of a (the upper bits shifted out are lost)."""
     width = 32
@@ -165,7 +165,7 @@ def test_shl_shr_inverse(a, b):
 
 
 @given(a=values_8, b=st.integers(min_value=1, max_value=255))
-@settings(max_examples=200)
+@settings(max_examples=1000)
 def test_div_mod_reconstruct(a, b):
     """(a / b) * b + (a % b) == a."""
     div = eval_const_op(PrimOp.DIV, {"A": a, "B": b}, {}, 8)
@@ -186,7 +186,7 @@ def test_div_mod_reconstruct(a, b):
     b_val=values_8,
     op=st.sampled_from([PrimOp.AND, PrimOp.OR, PrimOp.XOR, PrimOp.ADD, PrimOp.SUB]),
 )
-@settings(max_examples=200)
+@settings(max_examples=1000)
 def test_const_fold_matches_eval(a_val, b_val, op):
     """Constant folding must produce the same value as direct evaluation."""
     mod = Module(name="test")
@@ -215,7 +215,7 @@ def test_const_fold_matches_eval(a_val, b_val, op):
     n_cells=st.integers(min_value=1, max_value=10),
     width=st.sampled_from([1, 8]),
 )
-@settings(max_examples=50)
+@settings(max_examples=1000)
 def test_dce_never_removes_output_connected_cells(n_cells, width):
     """DCE must never remove cells that feed output ports."""
     mod = Module(name="test")

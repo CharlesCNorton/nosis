@@ -11,11 +11,14 @@ are skipped.
 import os
 import pytest
 
-# pyslang path
-os.environ.setdefault("NOSIS_PYSLANG_PATH", "D:/slang/build/lib")
+# pyslang path — default to sibling directory of nosis repo
+_NOSIS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DEFAULT_PYSLANG = os.path.join(os.path.dirname(_NOSIS_DIR), "slang", "build", "lib")
+os.environ.setdefault("NOSIS_PYSLANG_PATH", _DEFAULT_PYSLANG)
 
-# RIME repository root — configurable for CI or other machines
-RIME_ROOT = os.environ.get("NOSIS_RIME_ROOT", "D:/rime")
+# RIME repository root — default to sibling directory of nosis repo
+_DEFAULT_RIME = os.path.join(os.path.dirname(_NOSIS_DIR), "rime")
+RIME_ROOT = os.environ.get("NOSIS_RIME_ROOT", _DEFAULT_RIME)
 RIME_FW = os.path.join(RIME_ROOT, "firmware")
 
 # Standard RIME HDL source paths

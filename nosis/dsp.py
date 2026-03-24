@@ -15,6 +15,7 @@ from nosis.ir import Cell, Module, PrimOp
 
 __all__ = [
     "infer_dsps",
+    "detect_mac",
 ]
 
 
@@ -52,3 +53,70 @@ def infer_dsps(mod: Module) -> int:
             tagged += 1
 
     return tagged
+
+
+def detect_mac(mod: Module) -> int:
+    """Detect multiply-accumulate patterns: acc += a * b.
+
+    A MAC pattern is a MUL cell whose output feeds an ADD cell, where
+    the ADD's other input comes from an FF that feeds back from the
+    ADD output. This pattern maps to ALU54B on ECP5 (multiply + accumulate
+    in a single DSP tile).
+
+    Tags the MUL cell with ``dsp_mac=True`` and ``dsp_acc_add`` and
+    ``dsp_acc_ff`` params. Returns the number of MAC patterns detected.
+    """
+    detected = 0
+
+    # Build consumer map: net_name -> [(cell, port)]
+    net_consumers: dict[str, list[tuple[Cell, str]]] = {}
+    for cell in mod.cells.values():
+        for port, net in cell.inputs.items():
+            if net.name not in net_consumers:
+                net_consumers[net.name] = []
+            net_consumers[net.name].append((cell, port))
+
+    for cell in mod.cells.values():
+        if cell.op != PrimOp.MUL:
+            continue
+
+        # MUL output must feed exactly one ADD
+        mul_outs = list(cell.outputs.values())
+        if not mul_outs:
+            continue
+        mul_out = mul_outs[0]
+
+        consumers = net_consumers.get(mul_out.name, [])
+        add_consumers = [(c, p) for c, p in consumers if c.op == PrimOp.ADD]
+        if len(add_consumers) != 1:
+            continue
+
+        add_cell, add_port = add_consumers[0]
+        # The other ADD input should come from an FF whose D is the ADD output
+        other_port = "B" if add_port == "A" else "A"
+        other_net = add_cell.inputs.get(other_port)
+        if other_net is None:
+            continue
+
+        # Check if other_net is driven by an FF
+        if other_net.driver is None or other_net.driver.op != PrimOp.FF:
+            continue
+        acc_ff = other_net.driver
+
+        # The FF's D input should be the ADD output (feedback loop)
+        ff_d = acc_ff.inputs.get("D")
+        add_outs = list(add_cell.outputs.values())
+        if not add_outs or ff_d is None:
+            continue
+
+        add_out = add_outs[0]
+        if ff_d.name != add_out.name:
+            continue
+
+        # MAC pattern confirmed: MUL -> ADD -> FF -> (back to ADD)
+        cell.params["dsp_mac"] = True
+        cell.params["dsp_acc_add"] = add_cell.name
+        cell.params["dsp_acc_ff"] = acc_ff.name
+        detected += 1
+
+    return detected

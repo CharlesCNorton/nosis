@@ -1,7 +1,7 @@
-"""Tests for nosis.dsp — DSP inference."""
+"""Tests for nosis.dsp — DSP inference and MAC detection."""
 
 from nosis.ir import Module, PrimOp
-from nosis.dsp import infer_dsps
+from nosis.dsp import infer_dsps, detect_mac
 
 
 def _mul_module(a_width: int, b_width: int) -> Module:
@@ -105,3 +105,58 @@ def test_multiple_multipliers():
         mod.connect(cell, "Y", y, direction="output")
     tagged = infer_dsps(mod)
     assert tagged == 4
+
+
+def test_mac_detection():
+    """acc += a * b pattern should be detected as MAC."""
+    mod = Module(name="test")
+    clk = mod.add_net("clk", 1)
+    a = mod.add_net("a", 8)
+    b = mod.add_net("b", 8)
+    prod = mod.add_net("prod", 16)
+    acc_in = mod.add_net("acc_in", 16)
+    acc_out = mod.add_net("acc_out", 16)
+
+    mul = mod.add_cell("mul0", PrimOp.MUL)
+    mod.connect(mul, "A", a)
+    mod.connect(mul, "B", b)
+    mod.connect(mul, "Y", prod, direction="output")
+
+    add = mod.add_cell("add0", PrimOp.ADD)
+    mod.connect(add, "A", prod)
+    mod.connect(add, "B", acc_in)
+    mod.connect(add, "Y", acc_out, direction="output")
+
+    ff = mod.add_cell("ff0", PrimOp.FF)
+    mod.connect(ff, "CLK", clk)
+    mod.connect(ff, "D", acc_out)
+    mod.connect(ff, "Q", acc_in, direction="output")
+
+    detected = detect_mac(mod)
+    assert detected == 1
+    assert mul.params.get("dsp_mac") is True
+    assert mul.params.get("dsp_acc_add") == "add0"
+    assert mul.params.get("dsp_acc_ff") == "ff0"
+
+
+def test_mac_not_detected_without_feedback():
+    """MUL -> ADD without FF feedback is not a MAC."""
+    mod = Module(name="test")
+    a = mod.add_net("a", 8)
+    b = mod.add_net("b", 8)
+    c = mod.add_net("c", 16)
+    prod = mod.add_net("prod", 16)
+    out = mod.add_net("out", 16)
+
+    mul = mod.add_cell("mul0", PrimOp.MUL)
+    mod.connect(mul, "A", a)
+    mod.connect(mul, "B", b)
+    mod.connect(mul, "Y", prod, direction="output")
+
+    add = mod.add_cell("add0", PrimOp.ADD)
+    mod.connect(add, "A", prod)
+    mod.connect(add, "B", c)
+    mod.connect(add, "Y", out, direction="output")
+
+    detected = detect_mac(mod)
+    assert detected == 0

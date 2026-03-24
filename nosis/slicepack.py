@@ -285,18 +285,84 @@ def simplify_constant_luts(netlist: ECP5Netlist) -> int:
     return simplified
 
 
+def deduplicate_luts(netlist: ECP5Netlist) -> int:
+    """Eliminate duplicate LUT4 functions with identical INIT and inputs.
+
+    When two TRELLIS_SLICE cells compute the same function on the same
+    input bits, one is redundant. Redirect all references to the
+    duplicate's output bits to the original's output bits.
+
+    Returns the number of cells eliminated.
+    """
+    from collections import defaultdict
+
+    # Build signature -> list of cells
+    sig_groups: dict[tuple, list[ECP5Cell]] = defaultdict(list)
+    for cell in netlist.cells.values():
+        if cell.cell_type != "TRELLIS_SLICE":
+            continue
+        init0 = cell.parameters.get("LUT0_INITVAL", "0x0000")
+        a0 = tuple(cell.ports.get("A0", ["?"]))
+        b0 = tuple(cell.ports.get("B0", ["?"]))
+        c0 = tuple(cell.ports.get("C0", ["?"]))
+        d0 = tuple(cell.ports.get("D0", ["?"]))
+        sig = (init0, a0, b0, c0, d0)
+        sig_groups[sig].append(cell)
+
+    eliminated = 0
+    to_remove: set[str] = set()
+
+    for sig, cells in sig_groups.items():
+        if len(cells) < 2:
+            continue
+        keeper = cells[0]
+        keeper_f0 = keeper.ports.get("F0", [])
+        if not keeper_f0:
+            continue
+
+        for dup in cells[1:]:
+            dup_f0 = dup.ports.get("F0", [])
+            if not dup_f0:
+                continue
+            # Redirect: everywhere dup's F0 bit appears, replace with keeper's F0 bit
+            old_bit = dup_f0[0]
+            new_bit = keeper_f0[0]
+            for other in netlist.cells.values():
+                if other.name == dup.name:
+                    continue
+                for port_name, bits in list(other.ports.items()):
+                    other.ports[port_name] = [
+                        new_bit if b == old_bit else b for b in bits
+                    ]
+            # Also redirect in netlist nets
+            for net in netlist.nets.values():
+                net.bits = [new_bit if b == old_bit else b for b in net.bits]
+            # Redirect in ports
+            for port_name, port_info in netlist.ports.items():
+                port_info["bits"] = [
+                    new_bit if b == old_bit else b for b in port_info["bits"]
+                ]
+            to_remove.add(dup.name)
+            eliminated += 1
+
+    for name in to_remove:
+        del netlist.cells[name]
+
+    return eliminated
+
+
 def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     """Run all slice packing and simplification passes. Returns counts."""
-    # Run constant simplification first (eliminates LUTs with const inputs),
-    # then dual-LUT packing, then PFUMX/L6MUX21.
-    # Second simplify pass catches constants exposed by packing.
     s1 = simplify_constant_luts(netlist)
+    dd = deduplicate_luts(netlist)
+    s2 = simplify_constant_luts(netlist)
     d = pack_dual_lut4(netlist)
     p = pack_pfumx(netlist)
     l = pack_l6mux21(netlist)
-    s2 = simplify_constant_luts(netlist)
+    s3 = simplify_constant_luts(netlist)
     return {
-        "const_lut_simplify": s1 + s2,
+        "const_lut_simplify": s1 + s2 + s3,
+        "lut_dedup": dd,
         "dual_lut4": d,
         "pfumx": p,
         "l6mux21": l,

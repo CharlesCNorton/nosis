@@ -61,8 +61,9 @@ def test_pack_slices_combined():
         c.ports["D0"] = ["0"]
         c.ports["F0"] = [10 + i]
     result = pack_slices(nl)
-    # dual_lut4 should pack pairs, pfumx should pack shared-input pairs
-    assert result["dual_lut4"] >= 1 or result["pfumx"] >= 1
+    # dedup, dual_lut4, or pfumx should reduce the cell count
+    total_ops = result.get("lut_dedup", 0) + result.get("dual_lut4", 0) + result.get("pfumx", 0)
+    assert total_ops >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +134,66 @@ def test_dual_lut4_reduces_slice_count():
     packed = pack_dual_lut4(nl)
     assert packed == 5  # 10 cells -> 5 dual-LUT slices
     assert len(nl.cells) == 5
+
+
+def test_deduplicate_identical_luts():
+    """Two LUT4 cells with the same INIT and inputs should be deduplicated."""
+    from nosis.slicepack import deduplicate_luts
+    nl = ECP5Netlist(top="test")
+    c1 = nl.add_cell("lut0", "TRELLIS_SLICE")
+    c1.parameters["LUT0_INITVAL"] = "0x8888"
+    c1.ports["A0"] = [2]
+    c1.ports["B0"] = [3]
+    c1.ports["C0"] = ["0"]
+    c1.ports["D0"] = ["0"]
+    c1.ports["F0"] = [10]
+
+    c2 = nl.add_cell("lut1", "TRELLIS_SLICE")
+    c2.parameters["LUT0_INITVAL"] = "0x8888"
+    c2.ports["A0"] = [2]  # same inputs
+    c2.ports["B0"] = [3]
+    c2.ports["C0"] = ["0"]
+    c2.ports["D0"] = ["0"]
+    c2.ports["F0"] = [11]
+
+    # Consumer of lut1's output
+    c3 = nl.add_cell("lut2", "TRELLIS_SLICE")
+    c3.parameters["LUT0_INITVAL"] = "0x5555"
+    c3.ports["A0"] = [11]  # reads from lut1
+    c3.ports["B0"] = ["0"]
+    c3.ports["C0"] = ["0"]
+    c3.ports["D0"] = ["0"]
+    c3.ports["F0"] = [12]
+
+    eliminated = deduplicate_luts(nl)
+    assert eliminated == 1
+    assert "lut1" not in nl.cells
+    # c3 should now read from lut0's output (bit 10)
+    assert nl.cells["lut2"].ports["A0"] == [10]
+
+
+def test_deduplicate_different_init_preserved():
+    """LUTs with different INIT values must NOT be deduplicated."""
+    from nosis.slicepack import deduplicate_luts
+    nl = ECP5Netlist(top="test")
+    c1 = nl.add_cell("lut0", "TRELLIS_SLICE")
+    c1.parameters["LUT0_INITVAL"] = "0x8888"
+    c1.ports["A0"] = [2]
+    c1.ports["B0"] = [3]
+    c1.ports["C0"] = ["0"]
+    c1.ports["D0"] = ["0"]
+    c1.ports["F0"] = [10]
+
+    c2 = nl.add_cell("lut1", "TRELLIS_SLICE")
+    c2.parameters["LUT0_INITVAL"] = "0xEEEE"  # different
+    c2.ports["A0"] = [2]
+    c2.ports["B0"] = [3]
+    c2.ports["C0"] = ["0"]
+    c2.ports["D0"] = ["0"]
+    c2.ports["F0"] = [11]
+
+    eliminated = deduplicate_luts(nl)
+    assert eliminated == 0
 
 
 def test_simplify_constant_lut_all_zero():

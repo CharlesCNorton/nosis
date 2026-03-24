@@ -96,6 +96,7 @@ class Cell:
     inputs: dict[str, Net] = field(default_factory=dict)
     outputs: dict[str, Net] = field(default_factory=dict)
     params: dict[str, Any] = field(default_factory=dict)
+    src: str = ""  # source location (file:line) for debug tracing
 
     def __repr__(self) -> str:
         return f"Cell({self.name!r}, {self.op.name})"
@@ -116,10 +117,10 @@ class Module:
         self.nets[name] = net
         return net
 
-    def add_cell(self, name: str, op: PrimOp, **params: Any) -> Cell:
+    def add_cell(self, name: str, op: PrimOp, src: str = "", **params: Any) -> Cell:
         if name in self.cells:
             raise ValueError(f"duplicate cell: {name}")
-        cell = Cell(name=name, op=op, params=params)
+        cell = Cell(name=name, op=op, params=params, src=src)
         self.cells[name] = cell
         return cell
 

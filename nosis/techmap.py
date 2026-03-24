@@ -278,6 +278,8 @@ class _ECP5Mapper:
 
         for i in range(min(width, len(d_bits), len(q_bits))):
             ff = self.nl.add_cell(self._fresh_name("tff"), "TRELLIS_FF")
+            if cell.src:
+                ff.attributes["src"] = cell.src
             ff.parameters["GSR"] = "DISABLED"
             ff.parameters["CEMUX"] = "1"
             ff.parameters["CLKMUX"] = "CLK"
@@ -308,6 +310,8 @@ class _ECP5Mapper:
 
         for i in range(width):
             lut = self.nl.add_cell(self._fresh_name("lut"), "TRELLIS_SLICE")
+            if cell.src:
+                lut.attributes["src"] = cell.src
             lut.parameters["LUT0_INITVAL"] = f"0x{init:04X}"
             lut.parameters["REG0_SD"] = "0"
             lut.parameters["SRMODE"] = "LSR_OVER_CE"

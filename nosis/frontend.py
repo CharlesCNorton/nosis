@@ -232,10 +232,17 @@ class _Lowerer:
         self._net_counter += 1
         return self.mod.add_net(name, width)
 
-    def _fresh_cell(self, prefix: str, op: PrimOp, **params: Any) -> Cell:
+    def _fresh_cell(self, prefix: str, op: PrimOp, src: str = "", **params: Any) -> Cell:
         name = f"${prefix}_{self._cell_counter}"
         self._cell_counter += 1
-        return self.mod.add_cell(name, op, **params)
+        return self.mod.add_cell(name, op, src=src, **params)
+
+    def _src_from_node(self, node: Any) -> str:
+        """Extract a source location string from a pyslang AST node."""
+        loc = getattr(node, "location", None) or getattr(node, "sourceRange", None)
+        if loc is not None:
+            return str(loc)
+        return ""
 
     def _get_or_create_net(self, name: str, width: int) -> Net:
         if name in self.mod.nets:

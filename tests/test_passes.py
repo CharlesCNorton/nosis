@@ -1,7 +1,7 @@
 """Tests for nosis.passes — constant folding and dead code elimination."""
 
 from nosis.ir import Design, Module, PrimOp
-from nosis.passes import constant_fold, dead_code_eliminate, run_default_passes
+from nosis.passes import constant_fold, identity_simplify, dead_code_eliminate, run_default_passes
 
 
 def _make_const(mod, name, value, width):
@@ -146,3 +146,122 @@ def test_run_default_passes():
 
     stats = run_default_passes(mod)
     assert stats["const_fold"] >= 1
+
+
+def test_identity_and_all_ones():
+    """a & 0xFF (8-bit) -> a"""
+    mod = Module(name="test")
+    a = mod.add_net("a", 8)
+    a_cell = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
+    mod.connect(a_cell, "Y", a, direction="output")
+    mod.ports["a"] = a
+
+    ones = _make_const(mod, "ones", 0xFF, 8)
+    out = mod.add_net("out", 8)
+    and_cell = mod.add_cell("and0", PrimOp.AND)
+    mod.connect(and_cell, "A", a)
+    mod.connect(and_cell, "B", ones)
+    mod.connect(and_cell, "Y", out, direction="output")
+
+    simplified = identity_simplify(mod)
+    assert simplified == 1
+
+
+def test_identity_or_zero():
+    """a | 0 -> a"""
+    mod = Module(name="test")
+    a = mod.add_net("a", 8)
+    a_cell = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
+    mod.connect(a_cell, "Y", a, direction="output")
+    mod.ports["a"] = a
+
+    zero = _make_const(mod, "zero", 0, 8)
+    out = mod.add_net("out", 8)
+    or_cell = mod.add_cell("or0", PrimOp.OR)
+    mod.connect(or_cell, "A", a)
+    mod.connect(or_cell, "B", zero)
+    mod.connect(or_cell, "Y", out, direction="output")
+
+    simplified = identity_simplify(mod)
+    assert simplified == 1
+
+
+def test_identity_xor_zero():
+    """a ^ 0 -> a"""
+    mod = Module(name="test")
+    a = mod.add_net("a", 8)
+    a_cell = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
+    mod.connect(a_cell, "Y", a, direction="output")
+    mod.ports["a"] = a
+
+    zero = _make_const(mod, "zero", 0, 8)
+    out = mod.add_net("out", 8)
+    xor_cell = mod.add_cell("xor0", PrimOp.XOR)
+    mod.connect(xor_cell, "A", a)
+    mod.connect(xor_cell, "B", zero)
+    mod.connect(xor_cell, "Y", out, direction="output")
+
+    simplified = identity_simplify(mod)
+    assert simplified == 1
+
+
+def test_identity_mul_zero():
+    """a * 0 -> 0"""
+    mod = Module(name="test")
+    a = mod.add_net("a", 8)
+    a_cell = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
+    mod.connect(a_cell, "Y", a, direction="output")
+    mod.ports["a"] = a
+
+    zero = _make_const(mod, "zero", 0, 8)
+    out = mod.add_net("out", 8)
+    mul_cell = mod.add_cell("mul0", PrimOp.MUL)
+    mod.connect(mul_cell, "A", a)
+    mod.connect(mul_cell, "B", zero)
+    mod.connect(mul_cell, "Y", out, direction="output")
+
+    simplified = identity_simplify(mod)
+    assert simplified == 1
+    assert mod.cells["mul0"].op == PrimOp.CONST
+    assert mod.cells["mul0"].params["value"] == 0
+
+
+def test_identity_add_zero():
+    """a + 0 -> a"""
+    mod = Module(name="test")
+    a = mod.add_net("a", 8)
+    a_cell = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
+    mod.connect(a_cell, "Y", a, direction="output")
+    mod.ports["a"] = a
+
+    zero = _make_const(mod, "zero", 0, 8)
+    out = mod.add_net("out", 8)
+    add_cell = mod.add_cell("add0", PrimOp.ADD)
+    mod.connect(add_cell, "A", a)
+    mod.connect(add_cell, "B", zero)
+    mod.connect(add_cell, "Y", out, direction="output")
+
+    simplified = identity_simplify(mod)
+    assert simplified == 1
+
+
+def test_identity_double_not():
+    """~~a -> a"""
+    mod = Module(name="test")
+    a = mod.add_net("a", 8)
+    a_cell = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
+    mod.connect(a_cell, "Y", a, direction="output")
+    mod.ports["a"] = a
+
+    na = mod.add_net("na", 8)
+    not1 = mod.add_cell("not1", PrimOp.NOT)
+    mod.connect(not1, "A", a)
+    mod.connect(not1, "Y", na, direction="output")
+
+    out = mod.add_net("out", 8)
+    not2 = mod.add_cell("not2", PrimOp.NOT)
+    mod.connect(not2, "A", na)
+    mod.connect(not2, "Y", out, direction="output")
+
+    simplified = identity_simplify(mod)
+    assert simplified == 1

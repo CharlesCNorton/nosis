@@ -443,11 +443,207 @@ def absorb_buffers(netlist: ECP5Netlist) -> int:
     return absorbed
 
 
+def merge_lut_chains(netlist: ECP5Netlist) -> int:
+    """Merge chained LUT4 pairs where the combined function fits in 4 inputs.
+
+    When LUT_A's output feeds LUT_B's input, and their combined unique
+    variable inputs number ≤4, LUT_B can absorb LUT_A's function by
+    computing the composed truth table. LUT_A is then eliminated.
+
+    This is the core of priority-cut technology mapping applied post-hoc
+    to an already-mapped netlist. It catches per-bit chains that the
+    IR-level packer misses because the IR operates at multi-bit granularity.
+
+    Constraint: LUT_A must have exactly one consumer (single-fanout)
+    to ensure the merge doesn't duplicate logic.
+
+    Returns the number of LUT4 functions eliminated.
+    """
+    # Build output-bit -> (cell_name, slot) map
+    bit_to_lut: dict[int, tuple[str, str]] = {}
+    for name, cell in netlist.cells.items():
+        if cell.cell_type != "TRELLIS_SLICE":
+            continue
+        for slot in ("0", "1"):
+            f_key = f"F{slot}"
+            f_bits = cell.ports.get(f_key, [])
+            if f_bits and isinstance(f_bits[0], int) and f_bits[0] >= 2:
+                bit_to_lut[f_bits[0]] = (name, slot)
+
+    # Build fanout count: how many LUT inputs reference each output bit
+    bit_fanout: dict[int, int] = {}
+    for cell in netlist.cells.values():
+        if cell.cell_type != "TRELLIS_SLICE":
+            continue
+        for slot in ("0", "1"):
+            for pin in (f"A{slot}", f"B{slot}", f"C{slot}", f"D{slot}"):
+                bits = cell.ports.get(pin, [])
+                if bits and isinstance(bits[0], int) and bits[0] >= 2:
+                    bit_fanout[bits[0]] = bit_fanout.get(bits[0], 0) + 1
+
+    merged = 0
+    absorbed_bits: set[int] = set()  # output bits of absorbed LUTs
+
+    for name, cell in list(netlist.cells.items()):
+        if cell.cell_type != "TRELLIS_SLICE":
+            continue
+
+        for slot in ("0", "1"):
+            init_key = f"LUT{slot}_INITVAL" if slot == "1" else "LUT0_INITVAL"
+            if init_key not in cell.parameters:
+                continue
+
+            try:
+                my_init = int(cell.parameters[init_key], 16)
+            except (ValueError, TypeError):
+                continue
+
+            # Find which input comes from another LUT4
+            my_pins = {}  # pin_name -> bit_value
+            feeder_pin = None
+            feeder_bit = None
+            for pin_idx, pin in enumerate((f"A{slot}", f"B{slot}", f"C{slot}", f"D{slot}")):
+                bits = cell.ports.get(pin, ["0"])
+                if bits and isinstance(bits[0], int) and bits[0] >= 2:
+                    bit = bits[0]
+                    my_pins[pin] = bit
+                    if bit in bit_to_lut and bit not in absorbed_bits:
+                        src_name, src_slot = bit_to_lut[bit]
+                        if src_name != name and bit_fanout.get(bit, 0) == 1:
+                            feeder_pin = pin
+                            feeder_bit = bit
+
+            if feeder_pin is None:
+                continue
+
+            src_name, src_slot = bit_to_lut[feeder_bit]
+            src_cell = netlist.cells.get(src_name)
+            if src_cell is None:
+                continue
+
+            src_init_key = f"LUT{src_slot}_INITVAL" if src_slot == "1" else "LUT0_INITVAL"
+            try:
+                src_init = int(src_cell.parameters.get(src_init_key, "0x0000"), 16)
+            except (ValueError, TypeError):
+                continue
+
+            # Collect feeder's variable inputs
+            feeder_vars: dict[str, int] = {}
+            for pin_idx, pin in enumerate((f"A{src_slot}", f"B{src_slot}", f"C{src_slot}", f"D{src_slot}")):
+                bits = src_cell.ports.get(pin, ["0"])
+                if bits and isinstance(bits[0], int) and bits[0] >= 2:
+                    feeder_vars[pin] = bits[0]
+
+            # My variable inputs (excluding the feeder connection)
+            my_other_vars: dict[str, int] = {}
+            for pin, bit in my_pins.items():
+                if pin != feeder_pin:
+                    my_other_vars[pin] = bit
+
+            # Combined unique variable inputs
+            all_bits = set(feeder_vars.values()) | set(my_other_vars.values())
+            if len(all_bits) > 4:
+                continue
+
+            # Compute composed truth table
+            # Map combined inputs to LUT4 pin indices
+            all_bits_list = sorted(all_bits)
+            bit_to_idx = {b: i for i, b in enumerate(all_bits_list)}
+
+            # Feeder pin index in feeder's LUT
+            feeder_pin_indices: dict[int, int] = {}  # feeder_bit -> feeder_pin_idx
+            for pin_idx, pin in enumerate((f"A{src_slot}", f"B{src_slot}", f"C{src_slot}", f"D{src_slot}")):
+                bits = src_cell.ports.get(pin, ["0"])
+                if bits and isinstance(bits[0], int) and bits[0] >= 2:
+                    feeder_pin_indices[bits[0]] = pin_idx
+
+            # My pin index mapping
+            my_pin_idx = {f"A{slot}": 0, f"B{slot}": 1, f"C{slot}": 2, f"D{slot}": 3}
+            feeder_in_my_idx = my_pin_idx.get(feeder_pin, 0)
+
+            composed_init = 0
+            for i in range(16):
+                # Map combined input index to individual bit values
+                input_vals = {}
+                for bit, idx in bit_to_idx.items():
+                    input_vals[bit] = (i >> idx) & 1
+
+                # Evaluate feeder LUT
+                feeder_lut_idx = 0
+                for bit, pin_idx in feeder_pin_indices.items():
+                    if input_vals.get(bit, 0):
+                        feeder_lut_idx |= (1 << pin_idx)
+                feeder_result = (src_init >> feeder_lut_idx) & 1
+
+                # Evaluate my LUT with feeder result substituted
+                my_lut_idx = 0
+                for pin, bit in my_other_vars.items():
+                    pin_idx_val = my_pin_idx[pin]
+                    if input_vals.get(bit, 0):
+                        my_lut_idx |= (1 << pin_idx_val)
+                if feeder_result:
+                    my_lut_idx |= (1 << feeder_in_my_idx)
+                my_result = (my_init >> my_lut_idx) & 1
+
+                if my_result:
+                    composed_init |= (1 << i)
+
+            # Apply the composed truth table
+            cell.parameters[init_key] = f"0x{composed_init:04X}"
+
+            # Rewire my inputs to the combined set
+            new_pins = {f"A{slot}": "0", f"B{slot}": "0", f"C{slot}": "0", f"D{slot}": "0"}
+            for bit, idx in bit_to_idx.items():
+                pin_name = [f"A{slot}", f"B{slot}", f"C{slot}", f"D{slot}"][idx]
+                new_pins[pin_name] = bit
+            for pin, val in new_pins.items():
+                if isinstance(val, int):
+                    cell.ports[pin] = [val]
+                else:
+                    cell.ports[pin] = [val]
+
+            # Mark feeder's output bit as absorbed
+            absorbed_bits.add(feeder_bit)
+            merged += 1
+
+            # If the feeder was in a dual-LUT slice, remove only its slot
+            if src_slot == "0" and "LUT1_INITVAL" in src_cell.parameters:
+                # Promote LUT1 to LUT0
+                src_cell.parameters["LUT0_INITVAL"] = src_cell.parameters.pop("LUT1_INITVAL")
+                for pin in ("A", "B", "C", "D", "F"):
+                    p1 = f"{pin}1"
+                    p0 = f"{pin}0"
+                    if p1 in src_cell.ports:
+                        src_cell.ports[p0] = src_cell.ports.pop(p1)
+            elif src_slot == "1":
+                # Remove LUT1 from the dual-LUT slice
+                src_cell.parameters.pop("LUT1_INITVAL", None)
+                for pin in ("A1", "B1", "C1", "D1", "F1"):
+                    src_cell.ports.pop(pin, None)
+            else:
+                # Single-LUT cell, remove entirely
+                # But only if we already removed its only function
+                if "LUT1_INITVAL" not in src_cell.parameters:
+                    del netlist.cells[src_name]
+
+            break  # one merge per consumer cell per pass
+
+    return merged
+
+
 def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     """Run all slice packing and simplification passes. Returns counts."""
     s1 = simplify_constant_luts(netlist)
     dd = deduplicate_luts(netlist)
     ab = absorb_buffers(netlist)
+    # Priority-cut chain merging: absorb feeder LUTs into consumers
+    mc = 0
+    for _ in range(5):
+        m = merge_lut_chains(netlist)
+        if m == 0:
+            break
+        mc += m
+        simplify_constant_luts(netlist)
     s2 = simplify_constant_luts(netlist)
     d = pack_dual_lut4(netlist)
     p = pack_pfumx(netlist)
@@ -457,6 +653,7 @@ def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
         "const_lut_simplify": s1 + s2 + s3,
         "lut_dedup": dd,
         "buffer_absorb": ab,
+        "chain_merge": mc,
         "dual_lut4": d,
         "pfumx": p,
         "l6mux21": l,

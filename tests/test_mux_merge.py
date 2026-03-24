@@ -231,7 +231,7 @@ def test_soc_lut_count_regression():
     nl = map_to_ecp5(d)
     pack_slices(nl)
     luts = nl.stats().get("TRELLIS_SLICE", 0)
-    assert luts < 4800, f"SoC LUT count regressed to {luts}"
+    assert luts < 4200, f"SoC LUT count regressed to {luts}"
 
 
 def test_uart_tx_lut_count():
@@ -250,4 +250,4 @@ def test_uart_tx_lut_count():
     nl = map_to_ecp5(d)
     pack_slices(nl)
     luts = nl.stats().get("TRELLIS_SLICE", 0)
-    assert luts < 20, f"uart_tx LUT count regressed to {luts}"
+    assert luts < 12, f"uart_tx LUT count regressed to {luts}"

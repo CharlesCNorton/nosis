@@ -60,20 +60,31 @@ def _svint_to_int(val: Any) -> int:
     if val is None:
         return 0
     text = repr(val).strip()
+    # Handle leading negative sign
+    negative = False
+    if text.startswith("-"):
+        negative = True
+        text = text[1:]
     # Plain decimal?
     try:
-        return int(text)
+        result = int(text)
+        return -result if negative else result
     except ValueError:
         pass
     # Verilog sized literal: <width>'[s]<base><digits>
     m = _VERILOG_LITERAL_RE.match(text)
     if m:
+        width = int(m.group(1)) if m.group(1) else 0
+        signed = m.group(2) is not None  # 's' prefix
         base_char = m.group(3).lower()
         digits = m.group(4).replace("_", "").lower()
-        # Replace x/z with 0 for numeric conversion
         digits = digits.replace("x", "0").replace("z", "0")
         base_map = {"b": 2, "o": 8, "d": 10, "h": 16}
-        return int(digits, base_map.get(base_char, 10))
+        result = int(digits, base_map.get(base_char, 10))
+        # Two's complement for signed literals
+        if signed and width > 0 and result >= (1 << (width - 1)):
+            result -= (1 << width)
+        return -result if negative else result
     # Unsized literal with base: 'h1F, 'b1010, etc.
     if "'" in text:
         after = text.split("'", 1)[1]

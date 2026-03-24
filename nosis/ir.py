@@ -186,3 +186,121 @@ class Design:
         if len(self.modules) == 1:
             return next(iter(self.modules.values()))
         raise ValueError("design has multiple modules but no top specified")
+
+    def eliminate_dead_modules(self) -> list[str]:
+        """Remove modules not reachable from the top. Returns removed names."""
+        if not self.top or self.top not in self.modules:
+            return []
+        live: set[str] = set()
+        worklist = [self.top]
+        while worklist:
+            name = worklist.pop()
+            if name in live:
+                continue
+            live.add(name)
+            mod = self.modules.get(name)
+            if mod is None:
+                continue
+            for cell in mod.cells.values():
+                ref = cell.params.get("module_ref")
+                if ref and ref in self.modules and ref not in live:
+                    worklist.append(ref)
+        removed = [n for n in list(self.modules) if n not in live]
+        for n in removed:
+            del self.modules[n]
+        return removed
+
+
+def emit_verilog(mod: Module) -> str:
+    """Emit a structural Verilog representation of the IR module."""
+    lines: list[str] = []
+    port_dirs: dict[str, str] = {}
+    port_widths: dict[str, int] = {}
+    for cell in mod.cells.values():
+        if cell.op == PrimOp.INPUT:
+            pn = cell.params.get("port_name", "")
+            if pn:
+                port_dirs[pn] = "input"
+                for n in cell.outputs.values():
+                    port_widths[pn] = n.width
+        elif cell.op == PrimOp.OUTPUT:
+            pn = cell.params.get("port_name", "")
+            if pn:
+                port_dirs[pn] = "output"
+                for n in cell.inputs.values():
+                    port_widths[pn] = n.width
+
+    port_list = sorted(port_dirs.keys())
+    lines.append(f"module {mod.name} (")
+    decls = []
+    for pn in port_list:
+        d = port_dirs[pn]
+        w = port_widths.get(pn, 1)
+        decls.append(f"  {d} [{w-1}:0] {pn}" if w > 1 else f"  {d} {pn}")
+    lines.append(",\n".join(decls))
+    lines.append(");")
+    lines.append("")
+
+    for net_name, net in sorted(mod.nets.items()):
+        if net_name in port_dirs:
+            continue
+        esc = _verilog_id(net_name)
+        lines.append(f"  wire [{net.width-1}:0] {esc};" if net.width > 1 else f"  wire {esc};")
+    lines.append("")
+
+    for cell in mod.cells.values():
+        if cell.op in (PrimOp.INPUT, PrimOp.OUTPUT):
+            continue
+        out_nets = list(cell.outputs.values())
+        if not out_nets:
+            continue
+        out = _verilog_id(out_nets[0].name)
+        if cell.op == PrimOp.CONST:
+            v = cell.params.get("value", 0)
+            w = cell.params.get("width", 1)
+            lines.append(f"  assign {out} = {w}'d{v};")
+        elif cell.op == PrimOp.AND:
+            a = _verilog_id(cell.inputs.get("A", out_nets[0]).name)
+            b = _verilog_id(cell.inputs.get("B", out_nets[0]).name)
+            lines.append(f"  assign {out} = {a} & {b};")
+        elif cell.op == PrimOp.OR:
+            a = _verilog_id(cell.inputs.get("A", out_nets[0]).name)
+            b = _verilog_id(cell.inputs.get("B", out_nets[0]).name)
+            lines.append(f"  assign {out} = {a} | {b};")
+        elif cell.op == PrimOp.XOR:
+            a = _verilog_id(cell.inputs.get("A", out_nets[0]).name)
+            b = _verilog_id(cell.inputs.get("B", out_nets[0]).name)
+            lines.append(f"  assign {out} = {a} ^ {b};")
+        elif cell.op == PrimOp.NOT:
+            a = _verilog_id(cell.inputs.get("A", out_nets[0]).name)
+            lines.append(f"  assign {out} = ~{a};")
+        elif cell.op == PrimOp.ADD:
+            a = _verilog_id(cell.inputs.get("A", out_nets[0]).name)
+            b = _verilog_id(cell.inputs.get("B", out_nets[0]).name)
+            lines.append(f"  assign {out} = {a} + {b};")
+        elif cell.op == PrimOp.SUB:
+            a = _verilog_id(cell.inputs.get("A", out_nets[0]).name)
+            b = _verilog_id(cell.inputs.get("B", out_nets[0]).name)
+            lines.append(f"  assign {out} = {a} - {b};")
+        elif cell.op == PrimOp.MUX:
+            s = _verilog_id(cell.inputs.get("S", out_nets[0]).name)
+            a = _verilog_id(cell.inputs.get("A", out_nets[0]).name)
+            b = _verilog_id(cell.inputs.get("B", out_nets[0]).name)
+            lines.append(f"  assign {out} = {s} ? {b} : {a};")
+        elif cell.op == PrimOp.FF:
+            d = _verilog_id(cell.inputs["D"].name) if "D" in cell.inputs else "0"
+            clk = _verilog_id(cell.inputs["CLK"].name) if "CLK" in cell.inputs else "clk"
+            lines.append(f"  always @(posedge {clk}) {out} <= {d};")
+        else:
+            lines.append(f"  // {cell.op.name}: {cell.name}")
+
+    lines.append("")
+    lines.append("endmodule")
+    return "\n".join(lines)
+
+
+def _verilog_id(name: str) -> str:
+    """Escape a net name for Verilog output."""
+    if name.startswith("$") or "." in name or " " in name:
+        return "\\" + name + " "
+    return name

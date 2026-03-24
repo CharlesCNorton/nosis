@@ -28,8 +28,10 @@ __all__ = [
     "ECP5Device",
     "AreaCalculation",
     "ResourceReport",
+    "AreaIndependent",
     "ECP5_DEVICES",
     "calculate_area",
+    "estimate_area_independent",
     "report_utilization",
 ]
 
@@ -254,3 +256,62 @@ def report_utilization(netlist: ECP5Netlist, device_size: str = "25k") -> Resour
         warnings.append(f"DSP overutilized: {area.dsp_tiles} used, {device.dsp_tiles} available")
 
     return ResourceReport(device=device, area=area, warnings=warnings)
+
+
+@dataclass(frozen=True, slots=True)
+class AreaIndependent:
+    """Technology-independent area metric for architecture-neutral optimization.
+
+    Counts IR cells by category without mapping to any specific FPGA. This
+    allows optimization passes to reason about area reduction before
+    technology mapping is performed.
+    """
+    logic_cells: int
+    ff_cells: int
+    memory_bits: int
+    multiplier_cells: int
+    total_cells: int
+    area_units: float  # weighted sum: logic=1, ff=0.5, mem_bit=0.01, mul=10
+
+
+def estimate_area_independent(mod: "Module") -> AreaIndependent:
+    """Compute a technology-independent area estimate from the IR module."""
+    from nosis.ir import PrimOp
+
+    logic = 0
+    ffs = 0
+    mem_bits = 0
+    muls = 0
+
+    logic_ops = {
+        PrimOp.AND, PrimOp.OR, PrimOp.XOR, PrimOp.NOT,
+        PrimOp.MUX, PrimOp.PMUX,
+        PrimOp.EQ, PrimOp.NE, PrimOp.LT, PrimOp.LE, PrimOp.GT, PrimOp.GE,
+        PrimOp.REDUCE_AND, PrimOp.REDUCE_OR, PrimOp.REDUCE_XOR,
+        PrimOp.ADD, PrimOp.SUB, PrimOp.SHL, PrimOp.SHR, PrimOp.SSHR,
+        PrimOp.DIV, PrimOp.MOD,
+    }
+
+    for cell in mod.cells.values():
+        if cell.op in logic_ops:
+            logic += 1
+        elif cell.op == PrimOp.FF:
+            ffs += 1
+        elif cell.op == PrimOp.MEMORY:
+            depth = cell.params.get("depth", 0)
+            width = cell.params.get("width", 0)
+            mem_bits += depth * width
+        elif cell.op == PrimOp.MUL:
+            muls += 1
+
+    total = logic + ffs + muls
+    area = logic * 1.0 + ffs * 0.5 + mem_bits * 0.01 + muls * 10.0
+
+    return AreaIndependent(
+        logic_cells=logic,
+        ff_cells=ffs,
+        memory_bits=mem_bits,
+        multiplier_cells=muls,
+        total_cells=total,
+        area_units=area,
+    )

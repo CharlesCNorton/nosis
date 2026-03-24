@@ -68,9 +68,9 @@ class IRDelta:
         return lines
 
 
-def _hash_cell(cell_name: str, op: PrimOp, input_names: list[str], params: dict) -> str:
-    """Compute a deterministic hash for a cell's identity."""
-    key = f"{cell_name}:{op.name}:{','.join(sorted(input_names))}:{json.dumps(sorted(params.items()), default=str)}"
+def _hash_cell(cell_name: str, op: PrimOp, input_names: list[str], output_names: list[str], params: dict) -> str:
+    """Compute a deterministic hash for a cell's identity including outputs."""
+    key = f"{cell_name}:{op.name}:{','.join(sorted(input_names))}:{','.join(sorted(output_names))}:{json.dumps(sorted(params.items()), default=str)}"
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
@@ -84,9 +84,9 @@ def snapshot_module(mod: Module) -> IRSnapshot:
     cell_hashes: dict[str, str] = {}
     for name, cell in mod.cells.items():
         input_names = [f"{p}={n.name}" for p, n in sorted(cell.inputs.items())]
-        # Filter out non-deterministic params
+        output_names = [f"{p}={n.name}" for p, n in sorted(cell.outputs.items())]
         stable_params = {k: v for k, v in cell.params.items() if not k.startswith("_")}
-        cell_hashes[name] = _hash_cell(name, cell.op, input_names, stable_params)
+        cell_hashes[name] = _hash_cell(name, cell.op, input_names, output_names, stable_params)
 
     net_hashes: dict[str, str] = {}
     for name, net in mod.nets.items():

@@ -58,4 +58,7 @@ jobs:
             tests/test_slicepack.py \
             tests/test_boolopt.py \
             tests/test_hierarchy.py \
+            tests/test_cone.py \
+            tests/test_postsynth.py \
+            tests/test_nextpnr.py \
             -v

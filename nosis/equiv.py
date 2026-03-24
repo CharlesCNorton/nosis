@@ -300,8 +300,60 @@ def _try_sat_equivalence(
                     clauses.append([a, b, o])
                     clauses.append([a, -b, -o])
                     clauses.append([-a, b, -o])
+                elif cell.op == PrimOp.NE:
+                    # o = (a != b) = a XOR b
+                    clauses.append([-a, -b, -o])
+                    clauses.append([a, b, -o])
+                    clauses.append([a, -b, o])
+                    clauses.append([-a, b, o])
+                elif cell.op == PrimOp.MUX:
+                    # o = MUX(s=a, false=b, true=c)
+                    s_vars = net_vars.get(cell.inputs["S"].name, []) if "S" in cell.inputs else []
+                    s = s_vars[0] if s_vars else a
+                    false_var = b
+                    true_vars = net_vars.get(cell.inputs["B"].name, []) if "B" in cell.inputs else []
+                    t = true_vars[0] if true_vars else b
+                    # o = s ? t : false_var
+                    # (-s & false_var) | (s & t) = o
+                    clauses.append([-s, -t, o])    # s=1,t=1 -> o=1
+                    clauses.append([-s, t, -o])    # s=1,t=0 -> o=0
+                    clauses.append([s, -false_var, o])   # s=0,f=1 -> o=1
+                    clauses.append([s, false_var, -o])   # s=0,f=0 -> o=0
+                elif cell.op in (PrimOp.LT, PrimOp.LE, PrimOp.GT, PrimOp.GE):
+                    # For 1-bit comparisons, encode as truth table
+                    # LT: a < b = ~a & b
+                    # LE: a <= b = ~a | b (same as a -> b)
+                    # GT: a > b = a & ~b
+                    # GE: a >= b = a | ~b
+                    if cell.op == PrimOp.LT:
+                        clauses.append([a, -o])     # a=1 -> o=0
+                        clauses.append([-b, -o])    # b=0 -> o=0 (wrong, fix below)
+                        # Actually: o = ~a & b
+                        clauses.clear()  # rebuild for this cell
+                        clauses.append([a, -b, -o])
+                        clauses.append([a, b, -o])
+                        clauses.append([-a, -b, -o])
+                        clauses.append([-a, b, o])
+                    elif cell.op == PrimOp.LE:
+                        # o = ~a | b
+                        clauses.append([a, o])       # a=0 -> o=1
+                        clauses.append([-b, -a, o])  # simplified
+                        clauses.append([-a, o])
+                        clauses.append([b, o])
+                        clauses.append([a, -b, -o])
+                    # GT and GE are symmetric
+                    elif cell.op == PrimOp.GT:
+                        # o = a & ~b
+                        clauses.append([-a, b, -o])
+                        clauses.append([-a, -b, o])
+                        clauses.append([a, -o])
+                        clauses.append([b, -o])
+                    elif cell.op == PrimOp.GE:
+                        # o = a | ~b
+                        clauses.append([-a, b, -o])
+                        clauses.append([a, o])
+                        clauses.append([-b, o])
                 else:
-                    # Unsupported op — leave unconstrained
                     pass
 
         return net_vars

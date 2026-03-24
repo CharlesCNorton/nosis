@@ -514,6 +514,28 @@ def merge_lut_chains(netlist: ECP5Netlist) -> int:
                             feeder_bit = bit
 
             if feeder_pin is None:
+                # Try multi-fanout: feeder with fanout ≤ 3 and ≤ 2 variable inputs
+                for pin_idx2, pin2 in enumerate((f"A{slot}", f"B{slot}", f"C{slot}", f"D{slot}")):
+                    bits2 = cell.ports.get(pin2, ["0"])
+                    if bits2 and isinstance(bits2[0], int) and bits2[0] >= 2:
+                        bit2 = bits2[0]
+                        if bit2 in bit_to_lut and bit2 not in absorbed_bits:
+                            sn2, ss2 = bit_to_lut[bit2]
+                            if sn2 != name and bit_fanout.get(bit2, 0) <= 3:
+                                sc2 = netlist.cells.get(sn2)
+                                if sc2:
+                                    # Count feeder's variable inputs
+                                    fv2 = sum(1 for p in (f"A{ss2}", f"B{ss2}", f"C{ss2}", f"D{ss2}")
+                                             if sc2.ports.get(p, ["0"])[0] not in ("0", "1", "x")
+                                             and isinstance(sc2.ports.get(p, ["0"])[0], int)
+                                             and sc2.ports.get(p, ["0"])[0] >= 2)
+                                    if fv2 <= 2:
+                                        # Feeder has ≤1 variable input — cheap to duplicate
+                                        feeder_pin = pin2
+                                        feeder_bit = bit2
+                                        break
+
+            if feeder_pin is None:
                 continue
 
             src_name, src_slot = bit_to_lut[feeder_bit]
@@ -602,9 +624,16 @@ def merge_lut_chains(netlist: ECP5Netlist) -> int:
                 else:
                     cell.ports[pin] = [val]
 
-            # Mark feeder's output bit as absorbed
+            # Mark feeder's output bit as absorbed by this consumer
             absorbed_bits.add(feeder_bit)
             merged += 1
+
+            # Only remove the feeder if ALL its consumers have absorbed it
+            # (fanout fully consumed). Decrement the fanout counter.
+            remaining_fanout = bit_fanout.get(feeder_bit, 1) - 1
+            bit_fanout[feeder_bit] = remaining_fanout
+            if remaining_fanout > 0:
+                break  # feeder still needed by other consumers
 
             # If the feeder was in a dual-LUT slice, remove only its slot
             if src_slot == "0" and "LUT1_INITVAL" in src_cell.parameters:

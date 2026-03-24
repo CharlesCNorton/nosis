@@ -3,7 +3,7 @@
 import tempfile
 from pathlib import Path
 
-from nosis.frontend import FrontendError, SynthesisWarning, parse_files, lower_to_ir
+from nosis.frontend import FrontendError, SynthesisWarning, parse_files, lower_to_ir, _svint_to_int
 from nosis.ir import PrimOp
 from tests.conftest import (
     RIME_UART_TX as UART_TX,
@@ -373,3 +373,32 @@ def test_readmem_to_initvals_empty():
     assert len(initvals) == 64
     for key, val in initvals.items():
         assert val == "0x" + "0" * 80
+
+
+def test_svint_to_int_negative_decimal():
+    """_svint_to_int should handle negative decimals."""
+    class FakeInt:
+        def __repr__(self):
+            return "-42"
+    assert _svint_to_int(FakeInt()) == -42
+
+
+def test_svint_to_int_signed_hex():
+    """_svint_to_int should handle signed hex literals with two's complement."""
+    class FakeSigned:
+        def __repr__(self):
+            return "8'shFF"
+    result = _svint_to_int(FakeSigned())
+    assert result == -1  # 8-bit signed 0xFF = -1
+
+
+def test_svint_to_int_plain_positive():
+    """_svint_to_int should handle plain positive values."""
+    class FakePlain:
+        def __repr__(self):
+            return "12345"
+    assert _svint_to_int(FakePlain()) == 12345
+
+
+def test_svint_to_int_none():
+    assert _svint_to_int(None) == 0

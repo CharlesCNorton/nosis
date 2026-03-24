@@ -1178,6 +1178,9 @@ class _Lowerer:
             net_counter=self._net_counter,
             cell_counter=self._cell_counter,
         )
+        # Tag all cells created by this sub-instance with the module name
+        # so Design.eliminate_dead_modules can trace dependencies
+        sub._module_ref = mod_name
 
         # Lower the sub-instance body (variables, parameters, procedural blocks)
         # but NOT ports — we wire those manually below
@@ -1301,6 +1304,7 @@ class _PrefixedLowerer(_Lowerer):
         self._prefix = prefix
         self._net_counter = net_counter
         self._cell_counter = cell_counter
+        self._module_ref: str = ""
 
     def _fresh_net(self, name_prefix: str, width: int) -> Net:
         name = f"${self._prefix}{name_prefix}_{self._net_counter}"
@@ -1310,6 +1314,8 @@ class _PrefixedLowerer(_Lowerer):
     def _fresh_cell(self, name_prefix: str, op: PrimOp, src: str = "", **params: Any) -> Cell:
         name = f"${self._prefix}{name_prefix}_{self._cell_counter}"
         self._cell_counter += 1
+        if self._module_ref:
+            params["module_ref"] = self._module_ref
         return self.mod.add_cell(name, op, src=src, **params)
 
     def _get_or_create_net(self, name: str, width: int) -> Net:

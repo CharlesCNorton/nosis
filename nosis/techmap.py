@@ -450,7 +450,54 @@ class _ECP5Mapper:
             prev_cout = cout
 
     def _map_multiply(self, cell: Cell) -> None:
-        """Map MUL to MULT18X18D when tagged by DSP inference, else to LUTs."""
+        """Map MUL to MULT18X18D or ALU54B (MAC), else to LUTs."""
+        if cell.params.get("dsp_mac"):
+            # MAC pattern: emit ALU54B instead of MULT18X18D + ADD
+            a_net = cell.inputs.get("A")
+            b_net = cell.inputs.get("B")
+            out_nets = list(cell.outputs.values())
+            if a_net and b_net and out_nets:
+                out_net = out_nets[0]
+                a_bits = self._get_bits(a_net)
+                b_bits = self._get_bits(b_net)
+                out_bits = self._get_bits(out_net)
+
+                alu = self.nl.add_cell(self._fresh_name("alu54b"), "ALU54B")
+                if cell.src:
+                    alu.attributes["src"] = cell.src
+                alu.parameters["REG_INPUTA_CLK"] = "NONE"
+                alu.parameters["REG_INPUTB_CLK"] = "NONE"
+                alu.parameters["REG_INPUTC_CLK"] = "NONE"
+                alu.parameters["REG_PIPELINE_CLK"] = "NONE"
+                alu.parameters["REG_OUTPUT_CLK"] = "NONE"
+                alu.parameters["GSR"] = "DISABLED"
+                # Wire A (multiply input, up to 36 bits)
+                for i in range(36):
+                    bit = a_bits[i] if i < len(a_bits) else "0"
+                    alu.ports[f"A{i}"] = [bit]
+                # Wire B (multiply input, up to 36 bits)
+                for i in range(36):
+                    bit = b_bits[i] if i < len(b_bits) else "0"
+                    alu.ports[f"B{i}"] = [bit]
+                # C input (accumulator feedback) — tied to 0 for now
+                for i in range(54):
+                    alu.ports[f"C{i}"] = ["0"]
+                # Output R (up to 54 bits)
+                for i in range(54):
+                    bit = out_bits[i] if i < len(out_bits) else self.nl.alloc_bit()
+                    alu.ports[f"R{i}"] = [bit]
+                # Control
+                for p in ["CLK0", "CLK1", "CLK2", "CLK3"]:
+                    alu.ports[p] = ["0"]
+                for p in ["CE0", "CE1", "CE2", "CE3"]:
+                    alu.ports[p] = ["1"]
+                for p in ["RST0", "RST1", "RST2", "RST3"]:
+                    alu.ports[p] = ["0"]
+                alu.ports["SIGNEDA"] = ["0"]
+                alu.ports["SIGNEDB"] = ["0"]
+                for i in range(5):
+                    alu.ports[f"OP{i}"] = ["0"]
+                return
         if cell.params.get("dsp_config") == "MULT18X18D":
             a_net = cell.inputs.get("A")
             b_net = cell.inputs.get("B")
@@ -567,14 +614,10 @@ class _ECP5Mapper:
                 out_ecp5.bits[i] = "0"
 
     def _map_pmux(self, cell: Cell) -> None:
-        """Map parallel MUX to a priority chain of LUT4 MUXes.
+        """Map parallel MUX to ECP5 LUTs.
 
-        PMUX: default value on A, N case values on I0..I(N-1),
-        N select bits on S. When S[i] is high, output is I[i].
-        If no S bit is high, output is A (default).
-
-        Implemented as a chain: result = default, then for each
-        select bit, result = MUX(S[i], result, I[i]).
+        For narrow cases (1-bit output, ≤4 cases, ≤2 select bits), computes
+        a single LUT4 truth table. Otherwise builds a balanced MUX tree.
         """
         a_net = cell.inputs.get("A")  # default
         s_net = cell.inputs.get("S")  # select bits
@@ -584,6 +627,62 @@ class _ECP5Mapper:
             return
 
         out_net = out_nets[0]
+        width = out_net.width
+        count = int(cell.params.get("count", 0))
+
+        # Narrow-case optimization: if output is 1-bit and select is ≤2 bits
+        # with ≤4 cases, compute a single LUT4 truth table directly.
+        if width == 1 and s_net.width <= 2 and count <= 4:
+            # Build truth table: inputs are select bits, output is the
+            # selected case value (as constant) or the default.
+            # Collect case constant values
+            case_vals: list[int | None] = []
+            all_const = True
+            default_driver = a_net.driver
+            default_val = None
+            if default_driver and default_driver.op == PrimOp.CONST:
+                default_val = int(default_driver.params.get("value", 0)) & 1
+            else:
+                all_const = False
+
+            for i in range(count):
+                case_net = cell.inputs.get(f"I{i}")
+                if case_net and case_net.driver and case_net.driver.op == PrimOp.CONST:
+                    case_vals.append(int(case_net.driver.params.get("value", 0)) & 1)
+                else:
+                    all_const = False
+                    case_vals.append(None)
+
+            if all_const and default_val is not None:
+                # Compute LUT4 INIT from the case table
+                init = 0
+                for idx in range(16):
+                    s_val = idx & ((1 << s_net.width) - 1)
+                    # Check which case matches (priority from I0)
+                    result = default_val
+                    for ci in range(count):
+                        if (s_val >> ci) & 1 and ci < len(case_vals):
+                            v = case_vals[ci]
+                            if v is not None:
+                                result = v
+                                break
+                    if result:
+                        init |= (1 << idx)
+
+                out_bits = self._get_bits(out_net)
+                s_bits = self._get_bits(s_net)
+                lut = self.nl.add_cell(self._fresh_name("pmux_lut"), "TRELLIS_SLICE")
+                if cell.src:
+                    lut.attributes["src"] = cell.src
+                lut.parameters["LUT0_INITVAL"] = f"0x{init:04X}"
+                lut.parameters["MODE"] = "LOGIC"
+                lut.parameters["GSR"] = "DISABLED"
+                lut.ports["A0"] = [s_bits[0] if len(s_bits) > 0 else "0"]
+                lut.ports["B0"] = [s_bits[1] if len(s_bits) > 1 else "0"]
+                lut.ports["C0"] = ["0"]
+                lut.ports["D0"] = ["0"]
+                lut.ports["F0"] = [out_bits[0] if out_bits else self.nl.alloc_bit()]
+                return
         width = out_net.width
         count = int(cell.params.get("count", 0))
         if count == 0:

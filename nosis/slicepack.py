@@ -219,9 +219,71 @@ def pack_dual_lut4(netlist: ECP5Netlist) -> int:
     return packed
 
 
+def simplify_constant_luts(netlist: ECP5Netlist) -> int:
+    """Simplify LUT4 cells with tied-constant inputs.
+
+    When a LUT4 input is tied to constant 0 or 1, the truth table can
+    be reduced. If the reduced truth table is all-0 or all-1, the LUT
+    is replaced with a constant wire (eliminated).
+
+    Returns the number of LUTs simplified or eliminated.
+    """
+    simplified = 0
+    to_remove: list[str] = []
+
+    for name, cell in netlist.cells.items():
+        if cell.cell_type != "TRELLIS_SLICE":
+            continue
+
+        init_str = cell.parameters.get("LUT0_INITVAL", "0x0000")
+        try:
+            init = int(init_str, 16)
+        except (ValueError, TypeError):
+            continue
+
+        # Check which inputs are constants
+        const_inputs: dict[int, int] = {}  # pin_index -> 0 or 1
+        for pin_idx, pin_name in enumerate(["A0", "B0", "C0", "D0"]):
+            bits = cell.ports.get(pin_name, ["0"])
+            if bits and isinstance(bits[0], str):
+                if bits[0] == "0":
+                    const_inputs[pin_idx] = 0
+                elif bits[0] == "1":
+                    const_inputs[pin_idx] = 1
+
+        if not const_inputs:
+            continue
+
+        # Reduce truth table by substituting constant values
+        new_init = 0
+        for i in range(16):
+            # Check if this index is consistent with the constant inputs
+            valid = True
+            for pin_idx, pin_val in const_inputs.items():
+                if ((i >> pin_idx) & 1) != pin_val:
+                    valid = False
+                    break
+            if valid and (init >> i) & 1:
+                new_init |= (1 << i)
+
+        if new_init != init:
+            cell.parameters["LUT0_INITVAL"] = f"0x{new_init:04X}"
+            simplified += 1
+
+        # If truth table is all-0 or all-1, the LUT is constant
+        if new_init == 0 or new_init == 0xFFFF:
+            to_remove.append(name)
+
+    for name in to_remove:
+        del netlist.cells[name]
+
+    return simplified
+
+
 def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
-    """Run all slice packing passes. Returns counts."""
+    """Run all slice packing and simplification passes. Returns counts."""
     return {
+        "const_lut_simplify": simplify_constant_luts(netlist),
         "dual_lut4": pack_dual_lut4(netlist),
         "pfumx": pack_pfumx(netlist),
         "l6mux21": pack_l6mux21(netlist),

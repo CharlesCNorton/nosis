@@ -1,6 +1,6 @@
 """Tests for nosis.ir — intermediate representation."""
 
-from nosis.ir import Cell, Design, Module, Net, PrimOp
+from nosis.ir import Cell, Design, Module, Net, PrimOp, emit_verilog
 
 
 def test_net_creation():
@@ -98,3 +98,97 @@ def test_primop_coverage():
     ops = list(PrimOp)
     assert len(ops) == len(set(ops))
     assert len(ops) >= 30
+
+
+def test_eliminate_dead_modules():
+    """Modules not reachable from top should be removed."""
+    design = Design()
+    design.add_module("top")
+    design.add_module("unused")
+    design.top = "top"
+    removed = design.eliminate_dead_modules()
+    assert "unused" in removed
+    assert "top" in design.modules
+    assert "unused" not in design.modules
+
+
+def test_eliminate_dead_modules_no_top():
+    """Without a top set, nothing should be removed."""
+    design = Design()
+    design.add_module("a")
+    design.add_module("b")
+    removed = design.eliminate_dead_modules()
+    assert len(removed) == 0
+
+
+def test_emit_verilog_basic():
+    """emit_verilog should produce valid Verilog structure."""
+    mod = Module(name="test")
+    a = mod.add_net("a", 8)
+    y = mod.add_net("y", 8)
+    inp = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
+    mod.connect(inp, "Y", a, direction="output")
+    mod.ports["a"] = a
+    out = mod.add_cell("y_p", PrimOp.OUTPUT, port_name="y")
+    mod.connect(out, "A", y)
+    mod.ports["y"] = y
+    gc = mod.add_cell("not0", PrimOp.NOT)
+    mod.connect(gc, "A", a)
+    mod.connect(gc, "Y", y, direction="output")
+
+    v = emit_verilog(mod)
+    assert "module test" in v
+    assert "endmodule" in v
+    assert "input" in v
+    assert "output" in v
+    assert "assign" in v
+
+
+def test_emit_verilog_ff():
+    """emit_verilog should produce always blocks for FFs."""
+    mod = Module(name="test")
+    clk = mod.add_net("clk", 1)
+    d = mod.add_net("d", 1)
+    q = mod.add_net("q", 1)
+    cc = mod.add_cell("clk_p", PrimOp.INPUT, port_name="clk")
+    mod.connect(cc, "Y", clk, direction="output")
+    mod.ports["clk"] = clk
+    dc = mod.add_cell("d_p", PrimOp.INPUT, port_name="d")
+    mod.connect(dc, "Y", d, direction="output")
+    mod.ports["d"] = d
+    oc = mod.add_cell("q_p", PrimOp.OUTPUT, port_name="q")
+    mod.connect(oc, "A", q)
+    mod.ports["q"] = q
+    ff = mod.add_cell("ff0", PrimOp.FF)
+    mod.connect(ff, "CLK", clk)
+    mod.connect(ff, "D", d)
+    mod.connect(ff, "Q", q, direction="output")
+
+    v = emit_verilog(mod)
+    assert "always" in v
+    assert "posedge" in v
+    assert "<=" in v
+
+
+def test_emit_verilog_arithmetic():
+    """emit_verilog should produce + and - for ADD and SUB."""
+    mod = Module(name="test")
+    a = mod.add_net("a", 8)
+    b = mod.add_net("b", 8)
+    s = mod.add_net("s", 8)
+    ac = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
+    mod.connect(ac, "Y", a, direction="output")
+    mod.ports["a"] = a
+    bc = mod.add_cell("b_p", PrimOp.INPUT, port_name="b")
+    mod.connect(bc, "Y", b, direction="output")
+    mod.ports["b"] = b
+    oc = mod.add_cell("s_p", PrimOp.OUTPUT, port_name="s")
+    mod.connect(oc, "A", s)
+    mod.ports["s"] = s
+    gc = mod.add_cell("add0", PrimOp.ADD)
+    mod.connect(gc, "A", a)
+    mod.connect(gc, "B", b)
+    mod.connect(gc, "Y", s, direction="output")
+
+    v = emit_verilog(mod)
+    assert "+" in v

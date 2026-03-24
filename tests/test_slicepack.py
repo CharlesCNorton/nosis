@@ -1,7 +1,7 @@
-"""Tests for nosis.slicepack — PFUMX, L6MUX21, and dual-LUT4 packing."""
+"""Tests for nosis.slicepack — PFUMX, L6MUX21, dual-LUT4, and constant simplification."""
 
 from nosis.techmap import ECP5Netlist
-from nosis.slicepack import pack_pfumx, pack_l6mux21, pack_slices, pack_dual_lut4
+from nosis.slicepack import pack_pfumx, pack_l6mux21, pack_slices, pack_dual_lut4, simplify_constant_luts
 
 
 def test_pfumx_basic():
@@ -133,3 +133,52 @@ def test_dual_lut4_reduces_slice_count():
     packed = pack_dual_lut4(nl)
     assert packed == 5  # 10 cells -> 5 dual-LUT slices
     assert len(nl.cells) == 5
+
+
+def test_simplify_constant_lut_all_zero():
+    """A LUT4 with all-zero inputs has a constant-0 output — should be eliminated."""
+    nl = ECP5Netlist(top="test")
+    c = nl.add_cell("lut0", "TRELLIS_SLICE")
+    c.parameters["LUT0_INITVAL"] = "0x8888"  # AND gate
+    c.ports["A0"] = ["0"]
+    c.ports["B0"] = ["0"]
+    c.ports["C0"] = ["0"]
+    c.ports["D0"] = ["0"]
+    c.ports["F0"] = [2]
+
+    simplified = simplify_constant_luts(nl)
+    assert simplified >= 1
+
+
+def test_simplify_constant_lut_partial():
+    """A LUT4 with one constant input should have its INIT reduced."""
+    nl = ECP5Netlist(top="test")
+    c = nl.add_cell("lut0", "TRELLIS_SLICE")
+    c.parameters["LUT0_INITVAL"] = "0x8888"  # AND(A,B)
+    c.ports["A0"] = [2]   # variable
+    c.ports["B0"] = ["1"]  # constant 1
+    c.ports["C0"] = ["0"]
+    c.ports["D0"] = ["0"]
+    c.ports["F0"] = [3]
+
+    simplified = simplify_constant_luts(nl)
+    assert simplified >= 1
+    # With B=1, AND(A,1) = A — INIT should change from 0x8888
+    new_init = int(c.parameters["LUT0_INITVAL"], 16)
+    assert new_init != 0x8888
+
+
+def test_simplify_constant_lut_no_constants():
+    """A LUT4 with no constant inputs should not be modified."""
+    nl = ECP5Netlist(top="test")
+    c = nl.add_cell("lut0", "TRELLIS_SLICE")
+    c.parameters["LUT0_INITVAL"] = "0x8888"
+    c.ports["A0"] = [2]
+    c.ports["B0"] = [3]
+    c.ports["C0"] = [4]
+    c.ports["D0"] = [5]
+    c.ports["F0"] = [6]
+
+    simplified = simplify_constant_luts(nl)
+    assert simplified == 0
+    assert c.parameters["LUT0_INITVAL"] == "0x8888"

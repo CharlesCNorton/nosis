@@ -229,6 +229,20 @@ def infer_output_register(mod: Module) -> int:
                 if ff_clk and mem_clk and ff_clk.name == mem_clk.name:
                     cell.params["output_register"] = True
                     cell.params["output_ff"] = other.name
+                    # Redirect consumers of the FF's Q to the BRAM's RDATA
+                    # so the FF can be eliminated by DCE
+                    for ff_out in other.outputs.values():
+                        for consumer in mod.cells.values():
+                            if consumer is other or consumer is cell:
+                                continue
+                            for pn, pnet in list(consumer.inputs.items()):
+                                if pnet is ff_out:
+                                    consumer.inputs[pn] = rdata
+                        ff_out.driver = rdata.driver
+                    other.inputs.clear()
+                    other.outputs.clear()
+                    other.op = PrimOp.CONST
+                    other.params = {"value": 0, "width": 1, "_absorbed": True}
                     annotated += 1
                     break
 

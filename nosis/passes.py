@@ -757,6 +757,11 @@ def run_default_passes(mod: Module) -> dict[str, int]:
             break
         prev_cells = cur_cells
 
+    # Reachable-state equivalence merging (HoTT quotient)
+    from nosis.reqmerge import merge_reachable_equivalent
+    stats["req_merge"] = merge_reachable_equivalent(mod, cycles=200)
+    stats["dce_req"] = dead_code_eliminate(mod)
+
     # Cut-based re-mapping: absorb multi-cell cones into single LUT4s
     from nosis.cutmap import cut_map_luts
     stats["cut_map"] = cut_map_luts(mod)

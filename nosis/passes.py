@@ -7,6 +7,7 @@ it once.
 
 from __future__ import annotations
 
+from nosis.eval import eval_const_op
 from nosis.ir import Cell, Module, Net, PrimOp
 
 __all__ = [
@@ -14,80 +15,6 @@ __all__ = [
     "dead_code_eliminate",
     "run_default_passes",
 ]
-
-
-# ---------------------------------------------------------------------------
-# Constant propagation / folding
-# ---------------------------------------------------------------------------
-
-def _eval_const(op: PrimOp, inputs: dict[str, int], params: dict[str, object]) -> int | None:
-    """Evaluate a primitive operation on constant inputs. Returns None if not foldable."""
-    a = inputs.get("A")
-    b = inputs.get("B")
-    width = int(params.get("width", 32))
-    mask = (1 << width) - 1
-
-    if op == PrimOp.CONST:
-        return int(params.get("value", 0)) & mask
-
-    if a is None:
-        return None
-
-    if op == PrimOp.NOT:
-        return (~a) & mask
-    if op == PrimOp.REDUCE_AND:
-        return 1 if (a & mask) == mask else 0
-    if op == PrimOp.REDUCE_OR:
-        return 1 if a != 0 else 0
-    if op == PrimOp.REDUCE_XOR:
-        return bin(a & mask).count("1") & 1
-    if op == PrimOp.ZEXT:
-        return a & mask
-    if op == PrimOp.SEXT:
-        from_w = int(params.get("from_width", width))
-        if a & (1 << (from_w - 1)):
-            return (a | (~((1 << from_w) - 1))) & mask
-        return a & mask
-
-    if b is None:
-        return None
-
-    if op == PrimOp.AND:
-        return (a & b) & mask
-    if op == PrimOp.OR:
-        return (a | b) & mask
-    if op == PrimOp.XOR:
-        return (a ^ b) & mask
-    if op == PrimOp.ADD:
-        return (a + b) & mask
-    if op == PrimOp.SUB:
-        return (a - b) & mask
-    if op == PrimOp.MUL:
-        return (a * b) & mask
-    if op == PrimOp.SHL:
-        return (a << (b & 0x1F)) & mask
-    if op == PrimOp.SHR:
-        return (a >> (b & 0x1F)) & mask
-    if op == PrimOp.EQ:
-        return 1 if a == b else 0
-    if op == PrimOp.NE:
-        return 1 if a != b else 0
-    if op == PrimOp.LT:
-        return 1 if a < b else 0
-    if op == PrimOp.LE:
-        return 1 if a <= b else 0
-    if op == PrimOp.GT:
-        return 1 if a > b else 0
-    if op == PrimOp.GE:
-        return 1 if a >= b else 0
-
-    # MUX: if selector is constant, pick the branch
-    if op == PrimOp.MUX:
-        s = inputs.get("S")
-        if s is not None:
-            return b if (s & 1) else a
-
-    return None
 
 
 def _is_const_cell(cell: Cell) -> bool:
@@ -137,8 +64,11 @@ def constant_fold(mod: Module) -> int:
                 continue
             width = out_nets[0].width
 
-            # Try to evaluate
-            result = _eval_const(cell.op, const_inputs, {**cell.params, "width": width})
+            # Try to evaluate using the shared evaluator
+            try:
+                result = eval_const_op(cell.op, const_inputs, cell.params, width)
+            except Exception:
+                result = None
             if result is not None:
                 to_replace.append((cell.name, result, width))
 

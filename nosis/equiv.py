@@ -12,6 +12,7 @@ not available.
 
 from __future__ import annotations
 
+from nosis.eval import eval_cell as _shared_eval_cell
 from nosis.ir import Cell, Module, Net, PrimOp
 
 __all__ = [
@@ -47,90 +48,10 @@ class EquivalenceResult:
 def _eval_cell(cell: Cell, input_values: dict[str, int]) -> dict[str, int]:
     """Evaluate a single combinational cell given input net values.
 
+    Delegates to the shared evaluator in nosis.eval.
     Returns {output_port_name: value}.
     """
-    def get(port: str) -> int:
-        net = cell.inputs.get(port)
-        if net is None:
-            return 0
-        return input_values.get(net.name, 0)
-
-    results: dict[str, int] = {}
-    op = cell.op
-    width = 32
-
-    for out_net in cell.outputs.values():
-        width = out_net.width
-        break
-
-    mask = (1 << width) - 1
-    a, b = get("A"), get("B")
-
-    if op == PrimOp.CONST:
-        val = int(cell.params.get("value", 0)) & mask
-    elif op == PrimOp.AND:
-        val = (a & b) & mask
-    elif op == PrimOp.OR:
-        val = (a | b) & mask
-    elif op == PrimOp.XOR:
-        val = (a ^ b) & mask
-    elif op == PrimOp.NOT:
-        val = (~a) & mask
-    elif op == PrimOp.ADD:
-        val = (a + b) & mask
-    elif op == PrimOp.SUB:
-        val = (a - b) & mask
-    elif op == PrimOp.MUL:
-        val = (a * b) & mask
-    elif op == PrimOp.EQ:
-        val = 1 if a == b else 0
-    elif op == PrimOp.NE:
-        val = 1 if a != b else 0
-    elif op == PrimOp.LT:
-        val = 1 if a < b else 0
-    elif op == PrimOp.LE:
-        val = 1 if a <= b else 0
-    elif op == PrimOp.GT:
-        val = 1 if a > b else 0
-    elif op == PrimOp.GE:
-        val = 1 if a >= b else 0
-    elif op == PrimOp.MUX:
-        s = get("S")
-        val = b if (s & 1) else a
-    elif op == PrimOp.SHL:
-        val = (a << (b & 0x1F)) & mask
-    elif op == PrimOp.SHR:
-        val = (a >> (b & 0x1F)) & mask
-    elif op == PrimOp.REDUCE_AND:
-        val = 1 if (a & mask) == mask else 0
-    elif op == PrimOp.REDUCE_OR:
-        val = 1 if a != 0 else 0
-    elif op == PrimOp.REDUCE_XOR:
-        val = bin(a & mask).count("1") & 1
-    elif op == PrimOp.ZEXT:
-        val = a & mask
-    elif op == PrimOp.SLICE:
-        offset = int(cell.params.get("offset", 0))
-        w = int(cell.params.get("width", width))
-        val = (a >> offset) & ((1 << w) - 1)
-    elif op == PrimOp.CONCAT:
-        val = 0
-        shift = 0
-        count = int(cell.params.get("count", 0))
-        for i in range(count):
-            inp = cell.inputs.get(f"I{i}")
-            if inp:
-                v = input_values.get(inp.name, 0)
-                val |= (v << shift)
-                shift += inp.width
-        val &= mask
-    else:
-        val = 0
-
-    for port_name, out_net in cell.outputs.items():
-        results[port_name] = val & ((1 << out_net.width) - 1)
-
-    return results
+    return _shared_eval_cell(cell, input_values)
 
 
 def _topological_order(mod: Module) -> list[Cell]:

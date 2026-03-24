@@ -1,4 +1,20 @@
-"""Nosis intermediate representation — technology-independent netlist."""
+"""Nosis intermediate representation — technology-independent netlist.
+
+The IR is a flat graph of cells and nets. Each cell has a primitive
+operation (PrimOp), named input ports, named output ports, and a
+parameter dict. Each net has a name, a bit width, and at most one
+driver cell. A Module is a collection of cells and nets with named
+ports. A Design is a collection of Modules with an optional top.
+
+Cells are not hierarchical — module instantiation is flattened during
+lowering. The IR represents a single level of abstraction between
+behavioral HDL and technology-mapped cells.
+
+30 primitive operations cover combinational logic, arithmetic,
+comparison, bit manipulation, sequential elements, memory, constants,
+and ports. Every IR operation has well-defined semantics that can be
+evaluated in Python for simulation and equivalence checking.
+"""
 
 from __future__ import annotations
 
@@ -25,6 +41,8 @@ class PrimOp(Enum):
     ADD = auto()
     SUB = auto()
     MUL = auto()
+    DIV = auto()
+    MOD = auto()
     SHL = auto()
     SHR = auto()
     SSHR = auto()      # arithmetic shift right

@@ -315,7 +315,8 @@ class _Lowerer:
             "BinaryOperator.Add": PrimOp.ADD,
             "BinaryOperator.Subtract": PrimOp.SUB,
             "BinaryOperator.Multiply": PrimOp.MUL,
-            "BinaryOperator.Divide": PrimOp.MUL,  # placeholder — needs DIV
+            "BinaryOperator.Divide": PrimOp.DIV,
+            "BinaryOperator.Mod": PrimOp.MOD,
             "BinaryOperator.BinaryAnd": PrimOp.AND,
             "BinaryOperator.BinaryOr": PrimOp.OR,
             "BinaryOperator.BinaryXor": PrimOp.XOR,

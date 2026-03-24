@@ -231,7 +231,7 @@ class _ECP5Mapper:
             self._map_lut(cell)
         elif op in (PrimOp.ADD, PrimOp.SUB):
             self._map_arithmetic(cell)
-        elif op == PrimOp.MUL:
+        elif op in (PrimOp.MUL, PrimOp.DIV, PrimOp.MOD):
             self._map_multiply(cell)
         elif op in (PrimOp.SHL, PrimOp.SHR, PrimOp.SSHR):
             self._map_shift(cell)

@@ -1,4 +1,18 @@
-"""Nosis command-line interface."""
+"""Nosis command-line interface.
+
+Entry point for the synthesis pipeline. Accepts one or more SystemVerilog
+or Verilog source files and runs the full pipeline:
+
+  1. Parse and elaborate via pyslang
+  2. Lower the elaborated AST to the Nosis IR
+  3. Optimize (constant folding, dead code elimination)
+  4. Map to ECP5 technology (TRELLIS_SLICE LUT4, TRELLIS_FF)
+  5. Emit nextpnr-compatible JSON
+
+Flags control optimization (--no-opt), output path (-o), top module
+selection (--top), preprocessor defines (-D), include paths (-I),
+and verbosity (--verbose, --stats).
+"""
 
 from __future__ import annotations
 
@@ -18,6 +32,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-D", "--define", action="append", default=[], help="preprocessor define (NAME or NAME=VALUE)")
     parser.add_argument("-I", "--include", action="append", default=[], help="include search directory")
     parser.add_argument("--no-opt", action="store_true", help="skip optimization passes")
+    parser.add_argument("--dump-ir", action="store_true", help="print the IR after lowering and exit (no tech mapping or JSON output)")
+    parser.add_argument("--check", action="store_true", help="parse and validate only — do not emit any output")
     parser.add_argument("--stats", action="store_true", help="print synthesis statistics")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose output")
     args = parser.parse_args(argv)
@@ -77,6 +93,27 @@ def main(argv: list[str] | None = None) -> int:
             print(f"opt: {t_opt - t_lower:.3f}s")
     else:
         t_opt = time.monotonic()
+
+    # --- Check mode: validate only, no output ---
+    if args.check:
+        print(f"check: {mod.name} — {mod.stats()['cells']} cells, {mod.stats()['nets']} nets, {len(mod.ports)} ports")
+        return 0
+
+    # --- Dump IR mode ---
+    if args.dump_ir:
+        print(f"module {mod.name}:")
+        print(f"  nets: {mod.stats()['nets']}")
+        print(f"  cells: {mod.stats()['cells']}")
+        print(f"  ports: {len(mod.ports)}")
+        print(f"  port list: {', '.join(sorted(mod.ports))}")
+        print(f"  stats: {mod.stats()}")
+        print()
+        for cell in mod.cells.values():
+            ins = ", ".join(f"{k}={v.name}" for k, v in cell.inputs.items())
+            outs = ", ".join(f"{k}={v.name}" for k, v in cell.outputs.items())
+            params = ", ".join(f"{k}={v}" for k, v in cell.params.items()) if cell.params else ""
+            print(f"  {cell.name}: {cell.op.name} ({ins}) -> ({outs}){f' [{params}]' if params else ''}")
+        return 0
 
     # --- Technology map ---
     from nosis.techmap import map_to_ecp5

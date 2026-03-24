@@ -285,12 +285,16 @@ def dead_code_eliminate(mod: Module) -> int:
 
 def run_default_passes(mod: Module) -> dict[str, int]:
     """Run the default optimization pipeline. Returns pass statistics."""
+    from nosis.cse import eliminate_common_subexpressions
+
     stats: dict[str, int] = {}
     stats["const_fold"] = constant_fold(mod)
     stats["identity"] = identity_simplify(mod)
+    stats["cse"] = eliminate_common_subexpressions(mod)
     stats["dce"] = dead_code_eliminate(mod)
     # Second round after DCE may expose more constants
     stats["const_fold_2"] = constant_fold(mod)
     stats["identity_2"] = identity_simplify(mod)
+    stats["cse_2"] = eliminate_common_subexpressions(mod)
     stats["dce_2"] = dead_code_eliminate(mod)
     return stats

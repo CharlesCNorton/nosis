@@ -505,6 +505,105 @@ class TestLanguageFeatures:
 
 
 # ---------------------------------------------------------------------------
+# Negative / structural tests
+# ---------------------------------------------------------------------------
+
+class TestStructural:
+    """Verify specific netlist properties that must hold for correctness."""
+
+    def test_ff_has_clock(self):
+        """Every FF cell must have a CLK input."""
+        result = parse_files([f"{RIME}/core/uart/uart_tx.sv"], top="uart_tx")
+        design = lower_to_ir(result, top="uart_tx")
+        mod = design.top_module()
+        for cell in mod.cells.values():
+            if cell.op == PrimOp.FF:
+                assert "CLK" in cell.inputs, f"FF {cell.name} has no CLK input"
+
+    def test_ff_has_d_input(self):
+        """Every FF cell must have a D input."""
+        result = parse_files([f"{RIME}/core/uart/uart_tx.sv"], top="uart_tx")
+        design = lower_to_ir(result, top="uart_tx")
+        mod = design.top_module()
+        for cell in mod.cells.values():
+            if cell.op == PrimOp.FF:
+                assert "D" in cell.inputs, f"FF {cell.name} has no D input"
+
+    def test_no_zero_width_nets(self):
+        """No net should have width 0."""
+        result = parse_files([f"{RIME}/core/uart/uart_tx.sv"], top="uart_tx")
+        design = lower_to_ir(result, top="uart_tx")
+        mod = design.top_module()
+        for net in mod.nets.values():
+            assert net.width > 0, f"net {net.name} has width 0"
+
+    def test_output_ports_exist_in_netlist(self):
+        """Every output port must appear in the JSON netlist."""
+        result = parse_files([f"{RIME}/core/uart/uart_tx.sv"], top="uart_tx")
+        design = lower_to_ir(result, top="uart_tx")
+        nl = map_to_ecp5(design)
+        text = emit_json_str(nl)
+        data = json.loads(text)
+        ports = data["modules"]["uart_tx"]["ports"]
+        assert "tx" in ports
+        assert ports["tx"]["direction"] == "output"
+
+    def test_cse_removes_duplicates(self):
+        """CSE should eliminate duplicate operations."""
+        from nosis.cse import eliminate_common_subexpressions
+        from nosis.ir import Module
+
+        mod = Module(name="test")
+        a = mod.add_net("a", 1)
+        b = mod.add_net("b", 1)
+        y1 = mod.add_net("y1", 1)
+        y2 = mod.add_net("y2", 1)
+
+        # Two identical AND cells on the same inputs
+        c1 = mod.add_cell("and1", PrimOp.AND)
+        mod.connect(c1, "A", a)
+        mod.connect(c1, "B", b)
+        mod.connect(c1, "Y", y1, direction="output")
+
+        c2 = mod.add_cell("and2", PrimOp.AND)
+        mod.connect(c2, "A", a)
+        mod.connect(c2, "B", b)
+        mod.connect(c2, "Y", y2, direction="output")
+
+        eliminated = eliminate_common_subexpressions(mod)
+        assert eliminated == 1
+        assert len(mod.cells) == 1  # only one AND cell remains
+
+    def test_sat_equivalence_on_small_design(self):
+        """SAT-based equivalence checking on 1-bit AND gates."""
+        from nosis.ir import Module
+
+        def _and_mod(name):
+            mod = Module(name=name)
+            a = mod.add_net("a", 1); b = mod.add_net("b", 1); y = mod.add_net("y", 1)
+            ac = mod.add_cell("a_p", PrimOp.INPUT, port_name="a"); mod.connect(ac, "Y", a, direction="output"); mod.ports["a"] = a
+            bc = mod.add_cell("b_p", PrimOp.INPUT, port_name="b"); mod.connect(bc, "Y", b, direction="output"); mod.ports["b"] = b
+            yc = mod.add_cell("y_p", PrimOp.OUTPUT, port_name="y"); mod.connect(yc, "A", y); mod.ports["y"] = y
+            c = mod.add_cell("and0", PrimOp.AND); mod.connect(c, "A", a); mod.connect(c, "B", b); mod.connect(c, "Y", y, direction="output")
+            return mod
+
+        from nosis.equiv import check_equivalence
+        r = check_equivalence(_and_mod("a"), _and_mod("b"), max_exhaustive_bits=0)
+        # Should use SAT (forced by max_exhaustive_bits=0) or random
+        assert r.equivalent
+
+    def test_const_fold_and_cse_on_real_design(self):
+        """Optimization should reduce cell count on rime_v."""
+        result = parse_files([f"{RIME}/core/cpu/rime_v.sv"], top="rime_v")
+        design = lower_to_ir(result, top="rime_v")
+        mod = design.top_module()
+        before = mod.stats()["cells"]
+        run_default_passes(mod)
+        after = mod.stats()["cells"]
+        assert after < before * 0.9, f"expected > 10% reduction: {before} -> {after}"
+
+
+# ---------------------------------------------------------------------------
 # Strict error handling
 # ---------------------------------------------------------------------------
 

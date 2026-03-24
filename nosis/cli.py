@@ -173,6 +173,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {cell_type}: {nl_stats[cell_type]}")
         print(f"ECP5 nets: {nl_stats['nets']}")
         print(f"ports: {nl_stats['ports']}")
+        # Resource utilization
+        from nosis.resources import report_utilization
+        device_size = "25k"  # default; could be derived from --target
+        report = report_utilization(netlist, device_size)
+        for line in report.summary_lines():
+            print(line)
         print(f"total: {t_total:.3f}s")
 
     return 0

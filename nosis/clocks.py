@@ -28,6 +28,7 @@ __all__ = [
     "ClockDomain",
     "ClockCrossing",
     "analyze_clock_domains",
+    "insert_synchronizers",
 ]
 
 
@@ -124,3 +125,61 @@ def analyze_clock_domains(mod: Module) -> tuple[list[ClockDomain], list[ClockCro
                     worklist.append(inp_net)
 
     return domains, crossings
+
+
+def insert_synchronizers(mod: Module, crossings: list[ClockCrossing]) -> int:
+    """Insert 2-FF synchronizer cells at clock domain crossings.
+
+    For each crossing, inserts two back-to-back FFs clocked by the
+    destination domain's clock. The first FF captures the asynchronous
+    signal, the second resolves metastability.
+
+    Returns the number of synchronizer pairs inserted.
+    """
+    inserted = 0
+    counter = 0
+
+    for crossing in crossings:
+        dest_ff = mod.cells.get(crossing.dest_ff)
+        if dest_ff is None:
+            continue
+        dest_clk = dest_ff.inputs.get("CLK")
+        if dest_clk is None:
+            continue
+        crossing_net = mod.nets.get(crossing.net)
+        if crossing_net is None:
+            continue
+
+        counter += 1
+        # Sync FF stage 1
+        sync1_q = mod.add_net(f"_sync1_q_{counter}", crossing_net.width)
+        sync1 = mod.add_cell(f"_sync1_{counter}", PrimOp.FF)
+        mod.connect(sync1, "CLK", dest_clk)
+        mod.connect(sync1, "D", crossing_net)
+        mod.connect(sync1, "Q", sync1_q, direction="output")
+        sync1.attributes["cdc_sync"] = "stage1"
+
+        # Sync FF stage 2
+        sync2_q = mod.add_net(f"_sync2_q_{counter}", crossing_net.width)
+        sync2 = mod.add_cell(f"_sync2_{counter}", PrimOp.FF)
+        mod.connect(sync2, "CLK", dest_clk)
+        mod.connect(sync2, "D", sync1_q)
+        mod.connect(sync2, "Q", sync2_q, direction="output")
+        sync2.attributes["cdc_sync"] = "stage2"
+
+        # Rewire destination FF's D input through the synchronizer
+        d_net = dest_ff.inputs.get("D")
+        if d_net and d_net.name == crossing.net:
+            dest_ff.inputs["D"] = sync2_q
+        else:
+            # Crossing goes through combinational logic — rewire the
+            # first consumer of the crossing net in the destination domain
+            for other in mod.cells.values():
+                if other is dest_ff or other is sync1 or other is sync2:
+                    continue
+                for pname, pnet in list(other.inputs.items()):
+                    if pnet.name == crossing.net:
+                        other.inputs[pname] = sync2_q
+        inserted += 1
+
+    return inserted

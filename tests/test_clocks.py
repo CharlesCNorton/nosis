@@ -1,7 +1,7 @@
 """Tests for nosis.clocks — clock domain analysis."""
 
 from nosis.ir import Module, PrimOp
-from nosis.clocks import analyze_clock_domains
+from nosis.clocks import analyze_clock_domains, insert_synchronizers
 
 
 def test_single_domain():
@@ -163,3 +163,35 @@ def test_domain_output_nets_tracked():
     domains, _ = analyze_clock_domains(mod)
     assert len(domains) == 1
     assert "q" in domains[0].output_nets
+
+
+def test_insert_synchronizers():
+    """Synchronizer insertion must add 2 FFs per crossing."""
+    mod = Module(name="test")
+    clk_a = mod.add_net("clk_a", 1)
+    clk_b = mod.add_net("clk_b", 1)
+    d = mod.add_net("d", 1)
+    q1 = mod.add_net("q1", 1)
+    q2 = mod.add_net("q2", 1)
+    ff1 = mod.add_cell("ff1", PrimOp.FF)
+    mod.connect(ff1, "CLK", clk_a)
+    mod.connect(ff1, "D", d)
+    mod.connect(ff1, "Q", q1, direction="output")
+    ff2 = mod.add_cell("ff2", PrimOp.FF)
+    mod.connect(ff2, "CLK", clk_b)
+    mod.connect(ff2, "D", q1)
+    mod.connect(ff2, "Q", q2, direction="output")
+
+    _, crossings = analyze_clock_domains(mod)
+    assert len(crossings) == 1
+
+    cells_before = len(mod.cells)
+    inserted = insert_synchronizers(mod, crossings)
+    assert inserted == 1
+    assert len(mod.cells) == cells_before + 2  # 2 sync FFs added
+
+    # Sync FFs should be tagged
+    sync_cells = [c for c in mod.cells.values() if c.attributes.get("cdc_sync")]
+    assert len(sync_cells) == 2
+    stages = {c.attributes["cdc_sync"] for c in sync_cells}
+    assert stages == {"stage1", "stage2"}

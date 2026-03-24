@@ -16,6 +16,8 @@ from nosis.ir import Cell, Module, PrimOp
 __all__ = [
     "infer_brams",
     "infer_memory_ports",
+    "detect_write_mode",
+    "infer_output_register",
 ]
 
 
@@ -137,5 +139,97 @@ def infer_memory_ports(mod: Module) -> int:
         cell.params["mem_write_ports"] = len(write_addrs)
         cell.params["mem_dual_port"] = len(read_addrs) > 0 and len(write_addrs) > 0
         annotated += 1
+
+    return annotated
+
+
+def detect_write_mode(mod: Module) -> int:
+    """Detect read-before-write vs write-before-read for MEMORY cells.
+
+    When read and write addresses are the same net, the ordering determines
+    the DP16KD WRITEMODE parameter:
+    - NORMAL: read returns the old value (read-before-write)
+    - WRITETHROUGH: read returns the new value (write-before-write)
+
+    Heuristic: if the write data net is derived from the read data net
+    (feedback loop), assume write-through. Otherwise assume read-first.
+
+    Sets ``write_mode`` in cell params. Returns cells annotated.
+    """
+    annotated = 0
+
+    for cell in mod.cells.values():
+        if cell.op != PrimOp.MEMORY:
+            continue
+
+        raddr = cell.inputs.get("RADDR")
+        waddr = cell.inputs.get("WADDR")
+        wdata = cell.inputs.get("WDATA")
+        rdata_nets = list(cell.outputs.values())
+
+        mode = "NORMAL"
+
+        if raddr and waddr and raddr.name == waddr.name:
+            # Same address — check for feedback from rdata to wdata
+            if wdata and rdata_nets:
+                rdata = rdata_nets[0]
+                # Walk backward from wdata to see if rdata is in the cone
+                visited: set[str] = set()
+                worklist = [wdata]
+                found_feedback = False
+                while worklist and not found_feedback:
+                    net = worklist.pop()
+                    if net.name in visited:
+                        continue
+                    visited.add(net.name)
+                    if net.name == rdata.name:
+                        found_feedback = True
+                        break
+                    if net.driver and net.driver.op not in (PrimOp.FF, PrimOp.INPUT, PrimOp.CONST):
+                        for inp in net.driver.inputs.values():
+                            if inp.name not in visited:
+                                worklist.append(inp)
+                if found_feedback:
+                    mode = "WRITETHROUGH"
+
+        cell.params["write_mode"] = mode
+        annotated += 1
+
+    return annotated
+
+
+def infer_output_register(mod: Module) -> int:
+    """Infer BRAM output registers when an FF directly reads the data port.
+
+    When a MEMORY's read data output feeds directly into an FF's D input
+    (same clock), the FF can be absorbed into the DP16KD by setting
+    REGMODE to OUTREG. This saves a fabric FF.
+
+    Sets ``output_register`` and ``output_ff`` in cell params.
+    Returns the number of BRAMs annotated.
+    """
+    annotated = 0
+
+    for cell in mod.cells.values():
+        if cell.op != PrimOp.MEMORY:
+            continue
+
+        rdata_nets = list(cell.outputs.values())
+        if not rdata_nets:
+            continue
+        rdata = rdata_nets[0]
+
+        for other in mod.cells.values():
+            if other.op != PrimOp.FF:
+                continue
+            d_net = other.inputs.get("D")
+            if d_net and d_net.name == rdata.name:
+                ff_clk = other.inputs.get("CLK")
+                mem_clk = cell.inputs.get("CLK")
+                if ff_clk and mem_clk and ff_clk.name == mem_clk.name:
+                    cell.params["output_register"] = True
+                    cell.params["output_ff"] = other.name
+                    annotated += 1
+                    break
 
     return annotated

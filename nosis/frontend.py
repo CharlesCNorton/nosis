@@ -790,7 +790,174 @@ class _Lowerer:
             elif kind == "SymbolKind.ProceduralBlock":
                 self.lower_procedural_block(node)
 
+            elif kind == "SymbolKind.Instance":
+                self._lower_sub_instance(node)
+
         body.visit(walk_member)
+
+    def _lower_sub_instance(self, inst: Any) -> None:
+        """Lower a sub-module instance by recursively lowering its body
+        and connecting port nets to the parent module."""
+        sub_body = inst.body
+        sub_name = inst.name  # instance name (e.g., "RX", "SPI")
+        mod_name = sub_body.name  # module name (e.g., "uart_rx")
+
+        # Skip ECP5 vendor primitives — they're black boxes
+        if mod_name in (
+            "USRMCLK", "GSR", "SGSR", "PUR", "JTAGG", "DTR", "OSCG",
+            "EHXPLLL", "EHXPLLJ", "CLKDIVF", "DCCA", "DCC", "SEDGA",
+            "EXTREFB", "TSALL",
+        ):
+            return
+
+        # Create a prefix for all nets/cells in this sub-instance
+        prefix = f"{sub_name}."
+
+        # Save current counter state to restore after sub-lowering
+        saved_net_counter = self._net_counter
+        saved_cell_counter = self._cell_counter
+
+        # Create a sub-lowerer that uses prefixed names
+        class _SubLowerer(_Lowerer):
+            def __init__(self2, mod, prefix):
+                super().__init__(mod)
+                self2._prefix = prefix
+                self2._net_counter = saved_net_counter
+                self2._cell_counter = saved_cell_counter
+
+            def _fresh_net(self2, name_prefix, width):
+                name = f"${self2._prefix}{name_prefix}_{self2._net_counter}"
+                self2._net_counter += 1
+                return self2.mod.add_net(name, width)
+
+            def _fresh_cell(self2, name_prefix, op, src="", **params):
+                name = f"${self2._prefix}{name_prefix}_{self2._cell_counter}"
+                self2._cell_counter += 1
+                return self2.mod.add_cell(name, op, src=src, **params)
+
+            def _get_or_create_net(self2, name, width):
+                prefixed = f"{self2._prefix}{name}"
+                if prefixed in self2.mod.nets:
+                    existing = self2.mod.nets[prefixed]
+                    if existing.width != width:
+                        return self2._fresh_net(f"{name}_w{width}", width)
+                    return existing
+                return self2.mod.add_net(prefixed, width)
+
+        sub = _SubLowerer(self.mod, prefix)
+
+        # Lower the sub-instance body (variables, parameters, procedural blocks)
+        # but NOT ports — we wire those manually below
+        def walk_sub(node):
+            kind = str(node.kind)
+            if kind == "SymbolKind.Variable":
+                w = sub._bit_width(node)
+                t = node.type if hasattr(node, "type") else None
+                is_array = (
+                    t is not None
+                    and getattr(t, "bitWidth", None) == 0
+                    and hasattr(t, "fixedRange")
+                    and hasattr(t, "elementType")
+                )
+                if is_array:
+                    elem_type = t.elementType
+                    elem_w = getattr(elem_type, "bitWidth", 0)
+                    rng = t.fixedRange
+                    left = getattr(rng, "left", 0)
+                    right = getattr(rng, "right", 0)
+                    depth = abs(right - left) + 1
+                    if depth > 0 and elem_w > 0:
+                        rdata_net = sub._fresh_net(f"mem_{node.name}_rdata", elem_w)
+                        mem_cell = sub._fresh_cell(
+                            f"mem_{node.name}", PrimOp.MEMORY,
+                            depth=depth, width=elem_w, mem_name=f"{prefix}{node.name}",
+                        )
+                        self.mod.connect(mem_cell, "RDATA", rdata_net, direction="output")
+                        sub._get_or_create_net(node.name, elem_w)
+                else:
+                    sub._get_or_create_net(node.name, w)
+            elif kind == "SymbolKind.Net":
+                sub._get_or_create_net(node.name, sub._bit_width(node))
+            elif kind == "SymbolKind.Parameter":
+                w = sub._bit_width(node)
+                if node.value is not None:
+                    int_val = _svint_to_int(node.value)
+                    net = sub._get_or_create_net(node.name, w)
+                    if net.driver is None:
+                        cell = sub._fresh_cell(f"param_{node.name}", PrimOp.CONST, value=int_val, width=w)
+                        self.mod.connect(cell, "Y", net, direction="output")
+            elif kind == "SymbolKind.TransparentMember":
+                if hasattr(node, "value") and node.value is not None:
+                    int_val = _svint_to_int(node.value)
+                    w = sub._bit_width(node) if hasattr(node, "type") else 32
+                    net = sub._get_or_create_net(node.name, w)
+                    if net.driver is None:
+                        cell = sub._fresh_cell(f"enum_{node.name}", PrimOp.CONST, value=int_val, width=w)
+                        self.mod.connect(cell, "Y", net, direction="output")
+            elif kind == "SymbolKind.ContinuousAssign":
+                assign_expr = getattr(node, "body", None) or getattr(node, "assignment", None)
+                if assign_expr is not None:
+                    sub.lower_expr(assign_expr)
+            elif kind == "SymbolKind.ProceduralBlock":
+                sub.lower_procedural_block(node)
+            elif kind == "SymbolKind.Instance":
+                # Nested sub-instances — recurse
+                sub._lower_sub_instance_nested(node, prefix)
+
+        # Monkey-patch nested instance handler
+        def _lower_nested(nested_inst, parent_prefix):
+            nested_name = nested_inst.name
+            nested_body = nested_inst.body
+            nested_mod_name = nested_body.name
+            if nested_mod_name in (
+                "USRMCLK", "GSR", "SGSR", "PUR", "JTAGG", "DTR", "OSCG",
+                "EHXPLLL", "EHXPLLJ", "CLKDIVF", "DCCA", "DCC", "SEDGA",
+                "EXTREFB", "TSALL",
+            ):
+                return
+            # For now, skip deeply nested instances — flatten only one level
+            pass
+
+        sub._lower_sub_instance_nested = _lower_nested
+
+        sub_body.visit(walk_sub)
+
+        # Update parent counters
+        self._net_counter = sub._net_counter
+        self._cell_counter = sub._cell_counter
+
+        # Wire port connections: parent net <-> sub-instance net
+        for conn in inst.portConnections:
+            port = conn.port
+            port_name = port.name
+            direction = str(port.direction)
+            w = sub._bit_width(port)
+
+            # The sub-instance's internal net for this port
+            sub_net_name = f"{prefix}{port_name}"
+            sub_net = self.mod.nets.get(sub_net_name)
+            if sub_net is None:
+                sub_net = self.mod.add_net(sub_net_name, w)
+
+            # The expression on the parent side of the connection
+            expr = conn.internalExpr if hasattr(conn, "internalExpr") else None
+            if expr is None:
+                continue
+
+            parent_net = self.lower_expr(expr)
+
+            # Wire based on port direction:
+            # Input port: parent drives sub-instance net
+            # Output port: sub-instance drives parent net
+            if "In" in direction and "Out" not in direction:
+                # Parent -> sub: sub_net should be driven by parent_net
+                # If sub_net has no driver, point it at the parent driver
+                if sub_net.driver is None and parent_net.driver is not None:
+                    sub_net.driver = parent_net.driver
+            elif "Out" in direction:
+                # Sub -> parent: parent_net should be driven by sub_net's driver
+                if parent_net.driver is None and sub_net.driver is not None:
+                    parent_net.driver = sub_net.driver
 
 
 def lower_to_ir(result: ParseResult, *, top: str | None = None) -> Design:

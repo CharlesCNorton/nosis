@@ -1,8 +1,5 @@
 # Nosis — Cure List
 
-All 73 items complete. 479 tests passing.
-
-## Optimization (1-16)
 1. Dual-LUT mapper: LUT0+LUT1 per TRELLIS_SLICE — SoC 45K→25K LUTs
 2. identity_simplify: redirect all consumers before clearing bypassed cell
 3. Fresh-copy lowering for tech mapping (un-DCE'd IR)
@@ -19,16 +16,12 @@ All 73 items complete. 479 tests passing.
 14. 3-input LUT packing verified through iterative composition
 15. Technology-aware Boolean optimization with LUT4 input budget
 16. Yosys ratio improved from 6.5x to ~3-4x (45K→30K SoC)
-
-## Inference (17-22)
 17. BRAM write mode: read-before-write vs write-through from feedback analysis
 18. BRAM output register: absorb FF into DP16KD REGMODE=OUTREG
 19. MAC detection: MUL→ADD→FF feedback for ALU54B
 20. Retiming clock verification: warn on cross-domain FF chains
 21. Backward retiming through single-fanin combinational cells
 22. CDC synchronizer insertion: 2-FF pairs with stage tags
-
-## Analysis (23-41)
 23. SDC false_path exclusion with get_false_path_ports/is_path_excluded
 24. Per-pin LUT4 delay model (A=0.33..D=0.42 ns)
 25. Toggle rate estimation carries FF state between simulation vectors
@@ -48,12 +41,10 @@ All 73 items complete. 479 tests passing.
 39. Specify: regex-based split on ") =" avoiding "=>" breakage
 40. Specify: min:typ:max delay parsing (uses typical value)
 41. CellMappingCache and build_cell_mapping_cache for incremental remap
-
-## Language (42-53)
 42. AreaIndependent: technology-neutral area metric
 43. _svint_to_int: signed negative literals and two's complement
-44. for loops: slang unrolls during elaboration (no IR-level handler needed)
-45. function/task: slang inlines (no IR-level handler needed)
+44. for loops: slang unrolls during elaboration
+45. function/task: slang inlines
 46. casez/casex: slang resolves don't-cares before lowering
 47. Multi-dimensional arrays: flattened in frontend
 48. Packed structs: handled via slang bitWidth flattening
@@ -62,8 +53,6 @@ All 73 items complete. 479 tests passing.
 51. Design.eliminate_dead_modules(): remove unreachable modules
 52. ECP5 stubs: FIFO16KD, PDPW16KD, SP16KD, ALU54B, TRELLIS_COMB, DCUA
 53. emit_verilog(): structural Verilog output from IR
-
-## Infrastructure (54-73)
 54. CLI: multiple --top support (first as primary)
 55. On-disk cache: keyed by source file SHA-256 hashes
 56. Parallel passes: ThreadPoolExecutor with max 4 workers

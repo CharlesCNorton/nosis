@@ -151,11 +151,12 @@ def test_mux_merge_never_increases_cells():
 
 
 def test_soc_lut_count_regression():
-    """SoC LUT count must not regress above 9200 slices."""
+    """SoC LUT count after full pipeline must not regress above 4500 slices."""
     import os
     os.environ.setdefault("NOSIS_PYSLANG_PATH", "D:/slang/build/lib")
     from nosis.frontend import parse_files, lower_to_ir
     from nosis.techmap import map_to_ecp5
+    from nosis.slicepack import pack_slices
     from tests.conftest import RIME_SOC_SOURCES
 
     r = parse_files(RIME_SOC_SOURCES, top="top")
@@ -163,5 +164,25 @@ def test_soc_lut_count_regression():
     m = d.top_module()
     run_default_passes(m)
     nl = map_to_ecp5(d)
+    pack_slices(nl)
     luts = nl.stats().get("TRELLIS_SLICE", 0)
-    assert luts < 9200, f"SoC LUT count regressed to {luts}"
+    assert luts < 4500, f"SoC LUT count regressed to {luts}"
+
+
+def test_uart_tx_lut_count():
+    """uart_tx after full pipeline should be under 25 slices."""
+    import os
+    os.environ.setdefault("NOSIS_PYSLANG_PATH", "D:/slang/build/lib")
+    from nosis.frontend import parse_files, lower_to_ir
+    from nosis.techmap import map_to_ecp5
+    from nosis.slicepack import pack_slices
+    from tests.conftest import RIME_UART_TX
+
+    r = parse_files([RIME_UART_TX], top="uart_tx")
+    d = lower_to_ir(r, top="uart_tx")
+    m = d.top_module()
+    run_default_passes(m)
+    nl = map_to_ecp5(d)
+    pack_slices(nl)
+    luts = nl.stats().get("TRELLIS_SLICE", 0)
+    assert luts < 25, f"uart_tx LUT count regressed to {luts}"

@@ -338,13 +338,123 @@ class _ECP5Mapper:
             lut.ports["F0"] = [out_bits[i] if i < len(out_bits) else self.nl.alloc_bit()]
 
     def _map_arithmetic(self, cell: Cell) -> None:
-        """Map ADD/SUB to chains of TRELLIS_SLICE in CCU2C mode."""
-        # For now: decompose into per-bit LUT4 with carry chain emulation
-        # Full CCU2C mapping is a later optimization
-        self._map_lut(cell)
+        """Map ADD/SUB to CCU2C carry chain cells.
+
+        Each CCU2C handles 2 bits of addition with carry propagation.
+        An N-bit adder uses ceil(N/2) CCU2C cells.
+        """
+        a_net = cell.inputs.get("A")
+        b_net = cell.inputs.get("B")
+        out_nets = list(cell.outputs.values())
+        if not a_net or not b_net or not out_nets:
+            self._map_lut(cell)
+            return
+
+        out_net = out_nets[0]
+        width = out_net.width
+        if width < 2:
+            self._map_lut(cell)
+            return
+
+        a_bits = self._get_bits(a_net)
+        b_bits = self._get_bits(b_net)
+        out_bits = self._get_bits(out_net)
+        is_sub = (cell.op == PrimOp.SUB)
+
+        # For subtraction, B inputs are inverted and cin=1
+        # LUT INIT for XOR (a ^ b): 0x6666
+        # LUT INIT for XNOR (a ^ ~b) for subtraction: 0x9999
+        lut_init = "0x9999" if is_sub else "0x6666"
+
+        prev_cout = "1" if is_sub else "0"  # carry-in
+
+        for i in range(0, width, 2):
+            ccu2c = self.nl.add_cell(self._fresh_name("ccu2c"), "CCU2C")
+            if cell.src:
+                ccu2c.attributes["src"] = cell.src
+            ccu2c.parameters["INIT0"] = lut_init
+            ccu2c.parameters["INIT1"] = lut_init
+            ccu2c.parameters["INJECT1_0"] = "NO"
+            ccu2c.parameters["INJECT1_1"] = "NO"
+
+            # First bit
+            a0 = a_bits[i] if i < len(a_bits) else "0"
+            b0 = b_bits[i] if i < len(b_bits) else "0"
+            ccu2c.ports["A0"] = [a0]
+            ccu2c.ports["B0"] = [b0]
+            ccu2c.ports["C0"] = [a0]
+            ccu2c.ports["D0"] = [b0]
+            ccu2c.ports["S0"] = [out_bits[i] if i < len(out_bits) else self.nl.alloc_bit()]
+
+            # Second bit (if exists)
+            if i + 1 < width:
+                a1 = a_bits[i + 1] if (i + 1) < len(a_bits) else "0"
+                b1 = b_bits[i + 1] if (i + 1) < len(b_bits) else "0"
+            else:
+                a1, b1 = "0", "0"
+            ccu2c.ports["A1"] = [a1]
+            ccu2c.ports["B1"] = [b1]
+            ccu2c.ports["C1"] = [a1]
+            ccu2c.ports["D1"] = [b1]
+            ccu2c.ports["S1"] = [out_bits[i + 1] if (i + 1) < len(out_bits) else self.nl.alloc_bit()]
+
+            # Carry chain
+            ccu2c.ports["CIN"] = [prev_cout]
+            cout = self.nl.alloc_bit()
+            ccu2c.ports["COUT"] = [cout]
+            prev_cout = cout
 
     def _map_multiply(self, cell: Cell) -> None:
-        """Map MUL — placeholder for MULT18X18D inference."""
+        """Map MUL to MULT18X18D when tagged by DSP inference, else to LUTs."""
+        if cell.params.get("dsp_config") == "MULT18X18D":
+            a_net = cell.inputs.get("A")
+            b_net = cell.inputs.get("B")
+            out_nets = list(cell.outputs.values())
+            if a_net and b_net and out_nets:
+                out_net = out_nets[0]
+                a_bits = self._get_bits(a_net)
+                b_bits = self._get_bits(b_net)
+                out_bits = self._get_bits(out_net)
+
+                dsp = self.nl.add_cell(self._fresh_name("mult"), "MULT18X18D")
+                if cell.src:
+                    dsp.attributes["src"] = cell.src
+                dsp.parameters["REG_INPUTA_CLK"] = "NONE"
+                dsp.parameters["REG_INPUTB_CLK"] = "NONE"
+                dsp.parameters["REG_OUTPUT_CLK"] = "NONE"
+                dsp.parameters["SOURCEB_MODE"] = "B_INPUT"
+
+                # Wire A input (up to 18 bits)
+                for i in range(18):
+                    bit = a_bits[i] if i < len(a_bits) else "0"
+                    dsp.ports[f"A{i}"] = [bit]
+
+                # Wire B input (up to 18 bits)
+                for i in range(18):
+                    bit = b_bits[i] if i < len(b_bits) else "0"
+                    dsp.ports[f"B{i}"] = [bit]
+
+                # Wire output (up to 36 bits)
+                for i in range(36):
+                    bit = out_bits[i] if i < len(out_bits) else self.nl.alloc_bit()
+                    dsp.ports[f"P{i}"] = [bit]
+
+                # Unused control signals
+                dsp.ports["CLK0"] = ["0"]
+                dsp.ports["CLK1"] = ["0"]
+                dsp.ports["CLK2"] = ["0"]
+                dsp.ports["CLK3"] = ["0"]
+                dsp.ports["CE0"] = ["1"]
+                dsp.ports["CE1"] = ["1"]
+                dsp.ports["CE2"] = ["1"]
+                dsp.ports["CE3"] = ["1"]
+                dsp.ports["RST0"] = ["0"]
+                dsp.ports["RST1"] = ["0"]
+                dsp.ports["RST2"] = ["0"]
+                dsp.ports["RST3"] = ["0"]
+                dsp.ports["SIGNEDA"] = ["0"]
+                dsp.ports["SIGNEDB"] = ["0"]
+                return
         self._map_lut(cell)
 
     def _map_shift(self, cell: Cell) -> None:

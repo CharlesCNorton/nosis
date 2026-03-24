@@ -115,6 +115,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {cell.name}: {cell.op.name} ({ins}) -> ({outs}){f' [{params}]' if params else ''}")
         return 0
 
+    # --- Inference (annotate cells for specialized mapping) ---
+    from nosis.bram import infer_brams
+    from nosis.dsp import infer_dsps
+    from nosis.carry import infer_carry_chains
+    from nosis.fsm import extract_fsms, annotate_fsm_cells
+
+    n_bram = infer_brams(mod)
+    n_dsp = infer_dsps(mod)
+    n_carry = infer_carry_chains(mod)
+    fsms = extract_fsms(mod)
+    n_fsm = annotate_fsm_cells(mod, fsms)
+    t_infer = time.monotonic()
+    if args.verbose:
+        print(f"infer: bram={n_bram} dsp={n_dsp} carry={n_carry} fsm={n_fsm} ({len(fsms)} FSMs)")
+        print(f"infer: {t_infer - t_opt:.3f}s")
+
     # --- Technology map ---
     from nosis.techmap import map_to_ecp5
     netlist = map_to_ecp5(design)

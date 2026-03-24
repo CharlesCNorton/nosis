@@ -90,6 +90,13 @@ class TestUartTx:
         annotate_fsm_cells(mod, fsms)
         assert set(mod.cells.keys()) == cells_before
 
+    def test_ccu2c_for_arithmetic(self):
+        """uart_tx has counters — ADD operations should produce CCU2C cells."""
+        design, _ = self._synth(optimize=False)
+        nl = map_to_ecp5(design)
+        ccu2c_cells = [c for c in nl.cells.values() if c.cell_type == "CCU2C"]
+        assert len(ccu2c_cells) > 0, "expected CCU2C cells for counter arithmetic"
+
 
 class TestUartRx:
     SRC = [f"{RIME}/core/uart/uart_rx.sv"]
@@ -375,7 +382,7 @@ class TestPicoRV32Soc:
         for name, cell in mod_json["cells"].items():
             assert "type" in cell
             assert "connections" in cell
-            assert cell["type"] in ("TRELLIS_SLICE", "TRELLIS_FF"), f"unexpected cell type: {cell['type']}"
+            assert cell["type"] in ("TRELLIS_SLICE", "TRELLIS_FF", "CCU2C", "MULT18X18D"), f"unexpected cell type: {cell['type']}"
 
 
 # ---------------------------------------------------------------------------

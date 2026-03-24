@@ -219,8 +219,30 @@ def main(argv: list[str] | None = None) -> int:
         json_path = str(Path(args.output).resolve())
         bit_path = str(Path(args.ecppack).resolve())
         try:
+            import shutil
+            ecppack_cmd = shutil.which("ecppack")
+            if not ecppack_cmd:
+                # Search OSS CAD Suite paths
+                import os
+                for env_var in ("ICEPI_OSS_CAD_BIN", "OSS_CAD_BIN"):
+                    p = os.environ.get(env_var)
+                    if p:
+                        candidate = Path(p) / ("ecppack.exe" if os.name == "nt" else "ecppack")
+                        if candidate.exists():
+                            ecppack_cmd = str(candidate)
+                            break
+                for env_var in ("ICEPI_OSS_CAD_ROOT", "OSS_CAD_ROOT"):
+                    if ecppack_cmd:
+                        break
+                    p = os.environ.get(env_var)
+                    if p:
+                        candidate = Path(p) / "bin" / ("ecppack.exe" if os.name == "nt" else "ecppack")
+                        if candidate.exists():
+                            ecppack_cmd = str(candidate)
+            if not ecppack_cmd:
+                ecppack_cmd = "ecppack"
             subprocess.run(
-                ["ecppack", "--input", json_path, "--bit", bit_path],
+                [ecppack_cmd, "--input", json_path, "--bit", bit_path],
                 check=True, capture_output=True, text=True,
             )
             if args.verbose:
@@ -264,6 +286,11 @@ def main(argv: list[str] | None = None) -> int:
         area = calculate_area(netlist)
         timing = analyze_timing(mod)
         bench = {
+            "parse_s": round(t_parse - t0, 4),
+            "lower_s": round(t_lower - t_parse, 4),
+            "opt_s": round(t_opt - t_lower, 4),
+            "infer_s": round(t_infer - t_opt, 4),
+            "map_s": round(t_map - t_pack, 4),
             "total_s": round(t_total, 4),
             "cells": nl_stats.get("cells", 0),
             "luts": nl_stats.get("TRELLIS_SLICE", 0),

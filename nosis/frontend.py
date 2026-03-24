@@ -75,7 +75,7 @@ def _svint_to_int(val: Any) -> int:
     m = _VERILOG_LITERAL_RE.match(text)
     if m:
         width = int(m.group(1)) if m.group(1) else 0
-        signed = m.group(2) is not None  # 's' prefix
+        signed = m.group(2) is not None and m.group(2).lower() in ("s", "sh")
         base_char = m.group(3).lower()
         digits = m.group(4).replace("_", "").lower()
         digits = digits.replace("x", "0").replace("z", "0")

@@ -287,6 +287,94 @@ def emit_verilog(mod: Module) -> str:
             a = _verilog_id(cell.inputs.get("A", out_nets[0]).name)
             b = _verilog_id(cell.inputs.get("B", out_nets[0]).name)
             lines.append(f"  assign {out} = {s} ? {b} : {a};")
+        elif cell.op == PrimOp.MUL:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            b = _verilog_id(cell.inputs["B"].name) if "B" in cell.inputs else "0"
+            lines.append(f"  assign {out} = {a} * {b};")
+        elif cell.op == PrimOp.DIV:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            b = _verilog_id(cell.inputs["B"].name) if "B" in cell.inputs else "1"
+            lines.append(f"  assign {out} = {a} / {b};")
+        elif cell.op == PrimOp.MOD:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            b = _verilog_id(cell.inputs["B"].name) if "B" in cell.inputs else "1"
+            lines.append(f"  assign {out} = {a} % {b};")
+        elif cell.op == PrimOp.SHL:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            b = _verilog_id(cell.inputs["B"].name) if "B" in cell.inputs else "0"
+            lines.append(f"  assign {out} = {a} << {b};")
+        elif cell.op == PrimOp.SHR:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            b = _verilog_id(cell.inputs["B"].name) if "B" in cell.inputs else "0"
+            lines.append(f"  assign {out} = {a} >> {b};")
+        elif cell.op == PrimOp.SSHR:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            b = _verilog_id(cell.inputs["B"].name) if "B" in cell.inputs else "0"
+            lines.append(f"  assign {out} = $signed({a}) >>> {b};")
+        elif cell.op == PrimOp.EQ:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            b = _verilog_id(cell.inputs["B"].name) if "B" in cell.inputs else "0"
+            lines.append(f"  assign {out} = ({a} == {b});")
+        elif cell.op == PrimOp.NE:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            b = _verilog_id(cell.inputs["B"].name) if "B" in cell.inputs else "0"
+            lines.append(f"  assign {out} = ({a} != {b});")
+        elif cell.op == PrimOp.LT:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            b = _verilog_id(cell.inputs["B"].name) if "B" in cell.inputs else "0"
+            lines.append(f"  assign {out} = ({a} < {b});")
+        elif cell.op == PrimOp.LE:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            b = _verilog_id(cell.inputs["B"].name) if "B" in cell.inputs else "0"
+            lines.append(f"  assign {out} = ({a} <= {b});")
+        elif cell.op == PrimOp.GT:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            b = _verilog_id(cell.inputs["B"].name) if "B" in cell.inputs else "0"
+            lines.append(f"  assign {out} = ({a} > {b});")
+        elif cell.op == PrimOp.GE:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            b = _verilog_id(cell.inputs["B"].name) if "B" in cell.inputs else "0"
+            lines.append(f"  assign {out} = ({a} >= {b});")
+        elif cell.op == PrimOp.REDUCE_AND:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            lines.append(f"  assign {out} = &{a};")
+        elif cell.op == PrimOp.REDUCE_OR:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            lines.append(f"  assign {out} = |{a};")
+        elif cell.op == PrimOp.REDUCE_XOR:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            lines.append(f"  assign {out} = ^{a};")
+        elif cell.op == PrimOp.CONCAT:
+            parts = []
+            count = int(cell.params.get("count", 0))
+            for ci in range(count - 1, -1, -1):
+                inp = cell.inputs.get(f"I{ci}")
+                if inp:
+                    parts.append(_verilog_id(inp.name))
+            lines.append(f"  assign {out} = {{{', '.join(parts)}}};") if parts else None
+        elif cell.op == PrimOp.SLICE:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            offset = cell.params.get("offset", 0)
+            w = cell.params.get("width", 1)
+            lines.append(f"  assign {out} = {a}[{offset + w - 1}:{offset}];")
+        elif cell.op == PrimOp.ZEXT:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            lines.append(f"  assign {out} = {{{{0}}, {a}}};")
+        elif cell.op == PrimOp.SEXT:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            lines.append(f"  assign {out} = $signed({a});")
+        elif cell.op == PrimOp.REPEAT:
+            a = _verilog_id(cell.inputs["A"].name) if "A" in cell.inputs else "0"
+            n = cell.params.get("count", 1)
+            lines.append(f"  assign {out} = {{{n}{{{a}}}}};")
+        elif cell.op == PrimOp.PMUX:
+            lines.append(f"  // PMUX: {cell.name} (case statement)")
+        elif cell.op == PrimOp.LATCH:
+            d = _verilog_id(cell.inputs["D"].name) if "D" in cell.inputs else "0"
+            en = _verilog_id(cell.inputs.get("EN", cell.inputs.get("CLK", list(cell.inputs.values())[0] if cell.inputs else out_nets[0])).name)
+            lines.append(f"  always @(*) if ({en}) {out} = {d};")
+        elif cell.op == PrimOp.MEMORY:
+            lines.append(f"  // MEMORY: {cell.name} (depth={cell.params.get('depth', 0)}, width={cell.params.get('width', 0)})")
         elif cell.op == PrimOp.FF:
             d = _verilog_id(cell.inputs["D"].name) if "D" in cell.inputs else "0"
             clk = _verilog_id(cell.inputs["CLK"].name) if "CLK" in cell.inputs else "clk"

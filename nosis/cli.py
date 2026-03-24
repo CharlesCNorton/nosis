@@ -173,8 +173,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {cell_type}: {nl_stats[cell_type]}")
         print(f"ECP5 nets: {nl_stats['nets']}")
         print(f"ports: {nl_stats['ports']}")
-        # Resource utilization
-        from nosis.resources import report_utilization
+        # Area calculation and resource utilization
+        from nosis.resources import calculate_area, report_utilization
+        area = calculate_area(netlist)
+        for line in area.summary_lines():
+            print(line)
         device_size = "25k"  # default; could be derived from --target
         report = report_utilization(netlist, device_size)
         for line in report.summary_lines():

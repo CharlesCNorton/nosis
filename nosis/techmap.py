@@ -584,9 +584,10 @@ class _ECP5Mapper:
         default_bits = self._get_bits(a_net)
         s_bits = self._get_bits(s_net)
 
-        # For each output bit, build a priority MUX chain
+        # For each output bit, build a balanced MUX tree (log2 depth)
         for bit_idx in range(width):
-            current = default_bits[bit_idx] if bit_idx < len(default_bits) else "0"
+            # Collect all (select_bit, data_bit) pairs for this output bit
+            candidates: list[tuple] = []  # (sel_bit, data_bit)
             for sel_idx in range(count):
                 case_net = cell.inputs.get(f"I{sel_idx}")
                 if case_net is None:
@@ -594,29 +595,58 @@ class _ECP5Mapper:
                 case_bits = self._get_bits(case_net)
                 case_bit = case_bits[bit_idx] if bit_idx < len(case_bits) else "0"
                 sel_bit = s_bits[sel_idx] if sel_idx < len(s_bits) else "0"
+                candidates.append((sel_bit, case_bit))
 
-                # MUX: if sel_bit, use case_bit, else use current
+            default_bit = default_bits[bit_idx] if bit_idx < len(default_bits) else "0"
+
+            if not candidates:
+                if bit_idx < len(out_bits):
+                    out_ecp5 = self._get_net(out_net)
+                    out_ecp5.bits[bit_idx] = default_bit
+                continue
+
+            # Build balanced tree: pair up adjacent MUXes, reduce
+            # Start with leaf-level MUXes (each selects between default and one case)
+            level = []
+            for sel_bit, case_bit in candidates:
                 mux_out = self.nl.alloc_bit()
                 lut = self.nl.add_cell(self._fresh_name("pmux"), "TRELLIS_SLICE")
                 if cell.src:
                     lut.attributes["src"] = cell.src
-                # MUX INIT: A=sel, B=current(false), C=case(true) -> 0xCACA
                 lut.parameters["LUT0_INITVAL"] = "0xCACA"
                 lut.parameters["MODE"] = "LOGIC"
                 lut.parameters["GSR"] = "DISABLED"
                 lut.ports["A0"] = [sel_bit]
-                lut.ports["B0"] = [current]
+                lut.ports["B0"] = [default_bit]
                 lut.ports["C0"] = [case_bit]
                 lut.ports["D0"] = ["0"]
                 lut.ports["F0"] = [mux_out]
-                current = mux_out
+                level.append(mux_out)
 
-            # Final result for this bit
+            # Reduce tree: merge pairs with OR-select until one remains
+            while len(level) > 1:
+                next_level = []
+                for j in range(0, len(level), 2):
+                    if j + 1 < len(level):
+                        merged = self.nl.alloc_bit()
+                        lut = self.nl.add_cell(self._fresh_name("pmux_or"), "TRELLIS_SLICE")
+                        # OR gate: if either sub-tree selected, pass through
+                        lut.parameters["LUT0_INITVAL"] = "0xEEEE"
+                        lut.parameters["MODE"] = "LOGIC"
+                        lut.parameters["GSR"] = "DISABLED"
+                        lut.ports["A0"] = [level[j]]
+                        lut.ports["B0"] = [level[j + 1]]
+                        lut.ports["C0"] = ["0"]
+                        lut.ports["D0"] = ["0"]
+                        lut.ports["F0"] = [merged]
+                        next_level.append(merged)
+                    else:
+                        next_level.append(level[j])
+                level = next_level
+
             if bit_idx < len(out_bits):
-                # Reassign the output bit to the chain result
-                # This requires the netname entry to be updated
                 out_ecp5 = self._get_net(out_net)
-                out_ecp5.bits[bit_idx] = current
+                out_ecp5.bits[bit_idx] = level[0]
 
     def _map_repeat(self, cell: Cell) -> None:
         """Map repeat — wiring."""

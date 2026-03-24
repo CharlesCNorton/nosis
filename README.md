@@ -269,6 +269,50 @@ Nosis has been tested against real hardware designs from the [RIME](https://gith
 | Thaw (flash service) | 7 files | 2,424 | 9,111 | 3,328 | 244 ms |
 | PicoRV32 SoC | 13 files, full board image | 5,647 | 19,677 | 5,513 | 594 ms |
 
+## Analysis Passes
+
+Beyond synthesis, nosis provides analysis passes that run on the IR or mapped netlist:
+
+### Timing (`nosis/timing.py`)
+
+Static timing analysis using ECP5 cell-level delay models (-6 speed grade). Forward-propagation computes arrival times at every net. The critical path is traced from the highest-delay FF input or output port back through combinational logic. Reports max delay (ns), max frequency (MHz, logic-only), path depth, and per-cell-type delay breakdown.
+
+### Routing Estimation (`nosis/wirelength.py`)
+
+Wire-length model derived from cell count and net fanout. Base interconnect delay of 0.3 ns/hop, scaled by sqrt(fanout), with global routing overhead for high-fanout nets (>16 consumers). Combines with logic delay from timing.py for a total critical-path estimate including routing.
+
+### Area (`nosis/resources.py`)
+
+Exact physical area calculation from mapped cell counts. Each ECP5 slice holds 2 LUT4, 2 FF, 1 CCU2C. Slice count is the maximum of ceil(LUTs/2), ceil(FFs/2), and CCU2C count — the binding constraint. BRAM tiles are 1:1 with DP16KD. DSP tiles hold 2 MULT18X18D. Reports packing efficiency and the binding resource.
+
+### Power (`nosis/power.py`)
+
+Static and dynamic power estimation from ECP5 cell power model (1.1V core, -6 speed grade). Static power from leakage per cell type. Dynamic power from cell count, toggle rate (default 12.5%), and clock frequency. Per-cell-type breakdown.
+
+### Congestion (`nosis/congestion.py`)
+
+Fanout distribution analysis: histogram of net degrees, identification of high-fanout (>16) and very-high-fanout (>64) nets. Density score from weighted combination of average fanout, high-fanout percentage, and maximum fanout.
+
+### Clock Domains (`nosis/clocks.py`)
+
+Groups FFs by clock net. Detects clock domain crossings by tracing combinational logic cones from each FF's D input to find FFs in other domains. Reports domain count and crossing list.
+
+### Design Warnings (`nosis/warnings.py`)
+
+Multi-clock detection, undriven nets, floating output ports, high-fanout threshold violations. Returns categorized warnings.
+
+### Equivalence Checking (`nosis/equiv.py`)
+
+Three methods: exhaustive simulation (complete for ≤16 input bits), SAT-based via PySAT Glucose3 (CNF encoding of AND, OR, XOR, NOT, EQ, NE, MUX, LT, LE, GT, GE), and random simulation fallback. Counterexample extraction on non-equivalence.
+
+### Formal Verification (`nosis/formal.py`)
+
+Simulation-based bounded model checking. Assertion checking (output net equals expected value over N cycles). Reachability analysis (can an output ever produce a target value).
+
+### Constraints (`nosis/constraints.py`, `nosis/sdc.py`)
+
+LPF parsing: LOCATE (pin assignment), IOBUF (I/O standard, drive, pull, slew), FREQUENCY, SYSCONFIG. SDC parsing: create_clock, set_input_delay, set_output_delay, set_false_path. Port validation against the synthesized design.
+
 ## Repository Surface
 
 | File | Role |
@@ -406,6 +450,15 @@ Lint:
 ```
 ruff check .
 ```
+
+Generate API documentation:
+
+```
+pip install pdoc
+pdoc nosis --output-directory docs/
+```
+
+The generated HTML covers every module, class, function, and dataclass with their docstrings and inline examples.
 
 ## License
 

@@ -14,6 +14,26 @@ behavioral HDL and technology-mapped cells.
 comparison, bit manipulation, sequential elements, memory, constants,
 and ports. Every IR operation has well-defined semantics that can be
 evaluated in Python for simulation and equivalence checking.
+
+Example::
+
+    from nosis.ir import Design, Module, PrimOp
+
+    mod = Module(name="example")
+    a = mod.add_net("a", 8)
+    b = mod.add_net("b", 8)
+    y = mod.add_net("y", 8)
+
+    inp_a = mod.add_cell("inp_a", PrimOp.INPUT, port_name="a")
+    mod.connect(inp_a, "Y", a, direction="output")
+    mod.ports["a"] = a
+
+    add = mod.add_cell("add0", PrimOp.ADD)
+    mod.connect(add, "A", a)
+    mod.connect(add, "B", b)
+    mod.connect(add, "Y", y, direction="output")
+
+    print(mod.stats())  # {'nets': 3, 'cells': 2, 'ports': 1, 'ADD': 1, 'INPUT': 1}
 """
 
 from __future__ import annotations

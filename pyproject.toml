@@ -12,7 +12,8 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff"]
+dev = ["pytest", "ruff", "hypothesis"]
+docs = ["pdoc"]
 
 [project.scripts]
 nosis = "nosis.cli:main"

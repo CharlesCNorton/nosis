@@ -6,6 +6,19 @@ module is used by:
   - equiv.py (equivalence checking simulation)
 
 Any change to how a PrimOp behaves must be made here and nowhere else.
+
+Example::
+
+    from nosis.ir import PrimOp
+    from nosis.eval import eval_const_op
+
+    # 8-bit AND
+    result = eval_const_op(PrimOp.AND, {"A": 0xFF, "B": 0x0F}, {}, 8)
+    assert result == 0x0F
+
+    # MUX with sel=1 picks B
+    result = eval_const_op(PrimOp.MUX, {"S": 1, "A": 10, "B": 20}, {}, 8)
+    assert result == 20
 """
 
 from __future__ import annotations

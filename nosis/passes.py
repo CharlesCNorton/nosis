@@ -323,15 +323,18 @@ def remove_const_ffs(mod: Module) -> int:
 def run_default_passes(mod: Module) -> dict[str, int]:
     """Run the default optimization pipeline. Returns pass statistics."""
     from nosis.cse import eliminate_common_subexpressions
+    from nosis.boolopt import boolean_optimize
 
     stats: dict[str, int] = {}
     stats["const_fold"] = constant_fold(mod)
     stats["identity"] = identity_simplify(mod)
+    stats["bool_opt"] = boolean_optimize(mod)
     stats["const_ff"] = remove_const_ffs(mod)
     stats["cse"] = eliminate_common_subexpressions(mod)
     stats["dce"] = dead_code_eliminate(mod)
     stats["const_fold_2"] = constant_fold(mod)
     stats["identity_2"] = identity_simplify(mod)
+    stats["bool_opt_2"] = boolean_optimize(mod)
     stats["const_ff_2"] = remove_const_ffs(mod)
     stats["cse_2"] = eliminate_common_subexpressions(mod)
     stats["dce_2"] = dead_code_eliminate(mod)

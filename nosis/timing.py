@@ -15,6 +15,17 @@ ECP5 cell delays (typical, -6 speed grade, from Lattice timing model):
   TRELLIS_FF:     0.20 ns  (tCK→Q, clock to output)
   DP16KD:         2.40 ns  (tCO, BRAM read)
   MULT18X18D:     3.20 ns  (combinational multiply)
+
+Example::
+
+    from nosis.frontend import parse_files, lower_to_ir
+    from nosis.timing import analyze_timing
+
+    result = parse_files(["design.sv"], top="top")
+    design = lower_to_ir(result, top="top")
+    report = analyze_timing(design.top_module())
+    print(f"Critical path: {report.max_delay_ns:.2f} ns")
+    print(f"Max frequency: {report.max_frequency_mhz:.1f} MHz")
 """
 
 from __future__ import annotations

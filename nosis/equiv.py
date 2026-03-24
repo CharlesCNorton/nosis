@@ -8,6 +8,29 @@ true, the designs are not equivalent.
 Uses PySAT for the SAT solver backend (CNF formulation).
 Falls back to exhaustive simulation for small designs if PySAT is
 not available.
+
+Example::
+
+    from nosis.ir import Module, PrimOp
+    from nosis.equiv import check_equivalence
+
+    # Build two modules and check if they compute the same function
+    def make_and(name):
+        mod = Module(name=name)
+        a = mod.add_net("a", 1); b = mod.add_net("b", 1); y = mod.add_net("y", 1)
+        ac = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
+        mod.connect(ac, "Y", a, direction="output"); mod.ports["a"] = a
+        bc = mod.add_cell("b_p", PrimOp.INPUT, port_name="b")
+        mod.connect(bc, "Y", b, direction="output"); mod.ports["b"] = b
+        yc = mod.add_cell("y_p", PrimOp.OUTPUT, port_name="y")
+        mod.connect(yc, "A", y); mod.ports["y"] = y
+        c = mod.add_cell("g", PrimOp.AND)
+        mod.connect(c, "A", a); mod.connect(c, "B", b)
+        mod.connect(c, "Y", y, direction="output")
+        return mod
+
+    result = check_equivalence(make_and("a"), make_and("b"))
+    assert result.equivalent
 """
 
 from __future__ import annotations

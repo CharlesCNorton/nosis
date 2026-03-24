@@ -396,10 +396,20 @@ class _ECP5Mapper:
         out_bits = self._get_bits(out_net)
         is_sub = (cell.op == PrimOp.SUB)
 
-        # For subtraction, B inputs are inverted and cin=1
-        # LUT INIT for XOR (a ^ b): 0x6666
-        # LUT INIT for XNOR (a ^ ~b) for subtraction: 0x9999
-        lut_init = "0x9999" if is_sub else "0x6666"
+        # Base LUT INIT: XOR (a ^ b) = 0x6666, XNOR (a ^ ~b) for SUB = 0x9999
+        base_init = 0x9999 if is_sub else 0x6666
+
+        # Check if the output feeds a single consumer that can be absorbed
+        # into the CCU2C INIT (XOR with constant, NOT, etc.)
+        absorbed_op = None
+        if out_net.name in self._net_map:
+            pass  # can't easily check consumers at ECP5 level
+        # For now, check the IR cell params for a packed_lut_init hint
+        packed_init = cell.params.get("packed_lut_init")
+        if packed_init is not None:
+            base_init = int(packed_init) & 0xFFFF
+
+        lut_init = f"0x{base_init:04X}"
 
         prev_cout = "1" if is_sub else "0"  # carry-in
 

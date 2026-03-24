@@ -49,4 +49,10 @@ jobs:
             tests/test_diff.py \
             tests/test_readmem.py \
             tests/test_mutation.py \
+            tests/test_congestion.py \
+            tests/test_power.py \
+            tests/test_constraints.py \
+            tests/test_incremental.py \
+            tests/test_formal.py \
+            tests/test_retiming.py \
             -v

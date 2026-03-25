@@ -229,12 +229,22 @@ class _ECP5Mapper:
         if op == PrimOp.INPUT or op == PrimOp.OUTPUT:
             # Tri-state buffer inference for inout ports
             if op == PrimOp.INPUT and cell.params.get("inout"):
-                # Emit a BB (bidirectional buffer) cell for inout ports
+                # Emit a BB (bidirectional buffer) for inout ports.
+                # Look for an OUTPUT cell on the same port to find the drive data.
+                port_name = cell.params.get("port_name", "")
+                drive_bits: list[int | str] = ["0"]
+                tristate_bits: list[int | str] = ["1"]  # default: hi-Z
+                if self._ir_mod:
+                    for oc in self._ir_mod.cells.values():
+                        if oc.op == PrimOp.OUTPUT and oc.params.get("port_name") == port_name:
+                            for inp_net in oc.inputs.values():
+                                drive_bits = self._get_bits(inp_net)[:1] or ["0"]
+                            break
                 for out_net in cell.outputs.values():
                     ecp5_net = self._get_net(out_net)
                     bb = self.nl.add_cell(self._fresh_name("bb"), "BB")
-                    bb.ports["I"] = ["0"]
-                    bb.ports["T"] = ["1"]  # tristate by default
+                    bb.ports["I"] = drive_bits[:1]
+                    bb.ports["T"] = tristate_bits[:1]
                     bb.ports["O"] = ecp5_net.bits[:1] if ecp5_net.bits else ["0"]
                     bb.ports["B"] = ecp5_net.bits[:1] if ecp5_net.bits else ["0"]
             return  # handled as ports

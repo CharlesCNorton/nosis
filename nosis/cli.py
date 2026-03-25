@@ -44,6 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ecppack", help="run nextpnr + ecppack to produce a .bit bitstream file at this path")
     parser.add_argument("--device", default="25k", help="ECP5 device size (default: 25k)")
     parser.add_argument("--package", default="CABGA256", help="ECP5 package (default: CABGA256)")
+    parser.add_argument("--lpf", help="LPF constraint file for nextpnr pin assignments")
     parser.add_argument("--snapshot", help="save an IR snapshot for incremental compilation")
     parser.add_argument("--delta", help="compare against a previous IR snapshot and print delta")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose output")
@@ -249,11 +250,13 @@ def main(argv: list[str] | None = None) -> int:
         else:
             try:
                 # Run nextpnr: JSON -> textcfg
-                subprocess.run(
-                    [nextpnr_cmd, f"--{args.device}", "--package", args.package,
-                     "--json", str(json_path), "--textcfg", str(config_path)],
-                    check=True, capture_output=True, text=True,
-                )
+                nextpnr_args = [
+                    nextpnr_cmd, f"--{args.device}", "--package", args.package,
+                    "--json", str(json_path), "--textcfg", str(config_path),
+                ]
+                if args.lpf:
+                    nextpnr_args.extend(["--lpf", str(Path(args.lpf).resolve())])
+                subprocess.run(nextpnr_args, check=True, capture_output=True, text=True)
                 if args.verbose:
                     print(f"nextpnr: {config_path}")
                 # Run ecppack: textcfg -> bitstream
@@ -306,6 +309,11 @@ def main(argv: list[str] | None = None) -> int:
         from nosis.timing import analyze_timing
         timing = analyze_timing(mod)
         for line in timing.summary_lines():
+            print(line)
+        from nosis.power import estimate_power
+        freq = min(timing.max_frequency_mhz, 200.0) if timing.max_frequency_mhz > 0 else 25.0
+        power = estimate_power(netlist, frequency_mhz=freq)
+        for line in power.summary_lines():
             print(line)
         print(f"total: {t_total:.3f}s")
 

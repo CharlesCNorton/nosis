@@ -39,9 +39,9 @@ Validated against real hardware designs from the [RIME](https://github.com/Charl
 | Design | Source | LUT slices | FFs | CCU2C | Notes |
 |--------|--------|-----------|-----|-------|-------|
 | uart_tx | 1 file, 76 lines | 9 | 46 | 32 | 4-state FSM, baud rate counter |
-| uart_rx | 1 file, 79 lines | 10 | 47 | 32 | Mid-bit sampling, baud counter |
-| sdram_bridge | 1 file, 130 lines | 64 | 220 | 14 | 128-bit burst aggregator |
-| sdram_controller | 1 file, 350 lines | 58 | 180 | 18 | W9825G6KH 32 MB SDR controller |
+| uart_rx | 1 file, 79 lines | 16 | 47 | 32 | Mid-bit sampling, baud counter |
+| sdram_bridge | 1 file, 130 lines | 14 | 220 | 14 | 128-bit burst aggregator |
+| sdram_controller | 1 file, 350 lines | 64 | 180 | 18 | W9825G6KH 32 MB SDR controller |
 | rime_pcpi_crc32 | 1 file, 50 lines | 0 | 32 | 0 | PicoRV32 PCPI CRC32 coprocessor |
 | PicoRV32 SoC | 13 files | 3,202 | 891 | ~600 | RV32IMC + UART + SPI + SD + SDRAM |
 
@@ -242,7 +242,7 @@ All 30+ vendor primitives have stub declarations in `ecp5_prims.sv` for slang el
 
 ## Repository
 
-43 source modules, 47 test modules, 575 tests, 21,000 lines of Python.
+43 source modules, 47 test modules, 609 tests, 21,000 lines of Python.
 
 | Module | Role |
 |--------|------|
@@ -369,7 +369,7 @@ nosis input.sv --top top -o output.json --ecppack output.bit
 
 ## Development
 
-Full test suite (575 tests):
+Full test suite (609 tests):
 
 ```
 pytest tests/ -v

@@ -828,28 +828,6 @@ def _narrow_eq_width(mod: Module) -> int:
     return narrowed
 
 
-def _narrow_const_mux(mod: Module) -> int:
-    """Reduce MUX width when one input has constant bits matching the other.
-
-    For MUX(sel, A, B) where A and B are both CONST, and they share
-    identical bit values on some positions, those bit positions don't
-    need the MUX — they can be wired directly. This narrows the
-    effective MUX width.
-
-    When ALL bits are identical (A == B), the MUX is eliminated entirely
-    (already handled by merge_mux_chains). This handles partial matches.
-    """
-    narrowed = 0
-    # This optimization is already captured by the constant LUT simplification
-    # at the ECP5 level (simplify_constant_luts), which reduces truth tables
-    # when inputs are tied to constants. At the IR level, the MUX width
-    # reflects the data path width, which is correct.
-    #
-    # The remaining opportunity: when B is CONST and A is variable, the bits
-    # where B==0 can use AND(sel, A_bit) and the bits where B==1 can use
-    # OR(sel, A_bit), which are simpler than a full MUX. But the LUT4 truth
-    # table already captures this — the constant LUT simplification handles it.
-    return narrowed
 
 
 def run_default_passes(mod: Module) -> dict[str, int]:
@@ -871,11 +849,10 @@ def run_default_passes(mod: Module) -> dict[str, int]:
         dci = _eliminate_dont_care_inputs(mod)
         mm = merge_mux_chains(mod)
         mz = _simplify_mux_with_zero(mod)
-        mn = _narrow_const_mux(mod)
         ta = tech_aware_optimize(mod)
         dce = dead_code_eliminate(mod)
 
-        total = cf + ident + bo + cff + cse + fi + hit + dci + mm + mz + mn + ta + dce
+        total = cf + ident + bo + cff + cse + fi + hit + dci + mm + mz + ta + dce
         stats[f"round_{iteration}"] = total
 
         cur_cells = len(mod.cells)

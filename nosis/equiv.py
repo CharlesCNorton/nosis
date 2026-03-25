@@ -304,6 +304,52 @@ def _try_sat_equivalence(
             out_net = out_nets[0]
             width = out_net.width
 
+            # Wiring operations: propagate variables directly, no clauses needed
+            if cell.op in (PrimOp.CONCAT, PrimOp.SLICE, PrimOp.ZEXT, PrimOp.SEXT, PrimOp.REPEAT):
+                # These are pure wiring — output vars equal input vars (rearranged)
+                if cell.op == PrimOp.SLICE:
+                    src_vars = net_vars.get(cell.inputs["A"].name, []) if "A" in cell.inputs else []
+                    offset = int(cell.params.get("offset", 0))
+                    out_vars = []
+                    for i in range(width):
+                        src_idx = offset + i
+                        if src_idx < len(src_vars):
+                            out_vars.append(src_vars[src_idx])
+                        else:
+                            v = new_var(); clauses.append([-v]); out_vars.append(v)
+                    net_vars[out_net.name] = out_vars
+                elif cell.op == PrimOp.ZEXT:
+                    src_vars = net_vars.get(cell.inputs["A"].name, []) if "A" in cell.inputs else []
+                    out_vars = list(src_vars[:width])
+                    while len(out_vars) < width:
+                        v = new_var(); clauses.append([-v]); out_vars.append(v)
+                    net_vars[out_net.name] = out_vars
+                elif cell.op == PrimOp.SEXT:
+                    src_vars = net_vars.get(cell.inputs["A"].name, []) if "A" in cell.inputs else []
+                    out_vars = list(src_vars[:width])
+                    sign_var = src_vars[-1] if src_vars else new_var()
+                    while len(out_vars) < width:
+                        out_vars.append(sign_var)
+                    net_vars[out_net.name] = out_vars
+                elif cell.op == PrimOp.CONCAT:
+                    out_vars = []
+                    count = int(cell.params.get("count", 0))
+                    for ci in range(count):
+                        inp = cell.inputs.get(f"I{ci}")
+                        if inp and inp.name in net_vars:
+                            out_vars.extend(net_vars[inp.name])
+                    while len(out_vars) < width:
+                        v = new_var(); clauses.append([-v]); out_vars.append(v)
+                    net_vars[out_net.name] = out_vars[:width]
+                elif cell.op == PrimOp.REPEAT:
+                    src_vars = net_vars.get(cell.inputs["A"].name, []) if "A" in cell.inputs else []
+                    out_vars = []
+                    n = int(cell.params.get("count", 1))
+                    for _ in range(n):
+                        out_vars.extend(src_vars)
+                    net_vars[out_net.name] = out_vars[:width]
+                continue
+
             a_vars = net_vars.get(cell.inputs["A"].name, []) if "A" in cell.inputs else []
             b_vars = net_vars.get(cell.inputs["B"].name, []) if "B" in cell.inputs else []
 

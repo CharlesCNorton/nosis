@@ -72,6 +72,7 @@ jobs:
             tests/test_satconst.py \
             tests/test_pnr_feedback.py \
             tests/test_validate.py \
+            tests/test_yosys_compare.py \
             tests/test_sdc.py \
             tests/test_warnings.py \
             tests/test_torture.py \

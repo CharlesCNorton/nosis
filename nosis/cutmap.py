@@ -133,7 +133,10 @@ def cut_map_luts(mod: Module) -> int:
         for cname in cone_cells:
             if cname == cell.name:
                 continue
-            c = mod.cells[cname]
+            c = mod.cells.get(cname)
+            if c is None:
+                all_internal = False
+                break
             for out_net in c.outputs.values():
                 consumers = net_consumers.get(out_net.name, 0)
                 if consumers > 1:

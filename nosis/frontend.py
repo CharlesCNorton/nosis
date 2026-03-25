@@ -706,6 +706,10 @@ class _Lowerer:
                 for pname, pnet in list(self.mod.ports.items()):
                     if pnet is lhs_net:
                         self.mod.ports[pname] = q_net
+                # Also set the original target net's driver to the FF
+                # so hierarchy port wiring can find it when connecting
+                # sub-instance outputs to parent nets.
+                lhs_net.driver = ff
 
     def _detect_latch_inference(self, stmt: Any) -> list[str]:
         """Detect incomplete if/case in combinational blocks that would infer latches.
@@ -1283,7 +1287,7 @@ class _Lowerer:
                 sub_net = self.mod.add_net(sub_net_name, w)
 
             # The expression on the parent side of the connection
-            expr = conn.internalExpr if hasattr(conn, "internalExpr") else None
+            expr = getattr(conn, "expression", None) or getattr(conn, "internalExpr", None)
             if expr is None:
                 continue
 

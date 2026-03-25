@@ -87,3 +87,95 @@ requires_rime_soc = pytest.mark.skipif(
     not rime_soc_available(),
     reason="Full RIME SoC sources not found (set NOSIS_RIME_ROOT)"
 )
+
+
+# ---------------------------------------------------------------------------
+# Cached design fixtures — parse/lower/map once, reuse across tests
+# ---------------------------------------------------------------------------
+
+class _DesignCache:
+    """Cache parsed/lowered/mapped results for a design to avoid redundant work."""
+
+    def __init__(self, sources, top):
+        self.sources = sources
+        self.top = top
+        self._parsed = None
+        self._design = None
+        self._mod = None  # unoptimized
+        self._opt_mod = None
+        self._netlist = None
+        self._json = None
+        self._json_data = None
+
+    @property
+    def parsed(self):
+        if self._parsed is None:
+            from nosis.frontend import parse_files
+            self._parsed = parse_files(self.sources, top=self.top)
+        return self._parsed
+
+    @property
+    def design(self):
+        if self._design is None:
+            from nosis.frontend import lower_to_ir
+            self._design = lower_to_ir(self.parsed, top=self.top)
+        return self._design
+
+    @property
+    def mod(self):
+        """Unoptimized module (fresh copy each call to avoid mutation issues)."""
+        from nosis.frontend import parse_files, lower_to_ir
+        r = parse_files(self.sources, top=self.top)
+        d = lower_to_ir(r, top=self.top)
+        return d.top_module()
+
+    @property
+    def netlist(self):
+        if self._netlist is None:
+            from nosis.techmap import map_to_ecp5
+            self._netlist = map_to_ecp5(self.design)
+        return self._netlist
+
+    @property
+    def json_str(self):
+        if self._json is None:
+            from nosis.json_backend import emit_json_str
+            self._json = emit_json_str(self.netlist)
+        return self._json
+
+    @property
+    def json_data(self):
+        if self._json_data is None:
+            import json
+            self._json_data = json.loads(self.json_str)
+        return self._json_data
+
+
+# Singleton caches — created on first access, shared across test files
+_caches: dict[str, _DesignCache] = {}
+
+
+def get_design(name: str) -> _DesignCache:
+    """Get or create a cached design by name."""
+    if name not in _caches:
+        if name == "uart_tx":
+            _caches[name] = _DesignCache([RIME_UART_TX], "uart_tx")
+        elif name == "uart_rx":
+            _caches[name] = _DesignCache([RIME_UART_RX], "uart_rx")
+        elif name == "sdram_bridge":
+            _caches[name] = _DesignCache([RIME_SDRAM_BRIDGE], "sdram_bridge")
+        elif name == "crc32":
+            _caches[name] = _DesignCache([RIME_CRC32], "rime_pcpi_crc32")
+        elif name == "rime_v":
+            _caches[name] = _DesignCache([RIME_V], "rime_v")
+        elif name == "thaw":
+            _caches[name] = _DesignCache(RIME_THAW_SOURCES, "top")
+        elif name == "soc":
+            _caches[name] = _DesignCache(RIME_SOC_SOURCES, "top")
+        elif name == "picorv32":
+            _caches[name] = _DesignCache([RIME_PICORV32], "picorv32")
+        elif name == "sdram_ctrl":
+            _caches[name] = _DesignCache([RIME_SDRAM_CTRL], "sdram_controller")
+        else:
+            raise ValueError(f"Unknown design: {name}")
+    return _caches[name]

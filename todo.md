@@ -1,12 +1,10 @@
 # Nosis — Open Items
 
-1. End-to-end hardware demonstration on IcePi Zero (nextpnr + ecppack path verified, physical flash pending)
-2. Timing-driven optimization: use critical path analysis to prioritize optimization of timing-critical logic
-3. Register retiming: forward/backward FF movement is implemented but not in the default pipeline
-4. CDC synchronizer insertion: detection works, insertion implemented, not in default pipeline
-5. Full SAT-based equivalence for multi-bit MUX/PMUX/MEMORY operations
-6. pyslang 10 API support (currently requires pyslang <10)
-7. BRAM initialization from $readmemh/$readmemb in the synthesis pipeline
-8. Multiport RAM: DP16KD dual-port read+write mapping
-9. ALU54B accumulator feedback wiring for true MAC patterns
-10. Deeper Boolean minimization beyond two-level AND/OR distribution
+1. Physical flash demonstration on IcePi Zero (bitstream verified through nextpnr + ecppack, board flash pending)
+2. pyslang 10 API support (currently pinned to pyslang <10; version 10 replaced Driver with a different Compilation workflow)
+3. Incremental re-mapping: delta computation works but incremental_remap falls through to full re-map
+4. Post-synthesis simulation comparison: postsynth Verilog generation wired but iverilog compilation of simplified cell models may fail, falling back to RTL-vs-RTL
+5. PMUX mutual exclusivity optimization: case branches are always exclusive but the mapper builds a general OR-reduce tree
+6. Bundle full SoC sources for CI or make regression tests work with bundled subset
+7. Property-based test for barrel shifter correctness across random widths and shift amounts
+8. Tolerance bands for locked regression counts instead of exact equality

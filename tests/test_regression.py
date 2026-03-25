@@ -756,7 +756,7 @@ class TestLockedCellCounts:
 
     def test_rime_v_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/cpu/rime_v.sv", "rime_v")
-        assert s["LUT4"] == 5689, f"LUT count changed: {s['LUT4']}"
+        assert s["LUT4"] == 5685, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 1727, f"FF count changed: {s['TRELLIS_FF']}"
         assert s["CCU2C"] == 275, f"CCU2C count changed: {s['CCU2C']}"
 

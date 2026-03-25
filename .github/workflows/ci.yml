@@ -62,6 +62,11 @@ jobs:
             tests/test_nextpnr.py \
             tests/test_testvec.py \
             tests/test_wirelength.py \
+            tests/test_cli.py \
+            tests/test_connectivity.py \
+            tests/test_frontend.py \
+            tests/test_mux_merge.py \
+            tests/test_postsynth.py \
             tests/test_sdc.py \
             tests/test_warnings.py \
             tests/test_torture.py \

@@ -22,6 +22,8 @@ import sys
 import time
 from pathlib import Path
 
+__all__ = ["main"]
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Nosis — correctness-first FPGA synthesis")
@@ -39,7 +41,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stats", action="store_true", help="print synthesis statistics")
     parser.add_argument("--benchmark", action="store_true", help="emit machine-readable JSON with cell counts, timing, and wall-clock time per stage")
     parser.add_argument("--json-stats", action="store_true", help="emit all synthesis statistics as a single JSON object to stdout (suppresses human output)")
-    parser.add_argument("--ecppack", help="run ecppack on the output to produce a .bit bitstream file at this path")
+    parser.add_argument("--ecppack", help="run nextpnr + ecppack to produce a .bit bitstream file at this path")
+    parser.add_argument("--device", default="25k", help="ECP5 device size (default: 25k)")
+    parser.add_argument("--package", default="CABGA256", help="ECP5 package (default: CABGA256)")
     parser.add_argument("--snapshot", help="save an IR snapshot for incremental compilation")
     parser.add_argument("--delta", help="compare against a previous IR snapshot and print delta")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose output")
@@ -246,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 # Run nextpnr: JSON -> textcfg
                 subprocess.run(
-                    [nextpnr_cmd, "--25k", "--package", "CABGA256",
+                    [nextpnr_cmd, f"--{args.device}", "--package", args.package,
                      "--json", str(json_path), "--textcfg", str(config_path)],
                     check=True, capture_output=True, text=True,
                 )
@@ -259,6 +263,21 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 if args.verbose:
                     print(f"ecppack: {bit_path}")
+                # Parse nextpnr results for feedback
+                from nosis.pnr_feedback import parse_nextpnr_log
+                # Re-read the nextpnr log from the run above
+                # (we captured it but didn't save — re-run for info only)
+                if args.verbose or args.stats:
+                    pnr_info = subprocess.run(
+                        [nextpnr_cmd, f"--{args.device}", "--package", args.package,
+                         "--json", str(json_path), "--textcfg", "/dev/null"],
+                        capture_output=True, text=True, env=env, timeout=120,
+                    )
+                    pnr = parse_nextpnr_log(pnr_info.stderr)
+                    if pnr.max_freq_mhz > 0:
+                        print(f"nextpnr Fmax: {pnr.max_freq_mhz:.1f} MHz")
+                    if pnr.total_luts > 0:
+                        print(f"nextpnr LUTs: {pnr.total_luts}")
             except FileNotFoundError as exc:
                 print(f"warning: tool not found: {exc}", file=sys.stderr)
             except subprocess.CalledProcessError as e:
@@ -267,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
 
     t_total = time.monotonic() - t0
 
-    if args.stats or args.verbose:
+    if (args.stats or args.verbose) and not getattr(args, 'json_stats', False):
         nl_stats = netlist.stats()
         print(f"--- nosis synthesis complete ---")
         print(f"top: {mod.name}")
@@ -291,7 +310,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"total: {t_total:.3f}s")
 
     # --- --benchmark mode ---
-    if args.benchmark:
+    if args.benchmark and not getattr(args, 'json_stats', False):
         from nosis.resources import calculate_area
         from nosis.timing import analyze_timing
         nl_stats = netlist.stats()

@@ -81,9 +81,9 @@ _CELL_DELAYS: dict[PrimOp, float] = {
     PrimOp.MUL: 3.20,
     PrimOp.DIV: 3.20,
     PrimOp.MOD: 3.20,
-    PrimOp.SHL: 0.80,  # barrel shifter LUT chain
-    PrimOp.SHR: 0.80,
-    PrimOp.SSHR: 0.80,
+    PrimOp.SHL: 1.20,  # log2 barrel shifter: ~3 stages × 0.40 ns
+    PrimOp.SHR: 1.20,
+    PrimOp.SSHR: 1.20,
     PrimOp.CONCAT: 0.0,   # wiring only
     PrimOp.SLICE: 0.0,    # wiring only
     PrimOp.ZEXT: 0.0,     # wiring only

@@ -364,6 +364,24 @@ class _Lowerer:
             sub = getattr(expr, "subroutine", None)
             if sub is not None:
                 call_name = getattr(sub, "name", "")
+            # Intercept $readmemh/$readmemb to record init file on MEMORY cells
+            if call_name in ("$readmemh", "$readmemb"):
+                args_list = list(getattr(expr, "arguments", []))
+                if len(args_list) >= 2:
+                    file_arg = args_list[0]
+                    mem_arg = args_list[1]
+                    file_str = ""
+                    if hasattr(file_arg, "constant") and file_arg.constant is not None:
+                        file_str = str(file_arg.constant).strip('"').strip("'")
+                    elif hasattr(file_arg, "value"):
+                        file_str = str(file_arg.value).strip('"').strip("'")
+                    mem_name = getattr(getattr(mem_arg, "symbol", None), "name", "")
+                    if file_str and mem_name:
+                        for mc in self.mod.cells.values():
+                            if mc.op == PrimOp.MEMORY and mc.params.get("mem_name") == mem_name:
+                                mc.params["init_file"] = file_str
+                                mc.params["init_format"] = "hex" if call_name == "$readmemh" else "bin"
+                                break
             if call_name in _SIMULATION_TASKS:
                 src = self._src_from_node(expr)
                 self.warnings.append(SynthesisWarning(
@@ -751,6 +769,16 @@ class _Lowerer:
         elif kind == "StatementKind.List":
             for child in stmt.list:
                 self._lower_initial_block(child)
+        elif kind == "StatementKind.ForLoop":
+            # For loops in initial blocks are unrolled by slang.
+            # The body is a single iteration — walk it.
+            if hasattr(stmt, "body"):
+                self._lower_initial_block(stmt.body)
+        elif kind == "StatementKind.Conditional":
+            # if/else in initial blocks
+            self._lower_initial_block(stmt.ifTrue)
+            if stmt.ifFalse is not None:
+                self._lower_initial_block(stmt.ifFalse)
 
     def _detect_latch_inference(self, stmt: Any) -> list[str]:
         """Detect incomplete if/case in combinational blocks that would infer latches.

@@ -215,8 +215,32 @@ def generate_postsynth_verilog(netlist: ECP5Netlist) -> str:
             lines.append(f"  TRELLIS_FF_SIM {safe_name} (")
             lines.append(f"    .CLK({clk}), .DI({di}), .LSR({lsr}), .CE({ce}), .Q({q}));")
         elif cell.cell_type == "CCU2C":
-            # Simplified instantiation
-            lines.append(f"  // CCU2C {safe_name} — carry chain cell")
+            init0 = cell.parameters.get("INIT0", "0000000000000000")
+            init1 = cell.parameters.get("INIT1", "0000000000000000")
+            try:
+                init0_int = int(init0, 2)
+            except ValueError:
+                init0_int = 0
+            try:
+                init1_int = int(init1, 2)
+            except ValueError:
+                init1_int = 0
+            cin = _bit_ref(cell.ports.get("CIN", ["0"]))
+            a0 = _bit_ref(cell.ports.get("A0", ["0"]))
+            b0 = _bit_ref(cell.ports.get("B0", ["0"]))
+            c0 = _bit_ref(cell.ports.get("C0", ["0"]))
+            d0 = _bit_ref(cell.ports.get("D0", ["0"]))
+            a1 = _bit_ref(cell.ports.get("A1", ["0"]))
+            b1 = _bit_ref(cell.ports.get("B1", ["0"]))
+            c1 = _bit_ref(cell.ports.get("C1", ["0"]))
+            d1 = _bit_ref(cell.ports.get("D1", ["0"]))
+            s0 = _bit_ref(cell.ports.get("S0", ["0"]))
+            s1 = _bit_ref(cell.ports.get("S1", ["0"]))
+            cout = _bit_ref(cell.ports.get("COUT", ["0"]))
+            lines.append(f"  CCU2C_SIM #(.INIT0(16'h{init0_int:04X}), .INIT1(16'h{init1_int:04X})) {safe_name} (")
+            lines.append(f"    .CIN({cin}), .A0({a0}), .B0({b0}), .C0({c0}), .D0({d0}),")
+            lines.append(f"    .A1({a1}), .B1({b1}), .C1({c1}), .D1({d1}),")
+            lines.append(f"    .S0({s0}), .S1({s1}), .COUT({cout}));")
 
     lines.append("")
     lines.append("endmodule")

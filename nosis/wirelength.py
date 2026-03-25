@@ -58,9 +58,13 @@ def estimate_routing(mod: Module, logic_delay_ns: float = 0.0) -> RoutingEstimat
     sqrt_cells = math.sqrt(max(total_cells, 1))
 
     # Per-net routing delay: base_delay * sqrt(fanout) * scaling
-    # Calibrated against nextpnr ECP5-25F: uart_tx actual routing ~1.1 ns
-    base_delay = 0.4  # ns per hop (ECP5 PIB interconnect)
-    scale = max(0.3, min(sqrt_cells / 30.0, 2.5))  # minimum 0.3 for small designs
+    # Calibrated against nextpnr ECP5-25F:
+    #   uart_tx (31 cells): actual ~1.1 ns routing, target ~1.0 ns
+    #   SoC (5000+ cells): routing dominates at ~60% of total delay
+    # Base delay 0.4 ns/hop matches ECP5 PIB interconnect characterization.
+    # Scale factor grows with sqrt(cells)/30, floored at 0.3 for small designs.
+    base_delay = 0.4
+    scale = max(0.3, min(sqrt_cells / 30.0, 2.5))
 
     # Identify nets that use dedicated routing resources (lower delay)
     clock_nets: set[str] = set()

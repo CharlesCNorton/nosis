@@ -545,8 +545,8 @@ class _ECP5Mapper:
                 dsp.ports["RST1"] = ["0"]
                 dsp.ports["RST2"] = ["0"]
                 dsp.ports["RST3"] = ["0"]
-                dsp.ports["SIGNEDA"] = ["0"]
-                dsp.ports["SIGNEDB"] = ["0"]
+                dsp.ports["SIGNEDA"] = ["1" if cell.params.get("dsp_signed_a") else "0"]
+                dsp.ports["SIGNEDB"] = ["1" if cell.params.get("dsp_signed_b") else "0"]
                 return
         self._map_lut(cell)
 
@@ -567,7 +567,9 @@ class _ECP5Mapper:
             return
         out_net = out_nets[0]
         width = out_net.width
-        if width <= 1:
+        # Use per-bit LUT for narrow shifts (<=8 bits) — fewer LUTs.
+        # Use logarithmic barrel for wide shifts (>8 bits) — better timing.
+        if width <= 8:
             self._map_lut(cell)
             return
 

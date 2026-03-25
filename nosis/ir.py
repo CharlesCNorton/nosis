@@ -42,6 +42,15 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any
 
+__all__ = [
+    "PrimOp",
+    "Net",
+    "Cell",
+    "Module",
+    "Design",
+    "emit_verilog",
+]
+
 
 class PrimOp(Enum):
     """Primitive operations in the Nosis IR."""

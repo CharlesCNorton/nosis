@@ -44,7 +44,15 @@ def infer_dsps(mod: Module) -> int:
             cell.params["dsp_config"] = "MULT18X18D"
             cell.params["dsp_a_width"] = a_width
             cell.params["dsp_b_width"] = b_width
-            cell.params["dsp_signed"] = False  # TODO: track signedness from IR
+            # Signedness: check if the multiply inputs come from SEXT cells
+            a_signed = False
+            b_signed = False
+            if a_net.driver and a_net.driver.op == PrimOp.SEXT:
+                a_signed = True
+            if b_net.driver and b_net.driver.op == PrimOp.SEXT:
+                b_signed = True
+            cell.params["dsp_signed_a"] = a_signed
+            cell.params["dsp_signed_b"] = b_signed
             tagged += 1
         elif a_width <= 36 and b_width <= 36:
             # Can be decomposed into 4x MULT18X18D with addition

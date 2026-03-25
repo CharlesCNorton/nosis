@@ -18,9 +18,11 @@ Source files (.sv, .v)
    [frontend]      nosis/frontend.py -- walk AST, emit IR cells and nets
        |            Handles hierarchy flattening, FF Q-redirect, concat LHS
        v
-   [optimization]  nosis/passes.py -- 12 passes x 6 rounds + 4 post-passes
-       |            constant fold, identity, boolean, CSE, HIT merge,
-       |            don't-care, MUX merge, reqmerge, SAT const, cut-map
+   [optimization]  nosis/passes.py -- 13 passes x 6 rounds + 6 post-passes
+       |            constant fold, identity, boolean, tech-aware, CSE,
+       |            HIT merge, don't-care, MUX merge, timing-driven round,
+       |            reqmerge (500 cycles), SAT const (Tseitin CNF), cut-map,
+       |            retiming (forward), CDC sync, fanout duplication
        v
    [inference]     nosis/fsm.py, bram.py, dsp.py, carry.py -- annotate cells
        |
@@ -33,6 +35,9 @@ Source files (.sv, .v)
        v
    [JSON backend]  nosis/json_backend.py -- nextpnr-compatible JSON
        |
+       v
+   [PnR feedback]  nosis/pnr_feedback.py -- parse nextpnr logs for Fmax,
+       |            critical nets, utilization (optional feedback loop)
        v
    nextpnr-ecp5 -> ecppack -> bitstream
 ```
@@ -70,6 +75,14 @@ Five optimization techniques are derived from Homotopy Type Theory concepts:
 
 These are not cosmetic labels. Each technique directly maps a mathematical construction to a specific netlist transformation with a provable correctness argument.
 
+### Why logarithmic barrel shifter
+
+Shifts wider than 8 bits use a logarithmic barrel shifter: B stages of N MUX2 cells for an N-bit shift with B = ceil(log2(N)) shift-amount bits. Total depth is B levels (e.g., 5 for 32-bit), compared to N levels for a linear MUX chain. This improves timing at the cost of more LUT4 cells (~2x for wide shifts). Shifts of 8 bits or fewer use the simpler per-bit LUT mapping.
+
+### Why PnR feedback
+
+`pnr_feedback.py` parses nextpnr stderr to extract max frequency, critical path nets, and utilization. This data can feed back into optimization to target timing-critical logic. The CLI `--ecppack` path optionally reports nextpnr Fmax after PnR.
+
 ## Module Contracts
 
 ### `nosis/ir.py`
@@ -105,7 +118,7 @@ These are not cosmetic labels. Each technique directly maps a mathematical const
 
 ## Test Architecture
 
-570 tests organized by module:
+590+ tests organized by module:
 - Unit tests: IR construction, evaluation, individual pass behavior
 - Integration tests: full pipeline on real RIME hardware designs
 - Property tests: Hypothesis-generated random inputs verify invariants

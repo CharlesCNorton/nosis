@@ -604,6 +604,130 @@ def _eliminate_functional_identities(mod: Module) -> int:
     return eliminated
 
 
+def _eliminate_dont_care_inputs(mod: Module) -> int:
+    """Remove inputs that don't affect a cell's output (don't-care inputs).
+
+    If cell f(a,b,c) produces the same output regardless of c (truth table
+    is symmetric under c), then c is a don't-care input. The cell can be
+    simplified to f(a,b) — fewer inputs means the tech mapper produces
+    fewer LUT4 cells and the result packs better.
+
+    This is the encode-decode method from HoTT: we build a map from the
+    3-input function to a 2-input function (by dropping c) and verify
+    it's an equivalence (same output for all inputs).
+    """
+    from nosis.eval import eval_cell
+
+    eliminated = 0
+    for cell in list(mod.cells.values()):
+        if cell.op in (PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.FF, PrimOp.CONST, PrimOp.MEMORY):
+            continue
+        outs = list(cell.outputs.values())
+        if not outs or outs[0].width != 1:
+            continue
+        inp_items = list(cell.inputs.items())
+        n = len(inp_items)
+        if n < 2 or n > 4:
+            continue
+
+        inp_names = [name for name, _ in inp_items]
+
+        # Compute truth table
+        tt = 0
+        for i in range(1 << n):
+            nv = {}
+            for idx, (_, net) in enumerate(inp_items):
+                nv[net.name] = (i >> idx) & 1
+            results = eval_cell(cell, nv)
+            val = next(iter(results.values()), 0) & 1
+            if val:
+                tt |= (1 << i)
+
+        # Check each input for don't-care
+        for drop_idx in range(n):
+            independent = True
+            for i in range(1 << n):
+                partner = i ^ (1 << drop_idx)
+                if ((tt >> i) & 1) != ((tt >> partner) & 1):
+                    independent = False
+                    break
+            if independent:
+                # Drop this input
+                drop_name = inp_names[drop_idx]
+                del cell.inputs[drop_name]
+                eliminated += 1
+                break  # only drop one input per cell per pass
+
+    return eliminated
+
+
+def _merge_hit_equivalent(mod: Module) -> int:
+    """Merge cells with identical truth tables but different structure (HIT equivalence).
+
+    Two cells with the same input net set that compute the same Boolean function
+    are equivalent regardless of their internal structure. This is the Higher
+    Inductive Type principle: a function is defined by its action on inputs
+    (the truth table), not its syntactic form (the cell structure).
+
+    Goes beyond CSE which requires structural identity (same op, same params).
+    """
+    from nosis.eval import eval_cell
+    from collections import defaultdict
+
+    input_groups: dict[tuple, list[Cell]] = defaultdict(list)
+    for cell in mod.cells.values():
+        if cell.op in (PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.FF, PrimOp.CONST, PrimOp.MEMORY):
+            continue
+        outs = list(cell.outputs.values())
+        if not outs or outs[0].width != 1:
+            continue
+        inp_names = tuple(sorted(n.name for n in cell.inputs.values()))
+        if len(inp_names) == 0 or len(inp_names) > 4:
+            continue
+        input_groups[inp_names].append(cell)
+
+    merged = 0
+    for inp_names, cells in input_groups.items():
+        if len(cells) < 2:
+            continue
+        n = len(inp_names)
+        tt_to_cells: dict[int, list[Cell]] = defaultdict(list)
+        for c in cells:
+            tt = 0
+            for i in range(1 << n):
+                nv = {name: (i >> idx) & 1 for idx, name in enumerate(inp_names)}
+                results = eval_cell(c, nv)
+                val = next(iter(results.values()), 0) & 1
+                if val:
+                    tt |= (1 << i)
+            tt_to_cells[tt].append(c)
+
+        for tt, equiv in tt_to_cells.items():
+            if len(equiv) < 2:
+                continue
+            keeper = equiv[0]
+            keeper_out = list(keeper.outputs.values())[0]
+            for dup in equiv[1:]:
+                dup_out = list(dup.outputs.values())[0]
+                for other in mod.cells.values():
+                    if other is dup:
+                        continue
+                    for pn, pnet in list(other.inputs.items()):
+                        if pnet is dup_out:
+                            other.inputs[pn] = keeper_out
+                for pn, pnet in list(mod.ports.items()):
+                    if pnet is dup_out:
+                        mod.ports[pn] = keeper_out
+                dup_out.driver = keeper_out.driver
+                dup.inputs.clear()
+                dup.outputs.clear()
+                dup.op = PrimOp.CONST
+                dup.params = {"value": 0, "width": 1, "_dead": True}
+                merged += 1
+
+    return merged
+
+
 def _narrow_eq_width(mod: Module) -> int:
     """Reduce EQ comparison width when comparing against constants with leading zeros.
 
@@ -743,13 +867,15 @@ def run_default_passes(mod: Module) -> dict[str, int]:
         cff = remove_const_ffs(mod)
         cse = eliminate_common_subexpressions(mod)
         fi = _eliminate_functional_identities(mod)
+        hit = _merge_hit_equivalent(mod)
+        dci = _eliminate_dont_care_inputs(mod)
         mm = merge_mux_chains(mod)
         mz = _simplify_mux_with_zero(mod)
         mn = _narrow_const_mux(mod)
         neq = 0
         dce = dead_code_eliminate(mod)
 
-        total = cf + ident + bo + cff + cse + fi + mm + mz + mn + neq + dce
+        total = cf + ident + bo + cff + cse + fi + hit + dci + mm + mz + mn + neq + dce
         stats[f"round_{iteration}"] = total
 
         cur_cells = len(mod.cells)

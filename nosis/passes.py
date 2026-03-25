@@ -896,13 +896,65 @@ def run_default_passes(mod: Module) -> dict[str, int]:
     stats["req_merge"] = merge_reachable_equivalent(mod, cycles=200)
     dead_code_eliminate(mod)
 
-    # SAT-proven constant replacement DISABLED: the combination of
-    # simulation-based reqmerge + SAT constant proof is unsound.
-    # reqmerge merges nets that appear constant during simulation
-    # (but vary under untested conditions), then SAT "proves" the
-    # downstream logic constant based on the already-merged inputs.
-    # The cascade removes output port drivers. See test_output_ports_survive.
-    stats["sat_const"] = 0
+    # SAT-proven constant replacement: with the sound reqmerge (FF-input
+    # and output-reachable guards), the cascade that removed output port
+    # drivers is prevented. Re-enabled.
+    from nosis.satconst import prove_constants_sat
+    import random
+    from nosis.equiv import _simulate_combinational as _sim_comb2
+
+    _rng2 = random.Random(42)
+    _ip2: dict[str, int] = {}
+    for _c in mod.cells.values():
+        if _c.op == PrimOp.INPUT:
+            for _o in _c.outputs.values():
+                _ip2[_o.name] = _o.width
+    _ff2: dict[str, int] = {}
+    for _c in mod.cells.values():
+        if _c.op == PrimOp.FF:
+            for _o in _c.outputs.values():
+                _ff2[_o.name] = 0
+    _nv2: dict[str, set[int]] = {}
+    for _ in range(200):
+        _si2 = {n: _rng2.getrandbits(w) for n, w in _ip2.items()}
+        _si2.update(_ff2)
+        _vs2 = _sim_comb2(mod, _si2)
+        for _n, _v in _vs2.items():
+            _nv2.setdefault(_n, set()).add(_v)
+        for _c in mod.cells.values():
+            if _c.op == PrimOp.FF:
+                _d = _c.inputs.get("D")
+                if _d and _d.name in _vs2:
+                    for _o in _c.outputs.values():
+                        _ff2[_o.name] = _vs2[_d.name]
+
+    _cands2 = {}
+    for _n, _svs in _nv2.items():
+        if len(_svs) != 1:
+            continue
+        _net = mod.nets.get(_n)
+        if _net is None or _n in mod.ports:
+            continue
+        if _net.driver and _net.driver.op in (PrimOp.CONST, PrimOp.INPUT, PrimOp.FF):
+            continue
+        _cands2[_n] = next(iter(_svs))
+
+    _proven = prove_constants_sat(mod, _cands2, max_cone_inputs=16)
+    _ctr3 = [len(mod.nets) + len(mod.cells) + 1200]
+    _nrep2 = 0
+    for _n, _v in _proven.items():
+        _net = mod.nets.get(_n)
+        if _net is None:
+            continue
+        _ctr3[0] += 1
+        _cc = mod.add_cell(f"$pconst_{_ctr3[0]}", PrimOp.CONST, value=_v, width=_net.width)
+        mod.connect(_cc, "Y", _net, direction="output")
+        _nrep2 += 1
+    stats["sat_const"] = _nrep2
+    if _nrep2 > 0:
+        constant_fold(mod)
+        identity_simplify(mod)
+        dead_code_eliminate(mod)
 
     # Cut-based re-mapping: absorb multi-cell cones into single LUT4s
     from nosis.cutmap import cut_map_luts

@@ -85,6 +85,27 @@ def merge_reachable_equivalent(
     for name, sig in signatures.items():
         sig_groups[tuple(sig)].append(name)
 
+    # Compute nets that feed FF D inputs (sequential state feedback).
+    ff_input_reachable: set[str] = set()
+    _ff_wl: list[str] = []
+    for cell in mod.cells.values():
+        if cell.op == PrimOp.FF:
+            d_net = cell.inputs.get("D")
+            if d_net and d_net.name not in ff_input_reachable:
+                ff_input_reachable.add(d_net.name)
+                _ff_wl.append(d_net.name)
+    while _ff_wl:
+        _nname = _ff_wl.pop()
+        _net = mod.nets.get(_nname)
+        if _net is None or _net.driver is None:
+            continue
+        if _net.driver.op == PrimOp.FF:
+            continue  # FF boundary
+        for _inp in _net.driver.inputs.values():
+            if _inp.name not in ff_input_reachable:
+                ff_input_reachable.add(_inp.name)
+                _ff_wl.append(_inp.name)
+
     # Compute the set of nets that feed output ports (directly or through
     # combinational logic). These must not be merged — they carry the
     # design's externally visible behavior.
@@ -142,13 +163,17 @@ def merge_reachable_equivalent(
                 continue
             if name in mod.ports:
                 continue
-            # Don't merge any net that is in the output-reachable cone.
-            # Simulation may not exercise all code paths that activate
-            # output ports, so nets that appear constant during simulation
-            # may be variable in real operation.
+            # Safety guards:
+            # 1. Don't merge nets in the output-reachable cone
             if name in output_reachable:
                 continue
             if canonical_name in output_reachable:
+                continue
+            # 2. Don't merge nets that feed FF D inputs (sequential state).
+            #    Simulation may not cover all state transitions.
+            if name in ff_input_reachable:
+                continue
+            if canonical_name in ff_input_reachable:
                 continue
 
             for cell in mod.cells.values():

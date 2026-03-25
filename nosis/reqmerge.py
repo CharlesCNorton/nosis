@@ -16,7 +16,7 @@ import random
 from collections import defaultdict
 
 from nosis.ir import Module, PrimOp
-from nosis.equiv import _simulate_combinational
+from nosis.sim import FastSimulator
 
 __all__ = [
     "merge_reachable_equivalent",
@@ -126,13 +126,24 @@ def merge_reachable_equivalent(
             for out in cell.outputs.values():
                 ff_state[out.name] = 0
 
+    # Pre-compile the simulator once — avoids per-cycle topo sort and dispatch
+    fast_sim = FastSimulator(mod)
+
+    # Pre-collect FF (d_name, q_name) pairs for fast state update
+    ff_pairs: list[tuple[str, str]] = []
+    for cell in mod.cells.values():
+        if cell.op == PrimOp.FF:
+            d_net = cell.inputs.get("D")
+            if d_net:
+                for out in cell.outputs.values():
+                    ff_pairs.append((d_net.name, out.name))
+
     # Simulate and collect per-net value signatures
     signatures: dict[str, list[int]] = {}
     for cycle in range(cycles):
         inputs = {name: rng.getrandbits(w) for name, w in input_ports.items()}
-        sim = dict(inputs)
-        sim.update(ff_state)
-        vals = _simulate_combinational(mod, sim)
+        inputs.update(ff_state)
+        vals = fast_sim.step(inputs)
 
         for name, val in vals.items():
             if name not in signatures:
@@ -140,12 +151,9 @@ def merge_reachable_equivalent(
             signatures[name].append(val)
 
         # Update FF state
-        for cell in mod.cells.values():
-            if cell.op == PrimOp.FF:
-                d_net = cell.inputs.get("D")
-                if d_net and d_net.name in vals:
-                    for out in cell.outputs.values():
-                        ff_state[out.name] = vals[d_net.name]
+        for d_name, q_name in ff_pairs:
+            if d_name in vals:
+                ff_state[q_name] = vals[d_name]
 
     # Group nets by value signature
     sig_groups: dict[tuple[int, ...], list[str]] = defaultdict(list)
@@ -287,10 +295,17 @@ def propagate_reachable_constants(
         return 0
 
     ff_state: dict[str, int] = {}
+    ff_pairs: list[tuple[str, str]] = []
     for cell in mod.cells.values():
         if cell.op == PrimOp.FF:
             for out in cell.outputs.values():
                 ff_state[out.name] = 0
+            d_net = cell.inputs.get("D")
+            if d_net:
+                for out in cell.outputs.values():
+                    ff_pairs.append((d_net.name, out.name))
+
+    fast_sim = FastSimulator(mod)
 
     # Track min and max value for each net across all cycles
     net_min: dict[str, int] = {}
@@ -298,9 +313,8 @@ def propagate_reachable_constants(
 
     for cycle in range(cycles):
         inputs = {name: rng.getrandbits(w) for name, w in input_ports.items()}
-        sim = dict(inputs)
-        sim.update(ff_state)
-        vals = _simulate_combinational(mod, sim)
+        inputs.update(ff_state)
+        vals = fast_sim.step(inputs)
 
         for name, val in vals.items():
             if name not in net_min:
@@ -312,12 +326,9 @@ def propagate_reachable_constants(
                 if val > net_max[name]:
                     net_max[name] = val
 
-        for cell in mod.cells.values():
-            if cell.op == PrimOp.FF:
-                d_net = cell.inputs.get("D")
-                if d_net and d_net.name in vals:
-                    for out in cell.outputs.values():
-                        ff_state[out.name] = vals[d_net.name]
+        for d_name, q_name in ff_pairs:
+            if d_name in vals:
+                ff_state[q_name] = vals[d_name]
 
     # Find nets where min == max (constant across all reachable states)
     replaced = 0

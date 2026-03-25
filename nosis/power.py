@@ -145,7 +145,7 @@ def estimate_toggle_rates(
     """
     import random
     from nosis.ir import PrimOp
-    from nosis.equiv import _simulate_combinational
+    from nosis.sim import FastSimulator
 
     rng = random.Random(seed)
 
@@ -158,6 +158,8 @@ def estimate_toggle_rates(
     if not input_ports:
         return {}
 
+    fast_sim = FastSimulator(mod)
+
     prev_vals: dict[str, int] = {}
     toggle_counts: dict[str, int] = {}
     total_cycles = 0
@@ -169,25 +171,30 @@ def estimate_toggle_rates(
             for out_net in cell.outputs.values():
                 ff_state[out_net.name] = 0
 
+    # Pre-collect FF pairs for fast state update
+    ff_pairs: list[tuple[str, str]] = []
+    for cell in mod.cells.values():
+        if cell.op == PrimOp.FF:
+            d_net = cell.inputs.get("D")
+            if d_net:
+                for out in cell.outputs.values():
+                    ff_pairs.append((d_net.name, out.name))
+
     for _ in range(num_vectors):
         inputs: dict[str, int] = {}
         for name, width in input_ports.items():
             inputs[name] = rng.getrandbits(width)
 
         # Inject FF state into simulation
-        sim_inputs = dict(inputs)
-        sim_inputs.update(ff_state)
+        inputs.update(ff_state)
 
-        vals = _simulate_combinational(mod, sim_inputs)
+        vals = fast_sim.step(inputs)
         total_cycles += 1
 
         # Update FF state: Q_next = current D value
-        for cell in mod.cells.values():
-            if cell.op == PrimOp.FF:
-                d_net = cell.inputs.get("D")
-                if d_net and d_net.name in vals:
-                    for out_net in cell.outputs.values():
-                        ff_state[out_net.name] = vals[d_net.name]
+        for d_name, q_name in ff_pairs:
+            if d_name in vals:
+                ff_state[q_name] = vals[d_name]
 
         for net_name, val in vals.items():
             if net_name in prev_vals and prev_vals[net_name] != val:

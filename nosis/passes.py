@@ -890,7 +890,7 @@ def run_default_passes(mod: Module) -> dict[str, int]:
     # drivers is prevented. Re-enabled.
     from nosis.satconst import prove_constants_sat
     import random
-    from nosis.equiv import _simulate_combinational as _sim_comb2
+    from nosis.sim import FastSimulator
 
     _rng2 = random.Random(42)
     _ip2: dict[str, int] = {}
@@ -899,23 +899,26 @@ def run_default_passes(mod: Module) -> dict[str, int]:
             for _o in _c.outputs.values():
                 _ip2[_o.name] = _o.width
     _ff2: dict[str, int] = {}
+    _ff_pairs2: list[tuple[str, str]] = []
     for _c in mod.cells.values():
         if _c.op == PrimOp.FF:
             for _o in _c.outputs.values():
                 _ff2[_o.name] = 0
+            _d = _c.inputs.get("D")
+            if _d:
+                for _o in _c.outputs.values():
+                    _ff_pairs2.append((_d.name, _o.name))
+    _fast2 = FastSimulator(mod)
     _nv2: dict[str, set[int]] = {}
     for _ in range(200):
         _si2 = {n: _rng2.getrandbits(w) for n, w in _ip2.items()}
         _si2.update(_ff2)
-        _vs2 = _sim_comb2(mod, _si2)
+        _vs2 = _fast2.step(_si2)
         for _n, _v in _vs2.items():
             _nv2.setdefault(_n, set()).add(_v)
-        for _c in mod.cells.values():
-            if _c.op == PrimOp.FF:
-                _d = _c.inputs.get("D")
-                if _d and _d.name in _vs2:
-                    for _o in _c.outputs.values():
-                        _ff2[_o.name] = _vs2[_d.name]
+        for _dn, _qn in _ff_pairs2:
+            if _dn in _vs2:
+                _ff2[_qn] = _vs2[_dn]
 
     _cands2 = {}
     for _n, _svs in _nv2.items():

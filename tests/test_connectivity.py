@@ -213,11 +213,11 @@ class TestJSONInvariants:
             if "parameters" not in cell:
                 errors.append(f"cell {name} missing parameters")
 
-            # 3. Every connection bit is an integer
+            # 3. Every connection bit is an integer (signal) or string constant ("0"/"1"/"x")
             for port, bits in cell.get("connections", {}).items():
                 for i, bit in enumerate(bits):
-                    if not isinstance(bit, int):
-                        errors.append(f"cell {name} port {port} bit {i} is {type(bit).__name__}, not int")
+                    if not (isinstance(bit, int) or (isinstance(bit, str) and bit in ("0", "1", "x"))):
+                        errors.append(f"cell {name} port {port} bit {i} is invalid: {bit!r}")
 
             # 4. Every port has a direction
             for port in cell.get("connections", {}):

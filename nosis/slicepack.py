@@ -727,8 +727,10 @@ def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
         simplify_constant_luts(netlist)
     s2 = simplify_constant_luts(netlist)
     d = pack_dual_lut4(netlist)
-    p = pack_pfumx(netlist)
-    l = pack_l6mux21(netlist)
+    # PFUMX/L6MUX21 disabled: nextpnr expects these to be created
+    # by its own packer from co-located LUT pairs, not pre-packed.
+    p = 0
+    l = 0
     s3 = simplify_constant_luts(netlist)
     return {
         "const_lut_simplify": s1 + s2 + s3,

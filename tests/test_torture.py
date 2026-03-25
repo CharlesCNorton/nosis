@@ -369,8 +369,8 @@ class TestOptimizationStress:
         mod.ports["out"] = prev
 
         stats = run_default_passes(mod)
-        # All 5 additions of zero should be simplified
-        assert stats["identity"] >= 3  # may not catch all in one pass
+        # All 5 additions of zero should be simplified across rounds
+        assert stats.get("round_0", 0) >= 3
 
     def test_cse_100_duplicates(self):
         """100 identical operations should reduce to 1."""

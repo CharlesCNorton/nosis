@@ -26,6 +26,28 @@ __all__ = [
 ]
 
 
+def _format_param(key: str, value: str) -> str:
+    """Format a cell parameter value for nextpnr JSON.
+
+    nextpnr expects parameter values as strings. Numeric values must be
+    encoded as 32-bit binary strings (e.g., "00000000000000000000000000000001"
+    for 1). Hex INIT values are converted to 16-bit binary.
+    String values like "DISABLED", "CLK", "LOGIC" pass through as-is.
+    """
+    s = str(value)
+    # Hex values: convert to binary
+    if s.startswith("0x") or s.startswith("0X"):
+        try:
+            int_val = int(s, 16)
+            if "INIT" in key.upper():
+                return format(int_val, "016b")
+            return format(int_val, "032b")
+        except ValueError:
+            return s
+    # String values (MUX selectors, mode names, etc.) pass through as-is
+    return s
+
+
 def _cell_to_json(cell: ECP5Cell) -> dict[str, Any]:
     """Convert an ECP5Cell to a nextpnr JSON cell dict."""
     # Determine port directions from cell type conventions
@@ -43,12 +65,8 @@ def _cell_to_json(cell: ECP5Cell) -> dict[str, Any]:
         json_bits: list[int | str] = []
         for bit in bits:
             if isinstance(bit, str):
-                if bit == "0":
-                    json_bits.append(0)  # constant 0
-                elif bit == "1":
-                    json_bits.append(1)  # constant 1
-                elif bit == "x":
-                    json_bits.append("x")
+                if bit in ("0", "1", "x"):
+                    json_bits.append(bit)  # constant as string
                 else:
                     json_bits.append(int(bit))
             else:
@@ -58,7 +76,7 @@ def _cell_to_json(cell: ECP5Cell) -> dict[str, Any]:
     result: dict[str, Any] = {
         "hide_name": 1 if cell.name.startswith("$") else 0,
         "type": cell.cell_type,
-        "parameters": {k: str(v) for k, v in cell.parameters.items()},
+        "parameters": {k: _format_param(k, v) for k, v in cell.parameters.items()},
         "attributes": cell.attributes,
         "port_directions": port_directions,
         "connections": connections,
@@ -71,10 +89,8 @@ def _netname_to_json(net: ECP5Net) -> dict[str, Any]:
     json_bits: list[int | str] = []
     for bit in net.bits:
         if isinstance(bit, str):
-            if bit == "0":
-                json_bits.append(0)
-            elif bit == "1":
-                json_bits.append(1)
+            if bit in ("0", "1"):
+                json_bits.append(bit)
             else:
                 json_bits.append(int(bit))
         else:

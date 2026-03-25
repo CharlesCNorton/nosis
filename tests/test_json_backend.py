@@ -93,11 +93,11 @@ def test_json_bit_numbering():
         for bit in port["bits"]:
             assert isinstance(bit, int)
             assert bit >= 0
-    # All cell connection bits should be integers >= 0
+    # All cell connection bits should be integers (signals) or string constants
     for cell in mod["cells"].values():
         for port_bits in cell["connections"].values():
             for bit in port_bits:
-                assert isinstance(bit, int)
+                assert isinstance(bit, int) or (isinstance(bit, str) and bit in ("0", "1", "x"))
 
 
 def test_json_top_attribute():

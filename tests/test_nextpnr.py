@@ -118,8 +118,8 @@ def test_nextpnr_place():
         assert "unable to parse" not in combined.lower(), f"nextpnr parse failed: {combined[:500]}"
 
 
-def test_json_all_cell_connections_are_int():
-    """Every connection bit in the JSON must be an integer (not a string)."""
+def test_json_all_cell_connections_valid():
+    """Every connection bit must be an integer (signal) or string constant ("0"/"1"/"x")."""
     result = parse_files([RIME_UART_TX], top="uart_tx")
     design = lower_to_ir(result, top="uart_tx")
     nl = map_to_ecp5(design)
@@ -127,6 +127,6 @@ def test_json_all_cell_connections_are_int():
     for cell_name, cell in data["modules"]["uart_tx"]["cells"].items():
         for port, bits in cell["connections"].items():
             for bit in bits:
-                assert isinstance(bit, int), (
-                    f"cell {cell_name} port {port} has non-int bit: {bit!r}"
+                assert isinstance(bit, int) or (isinstance(bit, str) and bit in ("0", "1", "x")), (
+                    f"cell {cell_name} port {port} has invalid bit: {bit!r}"
                 )

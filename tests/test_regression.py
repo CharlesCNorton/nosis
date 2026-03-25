@@ -308,11 +308,13 @@ class TestThaw:
         assert len(mod_json["ports"]) >= 15
         assert len(mod_json["cells"]) >= 1000
         assert len(mod_json["netnames"]) >= 100
-        # Every cell connection bit must be an integer
+        # Every cell connection bit must be an integer (signal) or string constant
         for name, cell in mod_json["cells"].items():
             for port, bits in cell["connections"].items():
                 for bit in bits:
-                    assert isinstance(bit, int), f"cell {name} port {port} has non-int bit: {bit!r}"
+                    assert isinstance(bit, int) or (isinstance(bit, str) and bit in ("0", "1", "x")), (
+                        f"cell {name} port {port} has invalid bit: {bit!r}"
+                    )
 
 
 # ---------------------------------------------------------------------------

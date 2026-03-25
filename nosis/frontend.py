@@ -171,7 +171,8 @@ def parse_files(
     Returns a :class:`ParseResult` with the compiled AST and any diagnostics.
     Raises :class:`FrontendError` if there are fatal errors.
     """
-    drv = pyslang.driver.Driver()
+    _DriverClass = getattr(pyslang, "Driver", None) or pyslang.driver.Driver
+    drv = _DriverClass()
     drv.addStandardArgs()
 
     # Include ECP5 vendor primitive stubs so slang can elaborate

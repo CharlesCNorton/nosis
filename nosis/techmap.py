@@ -293,7 +293,7 @@ class _ECP5Mapper:
                 ff.attributes["src"] = cell.src
             is_async = bool(cell.params.get("async_reset", False))
             ff.parameters["GSR"] = "DISABLED"
-            ff.parameters["CEMUX"] = "1"
+            ff.parameters["CEMUX"] = "CE"
             ff.parameters["CLKMUX"] = "CLK"
             ff.parameters["LSRMUX"] = "LSR" if rst_net else "INV"
             ff.parameters["REGSET"] = "RESET"

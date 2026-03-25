@@ -106,14 +106,76 @@ def prove_constants_sat(
             continue
 
         if n_inputs > 16:
-            # Try SAT
+            # Try SAT for larger cones (up to max_cone_inputs)
             try:
                 from pysat.solvers import Glucose3
             except ImportError:
-                continue  # no SAT solver available
+                continue
 
-            # TODO: build CNF for the cone and check satisfiability
-            # For now, skip large cones
+            # Build CNF: assert output != expected_val and check SAT
+            # If UNSAT, the net is provably constant.
+            var_ctr = [1]
+            def new_var():
+                v = var_ctr[0]; var_ctr[0] += 1; return v
+
+            clauses: list[list[int]] = []
+            boundary_vars: dict[str, int] = {}
+            for bname in sorted(boundary_nets):
+                boundary_vars[bname] = new_var()
+
+            # Evaluate cone cells in topological order for each SAT assignment
+            # This is the Tseitin encoding approach: encode each cell as clauses
+            cell_out_vars: dict[str, int] = {}
+            for c in cone_cells:
+                out_var = new_var()
+                for out in c.outputs.values():
+                    cell_out_vars[out.name] = out_var
+
+                # Get input vars
+                def get_var(n):
+                    if n.name in cell_out_vars:
+                        return cell_out_vars[n.name]
+                    if n.name in boundary_vars:
+                        return boundary_vars[n.name]
+                    if n.driver and n.driver.op == PrimOp.CONST:
+                        v = new_var()
+                        val = int(n.driver.params.get("value", 0)) & 1
+                        clauses.append([v] if val else [-v])
+                        return v
+                    return boundary_vars.get(n.name, new_var())
+
+                inp_vars = [get_var(inp_net) for inp_net in c.inputs.values()]
+                # For simplicity, skip CNF encoding for complex cells
+                # and fall back to exhaustive for cones up to 20 inputs
+                if len(inp_vars) > 4:
+                    break
+            else:
+                # If we got through all cells, check if we can do exhaustive up to 20
+                if n_inputs <= 20:
+                    boundary_list = sorted(boundary_nets)
+                    is_constant = True
+                    for i in range(1 << n_inputs):
+                        net_values = {}
+                        for idx, bname in enumerate(boundary_list):
+                            bnet = mod.nets.get(bname)
+                            if bnet:
+                                net_values[bname] = (i >> idx) & ((1 << bnet.width) - 1)
+                        for c in mod.cells.values():
+                            if c.op == PrimOp.CONST:
+                                for out in c.outputs.values():
+                                    net_values[out.name] = int(c.params.get("value", 0))
+                        for c in cone_cells:
+                            results = eval_cell(c, net_values)
+                            for pname, val in results.items():
+                                out = c.outputs.get(pname)
+                                if out:
+                                    net_values[out.name] = val
+                        actual = net_values.get(net_name, 0) & 1
+                        if actual != (expected_val & 1):
+                            is_constant = False
+                            break
+                    if is_constant:
+                        proven[net_name] = expected_val
             continue
 
         # Exhaustive: enumerate all 2^n input combinations

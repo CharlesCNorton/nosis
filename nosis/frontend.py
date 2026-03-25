@@ -614,11 +614,14 @@ class _Lowerer:
         rhs = self.lower_expr(expr.right)
         lhs = self.lower_expr(expr.left)
         # Wire RHS to LHS — the assignment connects them
-        # For non-blocking: create FF. For blocking: direct wire.
         if expr.isNonBlocking:
-            # The actual FF creation happens at the procedural block level.
-            # Here we just note the connection.
+            # Non-blocking: FF creation happens at the procedural block level.
             pass
+        else:
+            # Blocking / continuous: direct wire. The LHS net should be
+            # driven by whatever drives the RHS.
+            if lhs.driver is None and rhs.driver is not None:
+                lhs.driver = rhs.driver
         return lhs
 
     # --- Statement lowering ---
@@ -800,9 +803,37 @@ class _Lowerer:
         if kind == "StatementKind.ExpressionStatement":
             expr = stmt.expr
             if str(expr.kind) == "ExpressionKind.Assignment" and expr.isNonBlocking:
-                lhs = self.lower_expr(expr.left)
-                rhs = self.lower_expr(expr.right)
-                results.append((lhs, rhs, None, None))
+                lhs_expr = expr.left
+                lhs_kind = str(lhs_expr.kind)
+
+                if lhs_kind == "ExpressionKind.Concatenation":
+                    # Decompose concatenation LHS into per-element assignments.
+                    # {a, b, c, d} <= rhs becomes:
+                    #   a <= rhs[total-1 : total-wa]
+                    #   b <= rhs[total-wa-1 : total-wa-wb]
+                    #   etc.
+                    rhs = self.lower_expr(expr.right)
+                    operands = list(lhs_expr.operands)
+                    # Concatenation in Verilog is MSB-first: {a, b, c, d}
+                    # a gets the highest bits, d gets the lowest
+                    offset = 0
+                    for op in reversed(operands):
+                        op_w = self._bit_width(op)
+                        lhs_net = self.lower_expr(op)
+                        # Create SLICE of RHS for this element
+                        slice_net = self._fresh_net(f"concat_lhs_slice", op_w)
+                        slice_cell = self._fresh_cell(
+                            f"concat_lhs_slice", PrimOp.SLICE,
+                            offset=offset, width=op_w,
+                        )
+                        self.mod.connect(slice_cell, "A", rhs)
+                        self.mod.connect(slice_cell, "Y", slice_net, direction="output")
+                        results.append((lhs_net, slice_net, None, None))
+                        offset += op_w
+                else:
+                    lhs = self.lower_expr(lhs_expr)
+                    rhs = self.lower_expr(expr.right)
+                    results.append((lhs, rhs, None, None))
 
         elif kind == "StatementKind.Conditional":
             # if (cond) ... else ...

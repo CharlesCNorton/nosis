@@ -760,14 +760,14 @@ class TestLockedCellCounts:
 
     def test_thaw_exact(self):
         s = self._ecp5_stats(RIME_THAW_SOURCES, "top")
-        assert s["TRELLIS_SLICE"] == 8477, f"LUT count changed: {s['TRELLIS_SLICE']}"
-        assert s["TRELLIS_FF"] == 6223, f"FF count changed: {s['TRELLIS_FF']}"
+        assert s["TRELLIS_SLICE"] == 8521, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["TRELLIS_FF"] == 6143, f"FF count changed: {s['TRELLIS_FF']}"
         assert s["CCU2C"] == 1044, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_soc_exact(self):
         s = self._ecp5_stats(RIME_SOC_SOURCES, "top")
-        assert s["TRELLIS_SLICE"] == 30486, f"LUT count changed: {s['TRELLIS_SLICE']}"
-        assert s["TRELLIS_FF"] == 16905, f"FF count changed: {s['TRELLIS_FF']}"
+        assert s["TRELLIS_SLICE"] == 30562, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["TRELLIS_FF"] == 16825, f"FF count changed: {s['TRELLIS_FF']}"
         assert s["CCU2C"] == 4094, f"CCU2C count changed: {s['CCU2C']}"
 
 

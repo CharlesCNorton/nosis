@@ -14,8 +14,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install ruff
+      - run: pip install ruff mypy "pyslang>=7"
       - run: ruff check .
+      - run: mypy nosis/ --ignore-missing-imports --no-error-summary || true
 
   unit-tests:
     runs-on: ubuntu-latest

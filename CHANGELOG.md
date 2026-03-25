@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.2.0 (2026-03-25)
+
+### Critical Fixes
+- **Comparison ops (LT/LE/GT/GE) now produce correct hardware.** Previously mapped to constant 0 (all comparisons were always false). Now implemented as bit-serial comparator chains with borrow propagation.
+- **Signed comparison support.** Frontend records signedness from pyslang types. Evaluator, simulator, and techmap all respect `signed` parameter. MSB inversion in hardware for correct signed ordering.
+- **Signed division and modulo.** SystemVerilog truncate-toward-zero semantics for signed DIV/MOD.
+- **DIV/MOD without DSP warns explicitly** instead of silently producing constant 0.
+- **Unsupported expressions emit SynthesisWarning** instead of silent constant 0.
+
+### Performance
+- **FastSimulator** (`nosis/sim.py`): pre-compiled flat-array evaluator replaces per-cycle topological sort and dict-based dispatch. Pipeline 2.2x faster (0.64s -> 0.29s on uart_tx). Function calls reduced 75%.
+- Adaptive reqmerge cycle count based on FF chain depth analysis.
+
+### Test Suite
+- Consolidated 49 test files into 12 thematic suites. Eliminated redundant design parsing.
+- 585 tests in 126s (was 622 in 159s — 37 redundant duplicates removed, 21% faster).
+- Added: FastSimulator unit tests, comparison correctness tests, signed arithmetic tests, nextpnr integration tests.
+
+### Quality
+- 73 ruff lint errors fixed across the entire codebase. Zero remaining.
+- Dead code removed: `_simulate_combinational`, `_eval_cell` from equiv.py.
+- `py.typed` marker added. mypy runs in CI.
+- All 44 source modules define `__all__`. 90% return type annotations.
+- EHXPLLL: 12 missing PLL parameters added.
+- 5 missing ECP5 primitive stubs added (PCSCLKDIV, DCSC, DQSCE, ECLKSYNCB, ECLKBRIDGECS).
+- pnr_feedback: fallback regex patterns for nextpnr version variants.
+
 ## 0.1.0 (2026-03-25)
 
 First public release. Full synthesis pipeline from SystemVerilog to ECP5 bitstream.

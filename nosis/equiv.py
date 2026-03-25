@@ -35,7 +35,6 @@ Example::
 
 from __future__ import annotations
 
-from nosis.eval import eval_cell as _shared_eval_cell
 from nosis.ir import Cell, Module, Net, PrimOp
 from nosis.sim import FastSimulator
 
@@ -88,15 +87,6 @@ class EquivalenceResult:
         return f"EquivalenceResult({status}, method={self.method})"
 
 
-def _eval_cell(cell: Cell, input_values: dict[str, int]) -> dict[str, int]:
-    """Evaluate a single combinational cell given input net values.
-
-    Delegates to the shared evaluator in nosis.eval.
-    Returns {output_port_name: value}.
-    """
-    return _shared_eval_cell(cell, input_values)
-
-
 def _topological_order(mod: Module) -> list[Cell]:
     """Sort combinational cells in dependency order."""
     order: list[Cell] = []
@@ -117,46 +107,6 @@ def _topological_order(mod: Module) -> list[Cell]:
             visit(cell)
 
     return order
-
-
-def _simulate_combinational(
-    mod: Module,
-    input_values: dict[str, int],
-) -> dict[str, int]:
-    """Simulate the combinational logic of a module for one set of inputs.
-
-    Returns {net_name: value} for all nets.
-    """
-    net_values: dict[str, int] = dict(input_values)
-
-    # Set INPUT cell outputs from the provided input values
-    for cell in mod.cells.values():
-        if cell.op == PrimOp.INPUT:
-            port_name = str(cell.params.get("port_name", ""))
-            val = input_values.get(port_name, 0)
-            for out_net in cell.outputs.values():
-                net_values[out_net.name] = val
-
-    # Set constants
-    for cell in mod.cells.values():
-        if cell.op == PrimOp.CONST:
-            results = _eval_cell(cell, net_values)
-            for pname, val in results.items():
-                out_net = cell.outputs.get(pname)
-                if out_net:
-                    net_values[out_net.name] = val
-
-    # Propagate through combinational logic in topological order
-    for cell in _topological_order(mod):
-        if cell.op in (PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.CONST):
-            continue  # already handled above
-        results = _eval_cell(cell, net_values)
-        for pname, val in results.items():
-            out_net = cell.outputs.get(pname)
-            if out_net:
-                net_values[out_net.name] = val
-
-    return net_values
 
 
 def check_equivalence_exhaustive(

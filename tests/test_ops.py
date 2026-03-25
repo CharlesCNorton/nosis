@@ -1416,3 +1416,112 @@ def test_identity_mutation_not_detected():
     r = check_equivalence_exhaustive(a, b)
     assert r.equivalent
 
+
+
+# --- FastSimulator direct tests ---
+
+def _make_gate_mod(op):
+    """Build a minimal 1-bit gate module for simulator testing."""
+    mod = Module(name="t")
+    a = mod.add_net("a", 1)
+    b = mod.add_net("b", 1)
+    y = mod.add_net("y", 1)
+    ac = mod.add_cell("ap", PrimOp.INPUT, port_name="a")
+    mod.connect(ac, "Y", a, direction="output")
+    mod.ports["a"] = a
+    bc = mod.add_cell("bp", PrimOp.INPUT, port_name="b")
+    mod.connect(bc, "Y", b, direction="output")
+    mod.ports["b"] = b
+    gc = mod.add_cell("g", op)
+    mod.connect(gc, "A", a)
+    mod.connect(gc, "B", b)
+    mod.connect(gc, "Y", y, direction="output")
+    oc = mod.add_cell("yp", PrimOp.OUTPUT, port_name="y")
+    mod.connect(oc, "A", y)
+    mod.ports["y"] = y
+    return mod
+
+
+def test_fast_sim_and():
+    from nosis.sim import FastSimulator
+    sim = FastSimulator(_make_gate_mod(PrimOp.AND))
+    assert sim.step({"a": 1, "b": 1})["y"] == 1
+    assert sim.step({"a": 1, "b": 0})["y"] == 0
+    assert sim.step({"a": 0, "b": 1})["y"] == 0
+    assert sim.step({"a": 0, "b": 0})["y"] == 0
+
+
+def test_fast_sim_or():
+    from nosis.sim import FastSimulator
+    sim = FastSimulator(_make_gate_mod(PrimOp.OR))
+    assert sim.step({"a": 0, "b": 0})["y"] == 0
+    assert sim.step({"a": 1, "b": 0})["y"] == 1
+    assert sim.step({"a": 0, "b": 1})["y"] == 1
+
+
+def test_fast_sim_xor():
+    from nosis.sim import FastSimulator
+    sim = FastSimulator(_make_gate_mod(PrimOp.XOR))
+    assert sim.step({"a": 1, "b": 1})["y"] == 0
+    assert sim.step({"a": 1, "b": 0})["y"] == 1
+
+
+def test_fast_sim_mux():
+    from nosis.sim import FastSimulator
+    mod = Module(name="t")
+    s = mod.add_net("s", 1)
+    a = mod.add_net("a", 8)
+    b = mod.add_net("b", 8)
+    y = mod.add_net("y", 8)
+    mod.add_cell("sp", PrimOp.INPUT, port_name="s")
+    mod.connect(mod.cells["sp"], "Y", s, direction="output")
+    mod.ports["s"] = s
+    mod.add_cell("ap", PrimOp.INPUT, port_name="a")
+    mod.connect(mod.cells["ap"], "Y", a, direction="output")
+    mod.ports["a"] = a
+    mod.add_cell("bp", PrimOp.INPUT, port_name="b")
+    mod.connect(mod.cells["bp"], "Y", b, direction="output")
+    mod.ports["b"] = b
+    mc = mod.add_cell("m", PrimOp.MUX)
+    mod.connect(mc, "S", s)
+    mod.connect(mc, "A", a)
+    mod.connect(mc, "B", b)
+    mod.connect(mc, "Y", y, direction="output")
+    sim = FastSimulator(mod)
+    assert sim.step({"s": 0, "a": 42, "b": 99})["y"] == 42
+    assert sim.step({"s": 1, "a": 42, "b": 99})["y"] == 99
+
+
+def test_fast_sim_const():
+    from nosis.sim import FastSimulator
+    mod = Module(name="t")
+    y = mod.add_net("y", 8)
+    cc = mod.add_cell("c", PrimOp.CONST, value=0xAB, width=8)
+    mod.connect(cc, "Y", y, direction="output")
+    sim = FastSimulator(mod)
+    assert sim.step({})["y"] == 0xAB
+
+
+def test_fast_sim_signed_lt():
+    from nosis.sim import FastSimulator
+    mod = Module(name="t")
+    a = mod.add_net("a", 8)
+    b = mod.add_net("b", 8)
+    y = mod.add_net("y", 1)
+    mod.add_cell("ap", PrimOp.INPUT, port_name="a")
+    mod.connect(mod.cells["ap"], "Y", a, direction="output")
+    mod.ports["a"] = a
+    mod.add_cell("bp", PrimOp.INPUT, port_name="b")
+    mod.connect(mod.cells["bp"], "Y", b, direction="output")
+    mod.ports["b"] = b
+    lt = mod.add_cell("lt", PrimOp.LT)
+    lt.params["signed"] = True
+    mod.connect(lt, "A", a)
+    mod.connect(lt, "B", b)
+    mod.connect(lt, "Y", y, direction="output")
+    sim = FastSimulator(mod)
+    # unsigned: 0xFF > 0x01, but signed: 0xFF = -1 < 1
+    assert sim.step({"a": 0xFF, "b": 0x01})["y"] == 1
+    assert sim.step({"a": 0x01, "b": 0xFF})["y"] == 0
+    # equal
+    assert sim.step({"a": 0x80, "b": 0x80})["y"] == 0

@@ -197,6 +197,54 @@ class TestUartTx:
         assert r.returncode == 0
         assert "0.1.0" in r.stdout or "0.1.0" in r.stderr
 
+    # --- nextpnr integration ---
+
+    def test_nextpnr_json_parseable(self):
+        """If nextpnr-ecp5 is available, verify it can parse the JSON."""
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        from nosis.json_backend import emit_json
+        nextpnr = shutil.which("nextpnr-ecp5")
+        if not nextpnr:
+            return  # skip if not installed
+        with tempfile.TemporaryDirectory() as tmp:
+            jp = Path(tmp) / "test.json"
+            emit_json(self._d().netlist, jp)
+            r = subprocess.run(
+                [nextpnr, "--25k", "--json", str(jp), "--info"],
+                capture_output=True, text=True, timeout=30,
+            )
+            assert "unable to parse" not in (r.stdout + r.stderr).lower()
+
+    def test_nextpnr_places(self):
+        """If nextpnr-ecp5 is available, verify placement succeeds."""
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        from nosis.json_backend import emit_json
+        nextpnr = shutil.which("nextpnr-ecp5")
+        if not nextpnr:
+            return
+        with tempfile.TemporaryDirectory() as tmp:
+            jp = Path(tmp) / "test.json"
+            emit_json(self._d().netlist, jp)
+            r = subprocess.run(
+                [nextpnr, "--25k", "--package", "CABGA256",
+                 "--json", str(jp), "--placer", "sa", "--seed", "1", "--no-route"],
+                capture_output=True, text=True, timeout=60,
+            )
+            assert "unable to parse" not in (r.stdout + r.stderr).lower()
+
+    def test_run_nextpnr_missing_binary(self):
+        """run_nextpnr should return a failed PnRResult when nextpnr is not found."""
+        from nosis.pnr_feedback import run_nextpnr
+        result = run_nextpnr("nonexistent.json", nextpnr_cmd="/nonexistent/nextpnr-ecp5")
+        assert result.success is False
+        assert len(result.errors) > 0
+
 
 # ---------------------------------------------------------------------------
 # uart_rx — mid-bit sampling, baud counter

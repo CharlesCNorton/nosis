@@ -121,16 +121,15 @@ def test_auto_detects_nonequivalent():
 
 def test_counterexample_is_valid():
     """The counterexample must actually produce different outputs."""
-    from nosis.equiv import _simulate_combinational
+    from nosis.sim import FastSimulator
     a = _gate_module("a", PrimOp.AND)
     b = _gate_module("b", PrimOp.OR)
     r = check_equivalence(a, b)
     assert not r.equivalent
     ce = r.counterexample
     assert ce is not None
-    vals_a = _simulate_combinational(a, ce)
-    vals_b = _simulate_combinational(b, ce)
-    # At least one output must differ at the counterexample
+    vals_a = FastSimulator(a).step(ce)
+    vals_b = FastSimulator(b).step(ce)
     a_out = vals_a.get("y", 0)
     b_out = vals_b.get("y", 0)
     assert a_out != b_out, f"counterexample {ce} does not produce different outputs"

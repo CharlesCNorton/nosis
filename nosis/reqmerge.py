@@ -85,8 +85,35 @@ def merge_reachable_equivalent(
     for name, sig in signatures.items():
         sig_groups[tuple(sig)].append(name)
 
+    # Compute the set of nets that feed output ports (directly or through
+    # combinational logic). These must not be merged — they carry the
+    # design's externally visible behavior.
+    output_reachable: set[str] = set()
+    _worklist: list[str] = []
+    for cell in mod.cells.values():
+        if cell.op == PrimOp.OUTPUT:
+            for inp_net in cell.inputs.values():
+                if inp_net.name not in output_reachable:
+                    output_reachable.add(inp_net.name)
+                    _worklist.append(inp_net.name)
+    while _worklist:
+        _nname = _worklist.pop()
+        _net = mod.nets.get(_nname)
+        if _net is None or _net.driver is None:
+            continue
+        if _net.driver.op == PrimOp.FF:
+            # FF is a boundary — don't walk through
+            output_reachable.add(_nname)
+            continue
+        for _inp in _net.driver.inputs.values():
+            if _inp.name not in output_reachable:
+                output_reachable.add(_inp.name)
+                _worklist.append(_inp.name)
+
     # Merge: for each group with >1 nets, pick a canonical representative
-    # and redirect all consumers of the others to the canonical
+    # and redirect all consumers of the others to the canonical.
+    # SAFETY: never merge a net in the output-reachable set unless its
+    # canonical representative is also output-reachable with the same driver.
     merged = 0
     for sig, net_names in sig_groups.items():
         if len(net_names) < 2:
@@ -111,19 +138,23 @@ def merge_reachable_equivalent(
             dup_net = mod.nets.get(name)
             if dup_net is None:
                 continue
-            # Don't merge nets with different widths
             if dup_net.width != canonical_net.width:
                 continue
-            # Don't merge port nets (they must keep their identity)
             if name in mod.ports:
                 continue
+            # Don't merge any net that is in the output-reachable cone.
+            # Simulation may not exercise all code paths that activate
+            # output ports, so nets that appear constant during simulation
+            # may be variable in real operation.
+            if name in output_reachable:
+                continue
+            if canonical_name in output_reachable:
+                continue
 
-            # Redirect all consumers of dup_net to canonical_net
             for cell in mod.cells.values():
                 for pname, pnet in list(cell.inputs.items()):
                     if pnet is dup_net:
                         cell.inputs[pname] = canonical_net
-            # Update port references
             for pname, pnet in list(mod.ports.items()):
                 if pnet is dup_net:
                     mod.ports[pname] = canonical_net

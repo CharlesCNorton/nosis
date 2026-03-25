@@ -762,14 +762,21 @@ def run_default_passes(mod: Module) -> dict[str, int]:
     stats["dont_care"] = propagate_dont_cares(mod)
     stats["dce_dc"] = dead_code_eliminate(mod)
 
-    # Reachable-state equivalence merging (HoTT quotient)
-    # Note: propagate_reachable_constants is too aggressive — it relies on
-    # simulation coverage which may miss rare code paths. Only use the
-    # net-level merge (which merges nets with identical signatures, not
-    # nets with constant signatures).
+    # Reachable-state equivalence merging (HoTT quotient).
+    # Note: some SoC output ports are undriven due to a hierarchy lowering
+    # issue (sub-instance output wiring), not due to reqmerge. The reqmerge
+    # is sound for nets that ARE connected.
     from nosis.reqmerge import merge_reachable_equivalent
     stats["req_merge"] = merge_reachable_equivalent(mod, cycles=200)
-    stats["dce_req"] = dead_code_eliminate(mod)
+    dead_code_eliminate(mod)
+
+    # SAT-proven constant replacement DISABLED: the combination of
+    # simulation-based reqmerge + SAT constant proof is unsound.
+    # reqmerge merges nets that appear constant during simulation
+    # (but vary under untested conditions), then SAT "proves" the
+    # downstream logic constant based on the already-merged inputs.
+    # The cascade removes output port drivers. See test_output_ports_survive.
+    stats["sat_const"] = 0
 
     # Cut-based re-mapping: absorb multi-cell cones into single LUT4s
     from nosis.cutmap import cut_map_luts

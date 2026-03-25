@@ -215,6 +215,84 @@ def test_mux_to_and_preserves_nonzero():
     assert mod.cells["mux0"].op == PrimOp.MUX
 
 
+def test_output_ports_survive_optimization():
+    """Output ports with drivers before optimization must retain drivers after.
+
+    Known issue: some SoC top-level output ports (usb_tx, led, sdram_*)
+    are undriven even BEFORE optimization due to a hierarchy port wiring
+    limitation in _lower_sub_instance. This test only checks ports that
+    HAD drivers before optimization.
+    """
+    import os
+    os.environ.setdefault("NOSIS_PYSLANG_PATH", "D:/slang/build/lib")
+    from nosis.frontend import parse_files, lower_to_ir
+    from nosis.ir import PrimOp
+    from tests.conftest import RIME_UART_TX
+
+    # Test on uart_tx which has all ports properly wired
+    r = parse_files([RIME_UART_TX], top="uart_tx")
+    d = lower_to_ir(r, top="uart_tx")
+    m = d.top_module()
+
+    # Record driven output ports before optimization
+    driven_before = set()
+    for pname, pnet in m.ports.items():
+        is_output = any(
+            c.op == PrimOp.OUTPUT and any(inp.name == pname for inp in c.inputs.values())
+            for c in m.cells.values()
+        )
+        if is_output and pnet.driver is not None:
+            driven_before.add(pname)
+
+    run_default_passes(m)
+
+    # Every port that was driven before must still be driven
+    lost = []
+    for pname in driven_before:
+        pnet = m.ports.get(pname)
+        if pnet and pnet.driver is None:
+            lost.append(pname)
+
+    assert len(lost) == 0, f"optimization removed drivers for: {lost}"
+
+
+def test_uart_tx_has_logic_after_optimization():
+    """uart_tx must retain combinational logic after optimization — it's a real design."""
+    import os
+    os.environ.setdefault("NOSIS_PYSLANG_PATH", "D:/slang/build/lib")
+    from nosis.frontend import parse_files, lower_to_ir
+    from nosis.ir import PrimOp
+    from tests.conftest import RIME_UART_TX
+
+    r = parse_files([RIME_UART_TX], top="uart_tx")
+    d = lower_to_ir(r, top="uart_tx")
+    m = d.top_module()
+    run_default_passes(m)
+
+    ffs = sum(1 for c in m.cells.values() if c.op == PrimOp.FF)
+    comb = sum(1 for c in m.cells.values()
+               if c.op not in (PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.FF, PrimOp.CONST))
+    assert ffs >= 3, f"uart_tx must retain at least 3 FFs, got {ffs}"
+    assert comb >= 5, f"uart_tx must retain combinational logic, got {comb} comb cells"
+
+
+def test_soc_ff_count_after_optimization():
+    """SoC must retain a substantial number of FFs — it has CPUs, UARTs, SPI, SDRAM."""
+    import os
+    os.environ.setdefault("NOSIS_PYSLANG_PATH", "D:/slang/build/lib")
+    from nosis.frontend import parse_files, lower_to_ir
+    from nosis.ir import PrimOp
+    from tests.conftest import RIME_SOC_SOURCES
+
+    r = parse_files(RIME_SOC_SOURCES, top="top")
+    d = lower_to_ir(r, top="top")
+    m = d.top_module()
+    run_default_passes(m)
+
+    ffs = sum(1 for c in m.cells.values() if c.op == PrimOp.FF)
+    assert ffs >= 500, f"SoC must retain at least 500 FFs, got {ffs}"
+
+
 def test_soc_lut_count_regression():
     """SoC LUT count after full pipeline must not regress above 5500 slices."""
     import os

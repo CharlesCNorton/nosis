@@ -18,7 +18,7 @@ Without switching activity simulation, toggle rates are assumed at 12.5%
 (typical for synchronous logic). True power requires VCD-based analysis.
 
 ECP5 power data (typical, 1.1V core, -6 speed grade):
-  TRELLIS_SLICE: 8.5 µW static, 12.0 µW/MHz dynamic at 12.5% toggle
+  LUT4:          4.25 µW static, 6.0 µW/MHz dynamic at 12.5% toggle
   TRELLIS_FF:    2.0 µW static,  3.5 µW/MHz dynamic
   CCU2C:         9.0 µW static, 13.0 µW/MHz dynamic
   DP16KD:       50.0 µW static, 85.0 µW/MHz dynamic
@@ -40,7 +40,7 @@ __all__ = [
 
 # Power model: (static_uw, dynamic_uw_per_mhz)
 _CELL_POWER: dict[str, tuple[float, float]] = {
-    "LUT4": (8.5, 12.0),
+    "LUT4": (4.25, 6.0),  # half of TRELLIS_SLICE (which contains 2 LUT4s)
     "TRELLIS_FF": (2.0, 3.5),
     "CCU2C": (9.0, 13.0),
     "DP16KD": (50.0, 85.0),

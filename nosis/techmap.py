@@ -1,7 +1,7 @@
 """Nosis ECP5 technology mapping — map IR primitives to ECP5 cells.
 
 Maps the technology-independent Nosis IR onto Lattice ECP5 primitives:
-  - Combinational logic -> TRELLIS_SLICE (LUT4)
+  - Combinational logic -> LUT4
   - Sequential logic -> TRELLIS_FF
   - Constants -> tied signals
   - Ports -> top-level port declarations

@@ -6,7 +6,7 @@ or Verilog source files and runs the full pipeline:
   1. Parse and elaborate via pyslang
   2. Lower the elaborated AST to the Nosis IR
   3. Optimize (constant folding, dead code elimination)
-  4. Map to ECP5 technology (TRELLIS_SLICE LUT4, TRELLIS_FF)
+  4. Map to ECP5 technology (LUT4, TRELLIS_FF)
   5. Emit nextpnr-compatible JSON
 
 Flags control optimization (--no-opt), output path (-o), top module
@@ -205,45 +205,64 @@ def main(argv: list[str] | None = None) -> int:
             print(emit_json_str(netlist))
         t_emit = time.monotonic()
 
-    # --- ecppack integration ---
+    # --- nextpnr + ecppack integration ---
     if args.ecppack and args.output:
         import subprocess
-        json_path = str(Path(args.output).resolve())
-        bit_path = str(Path(args.ecppack).resolve())
-        try:
-            import shutil
-            ecppack_cmd = shutil.which("ecppack")
-            if not ecppack_cmd:
-                # Search OSS CAD Suite paths
-                import os
-                for env_var in ("ICEPI_OSS_CAD_BIN", "OSS_CAD_BIN"):
-                    p = os.environ.get(env_var)
-                    if p:
-                        candidate = Path(p) / ("ecppack.exe" if os.name == "nt" else "ecppack")
-                        if candidate.exists():
-                            ecppack_cmd = str(candidate)
-                            break
-                for env_var in ("ICEPI_OSS_CAD_ROOT", "OSS_CAD_ROOT"):
-                    if ecppack_cmd:
-                        break
-                    p = os.environ.get(env_var)
-                    if p:
-                        candidate = Path(p) / "bin" / ("ecppack.exe" if os.name == "nt" else "ecppack")
-                        if candidate.exists():
-                            ecppack_cmd = str(candidate)
-            if not ecppack_cmd:
-                ecppack_cmd = "ecppack"
-            subprocess.run(
-                [ecppack_cmd, "--input", json_path, "--bit", bit_path],
-                check=True, capture_output=True, text=True,
-            )
-            if args.verbose:
-                print(f"ecppack: {bit_path}")
-        except FileNotFoundError:
-            print("warning: ecppack not found in PATH", file=sys.stderr)
-        except subprocess.CalledProcessError as e:
-            print(f"error: ecppack failed: {e.stderr}", file=sys.stderr)
-            return 1
+        import shutil
+        import os as _os
+
+        json_path = Path(args.output).resolve()
+        bit_path = Path(args.ecppack).resolve()
+        config_path = json_path.with_suffix(".config")
+
+        def _find_tool(name: str) -> str | None:
+            found = shutil.which(name)
+            if found:
+                return found
+            exe = f"{name}.exe" if _os.name == "nt" else name
+            for env_var in ("ICEPI_OSS_CAD_BIN", "OSS_CAD_BIN"):
+                p = _os.environ.get(env_var)
+                if p:
+                    c = Path(p) / exe
+                    if c.exists():
+                        return str(c)
+            for env_var in ("ICEPI_OSS_CAD_ROOT", "OSS_CAD_ROOT"):
+                p = _os.environ.get(env_var)
+                if p:
+                    c = Path(p) / "bin" / exe
+                    if c.exists():
+                        return str(c)
+            return None
+
+        nextpnr_cmd = _find_tool("nextpnr-ecp5")
+        ecppack_cmd = _find_tool("ecppack")
+
+        if not nextpnr_cmd:
+            print("warning: nextpnr-ecp5 not found — cannot produce bitstream", file=sys.stderr)
+        elif not ecppack_cmd:
+            print("warning: ecppack not found — cannot produce bitstream", file=sys.stderr)
+        else:
+            try:
+                # Run nextpnr: JSON -> textcfg
+                subprocess.run(
+                    [nextpnr_cmd, "--25k", "--package", "CABGA256",
+                     "--json", str(json_path), "--textcfg", str(config_path)],
+                    check=True, capture_output=True, text=True,
+                )
+                if args.verbose:
+                    print(f"nextpnr: {config_path}")
+                # Run ecppack: textcfg -> bitstream
+                subprocess.run(
+                    [ecppack_cmd, "--compress", str(config_path), str(bit_path)],
+                    check=True, capture_output=True, text=True,
+                )
+                if args.verbose:
+                    print(f"ecppack: {bit_path}")
+            except FileNotFoundError as exc:
+                print(f"warning: tool not found: {exc}", file=sys.stderr)
+            except subprocess.CalledProcessError as e:
+                print(f"error: bitstream generation failed: {e.stderr}", file=sys.stderr)
+                return 1
 
     t_total = time.monotonic() - t0
 

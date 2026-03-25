@@ -214,7 +214,10 @@ def parse_files(
     comp = drv.createCompilation()
 
     # Diagnostic codes to suppress — these are not relevant to synthesis.
-    _SUPPRESS_CODES = {"DiagCode(MissingTimeScale)"}
+    _SUPPRESS_CODES = {
+        "DiagCode(MissingTimeScale)",
+        "DiagCode(MultipleAlwaysAssigns)",  # common in synthesizable RTL with multi-block assigns
+    }
 
     diagnostics: list[str] = []
     errors: list[str] = []

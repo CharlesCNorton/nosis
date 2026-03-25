@@ -23,23 +23,19 @@ __all__ = [
 _CELL_MODELS = """
 // ECP5 behavioral simulation models for nosis post-synthesis verification
 
-module TRELLIS_SLICE_SIM #(
-    parameter LUT0_INITVAL = 16'h0000,
-    parameter MODE = "LOGIC",
-    parameter GSR = "DISABLED",
-    parameter REG0_SD = "0",
-    parameter SRMODE = "LSR_OVER_CE"
+module LUT4_SIM #(
+    parameter [15:0] INIT = 16'h0000
 ) (
-    input A0, B0, C0, D0,
-    output F0
+    input A, B, C, D,
+    output Z
 );
-    wire [3:0] idx = {D0, C0, B0, A0};
-    assign F0 = LUT0_INITVAL[idx];
+    wire [3:0] idx = {D, C, B, A};
+    assign Z = INIT[idx];
 endmodule
 
 module TRELLIS_FF_SIM #(
     parameter GSR = "DISABLED",
-    parameter CEMUX = "1",
+    parameter CEMUX = "CE",
     parameter CLKMUX = "CLK",
     parameter LSRMUX = "LSR",
     parameter REGSET = "RESET",
@@ -197,14 +193,19 @@ def generate_postsynth_verilog(netlist: ECP5Netlist) -> str:
     for name, cell in sorted(netlist.cells.items()):
         safe_name = name.replace("$", "_").replace(".", "_")
         if cell.cell_type == "LUT4":
-            init = cell.parameters.get("LUT0_INITVAL", "0x0000")
-            a0 = _bit_ref(cell.ports.get("A0", ["0"]))
-            b0 = _bit_ref(cell.ports.get("B0", ["0"]))
-            c0 = _bit_ref(cell.ports.get("C0", ["0"]))
-            d0 = _bit_ref(cell.ports.get("D0", ["0"]))
-            f0 = _bit_ref(cell.ports.get("F0", ["0"]))
-            lines.append(f"  TRELLIS_SLICE_SIM #(.LUT0_INITVAL(16'{init})) {safe_name} (")
-            lines.append(f"    .A0({a0}), .B0({b0}), .C0({c0}), .D0({d0}), .F0({f0}));")
+            init_bin = cell.parameters.get("INIT", "0000000000000000")
+            # Convert binary string to hex for Verilog parameter
+            try:
+                init_int = int(init_bin, 2)
+            except ValueError:
+                init_int = 0
+            a = _bit_ref(cell.ports.get("A", ["0"]))
+            b = _bit_ref(cell.ports.get("B", ["0"]))
+            c = _bit_ref(cell.ports.get("C", ["0"]))
+            d = _bit_ref(cell.ports.get("D", ["0"]))
+            z = _bit_ref(cell.ports.get("Z", ["0"]))
+            lines.append(f"  LUT4_SIM #(.INIT(16'h{init_int:04X})) {safe_name} (")
+            lines.append(f"    .A({a}), .B({b}), .C({c}), .D({d}), .Z({z}));")
         elif cell.cell_type == "TRELLIS_FF":
             clk = _bit_ref(cell.ports.get("CLK", ["0"]))
             di = _bit_ref(cell.ports.get("DI", ["0"]))

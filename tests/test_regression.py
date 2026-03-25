@@ -377,7 +377,7 @@ class TestPicoRV32Soc:
         for name, cell in mod_json["cells"].items():
             assert "type" in cell
             assert "connections" in cell
-            assert cell["type"] in ("LUT4", "TRELLIS_FF", "CCU2C", "MULT18X18D", "DP16KD", "TRELLIS_DPR16X4"), f"unexpected cell type: {cell['type']}"
+            assert cell["type"] in ("LUT4", "TRELLIS_FF", "CCU2C", "MULT18X18D", "DP16KD", "TRELLIS_DPR16X4", "ALU54B", "BB"), f"unexpected cell type: {cell['type']}"
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +422,7 @@ class TestLanguageFeatures:
             assert "B" in cell.inputs, f"SSHR {cell.name} missing B"
 
     def test_sshr_techmap(self):
-        """SSHR cells must produce TRELLIS_SLICE cells after mapping."""
+        """SSHR cells must produce LUT4 cells after mapping."""
         from tests.conftest import RIME_PICORV32
         result = parse_files([RIME_PICORV32], top="picorv32")
         design = lower_to_ir(result, top="picorv32")

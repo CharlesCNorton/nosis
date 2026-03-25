@@ -12,7 +12,7 @@ from tests.conftest import RIME_UART_TX, requires_rime
 
 def test_cell_models_valid():
     models = generate_cell_models()
-    assert "TRELLIS_SLICE_SIM" in models
+    assert "LUT4_SIM" in models
     assert "TRELLIS_FF_SIM" in models
     assert "CCU2C_SIM" in models
     assert "module" in models
@@ -34,20 +34,21 @@ def test_postsynth_with_ports():
     assert "output out" in v
 
 
-def test_postsynth_with_cells():
+def test_postsynth_with_lut4_cell():
     nl = ECP5Netlist(top="test")
     nl.ports["a"] = {"direction": "input", "bits": [2]}
     nl.ports["y"] = {"direction": "output", "bits": [3]}
     c = nl.add_cell("lut0", "LUT4")
-    c.parameters["LUT0_INITVAL"] = "0x8888"
-    c.ports["A0"] = [2]
-    c.ports["B0"] = [2]
-    c.ports["C0"] = ["0"]
-    c.ports["D0"] = ["0"]
-    c.ports["F0"] = [3]
+    c.parameters["INIT"] = format(0x8888, "016b")
+    c.ports["A"] = [2]
+    c.ports["B"] = [2]
+    c.ports["C"] = ["0"]
+    c.ports["D"] = ["0"]
+    c.ports["Z"] = [3]
     v = generate_postsynth_verilog(nl)
-    assert "TRELLIS_SLICE_SIM" in v
+    assert "LUT4_SIM" in v
     assert "lut0" in v.replace("$", "_")
+    assert "0x8888" in v.upper() or "8888" in v.upper()
 
 
 def test_postsynth_from_real_design():
@@ -59,8 +60,7 @@ def test_postsynth_from_real_design():
     assert "endmodule" in v
     assert "clk" in v
     assert "tx" in v
-    # Should have cell instantiations
-    assert "TRELLIS" in v
+    assert "LUT4_SIM" in v
 
 
 def test_postsynth_compiles_with_iverilog():
@@ -90,33 +90,24 @@ def test_postsynth_compiles_with_iverilog():
             [iverilog, "-g2012", "-o", "/dev/null", str(models_path), str(postsynth_path)],
             capture_output=True, text=True, cwd=tmp,
         )
-        # Compilation may have warnings but should not fail
-        # (allowing failure for now since the models are simplified)
 
-
-# ---------------------------------------------------------------------------
-# Post-synthesis simulation comparison
-# ---------------------------------------------------------------------------
 
 def test_postsynth_verilog_has_all_ports():
-    """Post-synth Verilog must preserve all design ports."""
     result = parse_files([RIME_UART_TX], top="uart_tx")
     design = lower_to_ir(result, top="uart_tx")
     nl = map_to_ecp5(design)
     v = generate_postsynth_verilog(nl)
-    # All ports from the original design must appear in the post-synth module
     for port_name in nl.ports:
         assert port_name in v, f"port {port_name} missing from post-synth Verilog"
 
 
 def test_postsynth_verilog_has_all_cell_types():
-    """Post-synth Verilog must instantiate every cell type present in the netlist."""
     result = parse_files([RIME_UART_TX], top="uart_tx")
     design = lower_to_ir(result, top="uart_tx")
     nl = map_to_ecp5(design)
     stats = nl.stats()
     v = generate_postsynth_verilog(nl)
     if stats.get("LUT4", 0) > 0:
-        assert "TRELLIS_SLICE_SIM" in v
+        assert "LUT4_SIM" in v
     if stats.get("TRELLIS_FF", 0) > 0:
         assert "TRELLIS_FF_SIM" in v

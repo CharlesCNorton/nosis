@@ -1,6 +1,6 @@
 """Nosis carry chain inference — recognize addition/subtraction for CCU2C mapping.
 
-ECP5 CCU2C is a 2-bit carry chain unit integrated into TRELLIS_SLICE.
+ECP5 CCU2C is a 2-bit carry chain unit integrated into the ECP5 slice.
 Each CCU2C contains two full adders with carry propagation. An N-bit
 adder uses ceil(N/2) CCU2C cells chained together.
 

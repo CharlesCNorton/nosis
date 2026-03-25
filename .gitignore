@@ -10,3 +10,20 @@ build/
 *.so
 *.o
 *.a
+.hypothesis/
+
+# Generated synthesis artifacts
+*.bit
+*.config
+*_nosis.json
+*_yosys.json
+*_ref.json
+bsearch*.json
+ff_test*.json
+minimal.json
+test_cell.json
+test_output*.json
+thaw_output.json
+rime_v_output.json
+nextpnr_output.txt
+yosys_script.ys

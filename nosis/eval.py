@@ -89,9 +89,25 @@ def eval_const_op(
     if op == PrimOp.MUL:
         return (a * b) & mask
     if op == PrimOp.DIV:
-        return (a // b if b != 0 else 0) & mask
+        if b == 0:
+            return 0
+        if params.get("signed") and width > 0:
+            sa = a if not (a & (1 << (width - 1))) else a - (1 << width)
+            sb = b if not (b & (1 << (width - 1))) else b - (1 << width)
+            # Truncate toward zero (SystemVerilog semantics)
+            result = int(sa / sb) if sb != 0 else 0
+            return result & mask
+        return (a // b) & mask
     if op == PrimOp.MOD:
-        return (a % b if b != 0 else 0) & mask
+        if b == 0:
+            return 0
+        if params.get("signed") and width > 0:
+            sa = a if not (a & (1 << (width - 1))) else a - (1 << width)
+            sb = b if not (b & (1 << (width - 1))) else b - (1 << width)
+            # Sign of result matches dividend (SystemVerilog semantics)
+            result = int(sa - int(sa / sb) * sb) if sb != 0 else 0
+            return result & mask
+        return (a % b) & mask
     if op == PrimOp.SHL:
         return (a << (b & 0x3F)) & mask
     if op == PrimOp.SHR:
@@ -110,12 +126,28 @@ def eval_const_op(
     if op == PrimOp.NE:
         return 1 if a != b else 0
     if op == PrimOp.LT:
+        if params.get("signed") and width > 0:
+            sa = a if not (a & (1 << (width - 1))) else a - (1 << width)
+            sb = b if not (b & (1 << (width - 1))) else b - (1 << width)
+            return 1 if sa < sb else 0
         return 1 if a < b else 0
     if op == PrimOp.LE:
+        if params.get("signed") and width > 0:
+            sa = a if not (a & (1 << (width - 1))) else a - (1 << width)
+            sb = b if not (b & (1 << (width - 1))) else b - (1 << width)
+            return 1 if sa <= sb else 0
         return 1 if a <= b else 0
     if op == PrimOp.GT:
+        if params.get("signed") and width > 0:
+            sa = a if not (a & (1 << (width - 1))) else a - (1 << width)
+            sb = b if not (b & (1 << (width - 1))) else b - (1 << width)
+            return 1 if sa > sb else 0
         return 1 if a > b else 0
     if op == PrimOp.GE:
+        if params.get("signed") and width > 0:
+            sa = a if not (a & (1 << (width - 1))) else a - (1 << width)
+            sb = b if not (b & (1 << (width - 1))) else b - (1 << width)
+            return 1 if sa >= sb else 0
         return 1 if a >= b else 0
 
     # --- MUX ---

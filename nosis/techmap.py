@@ -97,13 +97,17 @@ def _compute_lut4_init(op: PrimOp, num_inputs: int) -> int:
     Inputs are mapped to LUT inputs A, B, C, D (indices 0, 1, 2, 3).
     The truth table is: for each combination of inputs i (0..15),
     INIT[i] = f(A=i&1, B=(i>>1)&1, C=(i>>2)&1, D=(i>>3)&1).
+
+    For comparison ops used in the per-bit comparator chain:
+      A = a_bit, B = b_bit, C = borrow_in (less-than so far from lower bits)
+      Result = borrow_out (this bit position says a < b so far)
     """
     init = 0
     for i in range(16):
         a = (i >> 0) & 1
         b = (i >> 1) & 1
         c = (i >> 2) & 1
-        (i >> 3) & 1
+        d = (i >> 3) & 1  # noqa: F841 — reserved for future 4-input ops
 
         if op == PrimOp.AND:
             result = a & b
@@ -120,6 +124,19 @@ def _compute_lut4_init(op: PrimOp, num_inputs: int) -> int:
             result = 1 if a == b else 0
         elif op == PrimOp.NE:
             result = 1 if a != b else 0
+        elif op == PrimOp.LT:
+            # Per-bit comparator: A=a_bit, B=b_bit, C=borrow_in
+            # borrow_out = (!a & b) | (!(a ^ b) & borrow_in)
+            # i.e. b>a at this bit, or equal and previous borrow propagates
+            result = ((~a & 1) & b) | (((a ^ b) ^ 1) & c)
+        elif op == PrimOp.LE:
+            # Same as LT but also true when fully equal (final stage adds OR with eq chain)
+            result = ((~a & 1) & b) | (((a ^ b) ^ 1) & c)
+        elif op == PrimOp.GT:
+            # Swap a/b: a>b iff b<a
+            result = ((~b & 1) & a) | (((a ^ b) ^ 1) & c)
+        elif op == PrimOp.GE:
+            result = ((~b & 1) & a) | (((a ^ b) ^ 1) & c)
         elif op == PrimOp.REDUCE_AND:
             result = a  # single bit: AND = identity
         elif op == PrimOp.REDUCE_OR:
@@ -444,7 +461,11 @@ class _ECP5Mapper:
             prev_cout = cout
 
     def _map_multiply(self, cell: Cell) -> None:
-        """Map MUL to MULT18X18D or ALU54B (MAC), else to LUTs."""
+        """Map MUL to MULT18X18D or ALU54B (MAC), else to LUTs.
+
+        DIV and MOD cannot be implemented in LUTs and require DSP inference.
+        If they reach the LUT fallback, emit a warning and map to constant 0.
+        """
         if cell.params.get("dsp_mac"):
             # MAC pattern: emit ALU54B instead of MULT18X18D + ADD
             a_net = cell.inputs.get("A")
@@ -557,6 +578,20 @@ class _ECP5Mapper:
                 dsp.ports["SIGNEDA"] = ["1" if cell.params.get("dsp_signed_a") else "0"]
                 dsp.ports["SIGNEDB"] = ["1" if cell.params.get("dsp_signed_b") else "0"]
                 return
+        if cell.op in (PrimOp.DIV, PrimOp.MOD):
+            import warnings
+            warnings.warn(
+                f"DIV/MOD operation '{cell.name}' mapped to constant 0 — "
+                f"cannot be implemented in LUTs without DSP inference",
+                stacklevel=2,
+            )
+            # Map to constant 0 explicitly
+            out_nets = list(cell.outputs.values())
+            if out_nets:
+                out_ecp5 = self._get_net(out_nets[0])
+                for i in range(out_nets[0].width):
+                    out_ecp5.bits[i] = "0"
+            return
         self._map_lut(cell)
 
     def _map_shift(self, cell: Cell) -> None:
@@ -636,8 +671,118 @@ class _ECP5Mapper:
             out_ecp5.bits[i] = current[i]
 
     def _map_compare(self, cell: Cell) -> None:
-        """Map comparison operations to LUT chains."""
-        self._map_lut(cell)
+        """Map comparison operations (LT, LE, GT, GE) to a bit-serial comparator.
+
+        Builds a chain of LUT4 cells from LSB to MSB. Each LUT computes
+        a "borrow" (for LT/LE) or "carry" (for GT/GE) that propagates
+        through the chain. The final output is the 1-bit comparison result.
+
+        For LE: result = LT_chain OR EQ_chain (all bits equal)
+        For GE: result = GT_chain OR EQ_chain
+        """
+        a_net = cell.inputs.get("A")
+        b_net = cell.inputs.get("B")
+        out_nets = list(cell.outputs.values())
+        if not a_net or not b_net or not out_nets:
+            return
+        out_net = out_nets[0]
+
+        a_bits = self._get_bits(a_net)
+        b_bits = self._get_bits(b_net)
+        width = max(len(a_bits), len(b_bits))
+
+        if width == 0:
+            # Zero-width: comparison is always false (LT/GT) or true (LE/GE)
+            out_ecp5 = self._get_net(out_net)
+            if cell.op in (PrimOp.LE, PrimOp.GE):
+                out_ecp5.bits[0] = 1  # constant 1
+            else:
+                out_ecp5.bits[0] = "0"
+            return
+
+        # Determine if we swap A/B (GT/GE are LT/LE with swapped operands)
+        if cell.op in (PrimOp.GT, PrimOp.GE):
+            a_bits, b_bits = b_bits, a_bits
+
+        # Build per-bit borrow chain from LSB to MSB
+        # LUT: A=a_bit, B=b_bit, C=borrow_in
+        # borrow_out = (!a & b) | (!(a^b) & borrow_in)
+        init = _compute_lut4_init(PrimOp.LT, 3)
+        init_hex = f"{init:04X}"
+
+        # Initial borrow = 0
+        borrow = "0"
+
+        for i in range(width):
+            ab = a_bits[i] if i < len(a_bits) else "0"
+            bb = b_bits[i] if i < len(b_bits) else "0"
+
+            if i == width - 1 and cell.op in (PrimOp.LT, PrimOp.GT):
+                # Last stage: output is the final result
+                out_bit = self._get_net(out_net).bits[0] if out_net.width >= 1 else self.nl.alloc_bit()
+            else:
+                out_bit = self.nl.alloc_bit()
+
+            lut = self.nl.add_cell(self._fresh_name("cmp"), "LUT4")
+            if cell.src:
+                lut.attributes["src"] = cell.src
+            lut.parameters["INIT"] = init_hex
+            lut.ports["A"] = [ab]
+            lut.ports["B"] = [bb]
+            lut.ports["C"] = [borrow]
+            lut.ports["D"] = ["0"]
+            lut.ports["Z"] = [out_bit]
+            borrow = out_bit
+
+        # For LE/GE: result = strict_less OR all_equal
+        if cell.op in (PrimOp.LE, PrimOp.GE):
+            # Build equality chain: all bits must be equal
+            eq_result = "1"  # start true
+            for i in range(width):
+                ab = a_bits[i] if i < len(a_bits) else "0"
+                bb = b_bits[i] if i < len(b_bits) else "0"
+                # XNOR: equal when a==b
+                xnor_out = self.nl.alloc_bit()
+                xnor_lut = self.nl.add_cell(self._fresh_name("cmp_eq"), "LUT4")
+                # XNOR truth table: A=a, B=b -> !(a^b) = 1001 = 0x9
+                xnor_lut.parameters["INIT"] = "1001000000001001"
+                xnor_lut.ports["A"] = [ab]
+                xnor_lut.ports["B"] = [bb]
+                xnor_lut.ports["C"] = ["0"]
+                xnor_lut.ports["D"] = ["0"]
+                xnor_lut.ports["Z"] = [xnor_out]
+
+                # AND with running equality
+                and_out = self.nl.alloc_bit()
+                and_lut = self.nl.add_cell(self._fresh_name("cmp_and"), "LUT4")
+                and_lut.parameters["INIT"] = f"{_compute_lut4_init(PrimOp.AND, 2):04X}"
+                and_lut.ports["A"] = [xnor_out]
+                and_lut.ports["B"] = [eq_result]
+                and_lut.ports["C"] = ["0"]
+                and_lut.ports["D"] = ["0"]
+                and_lut.ports["Z"] = [and_out]
+                eq_result = and_out
+
+            # OR the strict-less result with equality
+            out_ecp5 = self._get_net(out_net)
+            final_bit = out_ecp5.bits[0] if out_net.width >= 1 else self.nl.alloc_bit()
+            or_lut = self.nl.add_cell(self._fresh_name("cmp_or"), "LUT4")
+            or_lut.parameters["INIT"] = f"{_compute_lut4_init(PrimOp.OR, 2):04X}"
+            or_lut.ports["A"] = [borrow]  # strict less
+            or_lut.ports["B"] = [eq_result]  # all equal
+            or_lut.ports["C"] = ["0"]
+            or_lut.ports["D"] = ["0"]
+            or_lut.ports["Z"] = [final_bit]
+            out_ecp5.bits[0] = final_bit
+        else:
+            # LT/GT: borrow chain output is already wired to out_net
+            out_ecp5 = self._get_net(out_net)
+            out_ecp5.bits[0] = borrow
+
+        # Zero remaining output bits (comparison is 1-bit result)
+        out_ecp5 = self._get_net(out_net)
+        for i in range(1, out_net.width):
+            out_ecp5.bits[i] = "0"
 
     def _map_concat(self, cell: Cell) -> None:
         """Map concatenation — pure wiring, no physical cells."""

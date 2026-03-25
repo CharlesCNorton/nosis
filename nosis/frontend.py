@@ -420,6 +420,12 @@ class _Lowerer:
             net = self._fresh_net(f"unsupported_{kind}", w)
             cell = self._fresh_cell(f"unsupported_{kind}", PrimOp.CONST, value=0, width=w)
             self.mod.connect(cell, "Y", net, direction="output")
+            src = self._src_from_node(expr)
+            self.warnings.append(SynthesisWarning(
+                "unsupported_expression",
+                f"unsupported expression kind {kind} replaced with constant 0",
+                src=src,
+            ))
             return net
 
     def _lower_literal(self, expr: Any) -> Net:
@@ -484,6 +490,15 @@ class _Lowerer:
         }
         prim = op_map.get(op_str, PrimOp.AND)
         cell = self._fresh_cell("binop", prim)
+        # Record signedness for comparison and arithmetic ops
+        if prim in (PrimOp.LT, PrimOp.LE, PrimOp.GT, PrimOp.GE,
+                    PrimOp.DIV, PrimOp.MOD, PrimOp.SSHR):
+            is_signed = False
+            left_type = getattr(expr.left, "type", None)
+            if left_type and hasattr(left_type, "isSigned"):
+                is_signed = bool(left_type.isSigned)
+            if is_signed:
+                cell.params["signed"] = True
         self.mod.connect(cell, "A", lhs)
         self.mod.connect(cell, "B", rhs)
         self.mod.connect(cell, "Y", out, direction="output")

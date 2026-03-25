@@ -62,16 +62,32 @@ def _op_eq(a, b, _s, _m, _p):
 def _op_ne(a, b, _s, _m, _p):
     return 1 if a != b else 0
 
-def _op_lt(a, b, _s, _m, _p):
+def _to_signed(v, mask, params):
+    if not params.get("signed"):
+        return v
+    w = params.get("_cmp_width", 0)
+    if w > 0 and (v & (1 << (w - 1))):
+        return v - (1 << w)
+    return v
+
+def _op_lt(a, b, _s, mask, params):
+    if params.get("signed"):
+        return 1 if _to_signed(a, mask, params) < _to_signed(b, mask, params) else 0
     return 1 if a < b else 0
 
-def _op_le(a, b, _s, _m, _p):
+def _op_le(a, b, _s, mask, params):
+    if params.get("signed"):
+        return 1 if _to_signed(a, mask, params) <= _to_signed(b, mask, params) else 0
     return 1 if a <= b else 0
 
-def _op_gt(a, b, _s, _m, _p):
+def _op_gt(a, b, _s, mask, params):
+    if params.get("signed"):
+        return 1 if _to_signed(a, mask, params) > _to_signed(b, mask, params) else 0
     return 1 if a > b else 0
 
-def _op_ge(a, b, _s, _m, _p):
+def _op_ge(a, b, _s, mask, params):
+    if params.get("signed"):
+        return 1 if _to_signed(a, mask, params) >= _to_signed(b, mask, params) else 0
     return 1 if a >= b else 0
 
 def _op_mux(a, b, s, mask, _p):
@@ -262,6 +278,13 @@ class FastSimulator:
             if cell.op == PrimOp.SSHR:
                 params = dict(params)
                 params["_width"] = width
+            elif cell.op in (PrimOp.LT, PrimOp.LE, PrimOp.GT, PrimOp.GE):
+                if cell.params.get("signed"):
+                    # Pass input width for signed-to-int conversion
+                    a_net_obj = cell.inputs.get("A")
+                    cmp_w = a_net_obj.width if a_net_obj else width
+                    params = dict(params)
+                    params["_cmp_width"] = cmp_w
 
             self._instructions.append((func, a_idx, b_idx, s_idx, out_idx, mask, params))
 

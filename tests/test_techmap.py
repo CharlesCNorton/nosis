@@ -239,3 +239,112 @@ def test_map_slice_is_wiring_only():
     mod.connect(sc, "Y", y, direction="output")
     nl = map_to_ecp5(design)
     assert nl.stats().get("LUT4", 0) == 0
+
+
+# ---------------------------------------------------------------------------
+# Comparison operation tests
+# ---------------------------------------------------------------------------
+
+def test_map_lt_produces_cells():
+    """LT comparison must produce LUT4 cells (comparator chain), not constant 0."""
+    design, mod = _simple_design("lt_test")
+    a = _add_input(mod, "a", 8)
+    b = _add_input(mod, "b", 8)
+    y_net = mod.add_net("y", 1)
+    oc = mod.add_cell("y_p", PrimOp.OUTPUT, port_name="y")
+    mod.connect(oc, "A", y_net)
+    mod.ports["y"] = y_net
+    lt = mod.add_cell("lt0", PrimOp.LT)
+    mod.connect(lt, "A", a)
+    mod.connect(lt, "B", b)
+    mod.connect(lt, "Y", y_net, direction="output")
+    nl = map_to_ecp5(design)
+    luts = nl.stats().get("LUT4", 0)
+    assert luts >= 8, f"8-bit LT should produce at least 8 LUT4 cells, got {luts}"
+
+
+def test_map_le_produces_cells():
+    """LE comparison needs comparator chain + equality chain."""
+    design, mod = _simple_design("le_test")
+    a = _add_input(mod, "a", 4)
+    b = _add_input(mod, "b", 4)
+    y_net = mod.add_net("y", 1)
+    oc = mod.add_cell("y_p", PrimOp.OUTPUT, port_name="y")
+    mod.connect(oc, "A", y_net)
+    mod.ports["y"] = y_net
+    le = mod.add_cell("le0", PrimOp.LE)
+    mod.connect(le, "A", a)
+    mod.connect(le, "B", b)
+    mod.connect(le, "Y", y_net, direction="output")
+    nl = map_to_ecp5(design)
+    luts = nl.stats().get("LUT4", 0)
+    assert luts >= 4, f"4-bit LE should produce LUT4 cells, got {luts}"
+
+
+def test_map_gt_produces_cells():
+    """GT should produce the same cell count as LT (swapped operands)."""
+    design, mod = _simple_design("gt_test")
+    a = _add_input(mod, "a", 8)
+    b = _add_input(mod, "b", 8)
+    y_net = mod.add_net("y", 1)
+    oc = mod.add_cell("y_p", PrimOp.OUTPUT, port_name="y")
+    mod.connect(oc, "A", y_net)
+    mod.ports["y"] = y_net
+    gt = mod.add_cell("gt0", PrimOp.GT)
+    mod.connect(gt, "A", a)
+    mod.connect(gt, "B", b)
+    mod.connect(gt, "Y", y_net, direction="output")
+    nl = map_to_ecp5(design)
+    luts = nl.stats().get("LUT4", 0)
+    assert luts >= 8, f"8-bit GT should produce at least 8 LUT4 cells, got {luts}"
+
+
+def test_map_ge_produces_cells():
+    """GE should produce comparator + equality chain."""
+    design, mod = _simple_design("ge_test")
+    a = _add_input(mod, "a", 4)
+    b = _add_input(mod, "b", 4)
+    y_net = mod.add_net("y", 1)
+    oc = mod.add_cell("y_p", PrimOp.OUTPUT, port_name="y")
+    mod.connect(oc, "A", y_net)
+    mod.ports["y"] = y_net
+    ge = mod.add_cell("ge0", PrimOp.GE)
+    mod.connect(ge, "A", a)
+    mod.connect(ge, "B", b)
+    mod.connect(ge, "Y", y_net, direction="output")
+    nl = map_to_ecp5(design)
+    luts = nl.stats().get("LUT4", 0)
+    assert luts >= 4, f"4-bit GE should produce LUT4 cells, got {luts}"
+
+
+# ---------------------------------------------------------------------------
+# Comparison correctness via eval
+# ---------------------------------------------------------------------------
+
+def test_eval_unsigned_lt():
+    """Unsigned LT: 3 < 5 = 1, 5 < 3 = 0, 3 < 3 = 0."""
+    from nosis.eval import eval_const_op
+    assert eval_const_op(PrimOp.LT, {"A": 3, "B": 5}, {}, 8) == 1
+    assert eval_const_op(PrimOp.LT, {"A": 5, "B": 3}, {}, 8) == 0
+    assert eval_const_op(PrimOp.LT, {"A": 3, "B": 3}, {}, 8) == 0
+
+
+def test_eval_signed_lt():
+    """Signed LT: -1 (0xFF) < 1 = 1 when signed."""
+    from nosis.eval import eval_const_op
+    # unsigned: 0xFF > 0x01
+    assert eval_const_op(PrimOp.LT, {"A": 0xFF, "B": 0x01}, {}, 8) == 0
+    # signed: 0xFF = -1, 0x01 = 1, so -1 < 1 = true
+    assert eval_const_op(PrimOp.LT, {"A": 0xFF, "B": 0x01}, {"signed": True}, 8) == 1
+    # signed: 0x01 < 0xFF => 1 < -1 = false
+    assert eval_const_op(PrimOp.LT, {"A": 0x01, "B": 0xFF}, {"signed": True}, 8) == 0
+
+
+def test_eval_signed_div():
+    """Signed division: -6 / 4 = -1 (truncate toward zero)."""
+    from nosis.eval import eval_const_op
+    # -6 in 8-bit = 0xFA, 4 = 0x04
+    # unsigned: 0xFA // 0x04 = 62
+    assert eval_const_op(PrimOp.DIV, {"A": 0xFA, "B": 0x04}, {}, 8) == 62
+    # signed: -6 / 4 = -1 -> 0xFF
+    assert eval_const_op(PrimOp.DIV, {"A": 0xFA, "B": 0x04}, {"signed": True}, 8) == 0xFF

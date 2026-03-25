@@ -743,13 +743,13 @@ class TestLockedCellCounts:
 
     def test_uart_tx_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/uart/uart_tx.sv", "uart_tx")
-        assert 214 <= s["LUT4"] <= 223, f"LUT count changed: {s['LUT4']}"
+        assert 329 <= s["LUT4"] <= 357, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 46, f"FF count changed: {s['TRELLIS_FF']}"
         assert 125 <= s["CCU2C"] <= 130, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_uart_rx_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/uart/uart_rx.sv", "uart_rx")
-        assert 277 <= s["LUT4"] <= 288, f"LUT count changed: {s['LUT4']}"
+        assert 330 <= s["LUT4"] <= 358, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 47, f"FF count changed: {s['TRELLIS_FF']}"
         assert 125 <= s["CCU2C"] <= 130, f"CCU2C count changed: {s['CCU2C']}"
 
@@ -766,19 +766,19 @@ class TestLockedCellCounts:
 
     def test_rime_v_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/cpu/rime_v.sv", "rime_v")
-        assert 5571 <= s["LUT4"] <= 5798, f"LUT count changed: {s['LUT4']}"
+        assert 5853 <= s["LUT4"] <= 6341, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 1727, f"FF count changed: {s['TRELLIS_FF']}"
         assert 269 <= s["CCU2C"] <= 280, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_thaw_exact(self):
         s = self._ecp5_stats(RIME_THAW_SOURCES, "top")
-        assert 16081 <= s["LUT4"] <= 16738, f"LUT count changed: {s['LUT4']}"
+        assert 16982 <= s["LUT4"] <= 18398, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 6143, f"FF count changed: {s['TRELLIS_FF']}"
         assert 1023 <= s["CCU2C"] <= 1064, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_soc_exact(self):
         s = self._ecp5_stats(RIME_SOC_SOURCES, "top")
-        assert 69476 <= s["LUT4"] <= 72311, f"LUT count changed: {s['LUT4']}"
+        assert 71504 <= s["LUT4"] <= 77463, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 16825, f"FF count changed: {s['TRELLIS_FF']}"
         assert 4012 <= s["CCU2C"] <= 4175, f"CCU2C count changed: {s['CCU2C']}"
 

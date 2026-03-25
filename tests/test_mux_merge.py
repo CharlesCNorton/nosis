@@ -2,7 +2,7 @@
 
 from nosis.ir import Module, PrimOp
 from nosis.passes import merge_mux_chains, run_default_passes
-from tests.conftest import requires_rime
+from tests.conftest import requires_rime_soc
 
 
 def _make_eq_mux_pair(mod, sel_net, case_val, case_data_net, default_net, out_name, idx):
@@ -257,7 +257,7 @@ def test_output_ports_survive_optimization():
     assert len(lost) == 0, f"optimization removed drivers for: {lost}"
 
 
-@requires_rime
+@requires_rime_soc
 def test_soc_output_port_count():
     """SoC must have output ports connected after lowering.
 
@@ -281,7 +281,7 @@ def test_soc_output_port_count():
     assert usb_tx.driver is not None, "usb_tx port must have a driver after hierarchy wiring fix"
 
 
-@requires_rime
+@requires_rime_soc
 def test_soc_all_output_ports_driven():
     """Every SoC output port must have a driver after lowering."""
     import os
@@ -326,7 +326,7 @@ def test_uart_tx_has_logic_after_optimization():
     assert comb >= 5, f"uart_tx must retain combinational logic, got {comb} comb cells"
 
 
-@requires_rime
+@requires_rime_soc
 def test_soc_ff_count_after_optimization():
     """SoC must retain a substantial number of FFs — it has CPUs, UARTs, SPI, SDRAM."""
     import os
@@ -344,7 +344,7 @@ def test_soc_ff_count_after_optimization():
     assert ffs >= 500, f"SoC must retain at least 500 FFs, got {ffs}"
 
 
-@requires_rime
+@requires_rime_soc
 def test_soc_lut_count_regression():
     """SoC LUT count after full pipeline must not regress above 5500 slices."""
     import os

@@ -12,7 +12,7 @@ from nosis.json_backend import emit_json_str
 from nosis.ir import PrimOp, Module
 from tests.conftest import (
     RIME_UART_TX, RIME_UART_RX, RIME_SDRAM_BRIDGE, RIME_CRC32, RIME_V,
-    RIME_THAW_SOURCES, RIME_SOC_SOURCES,
+    RIME_THAW_SOURCES, RIME_SOC_SOURCES, requires_rime_soc,
 )
 
 import json
@@ -159,18 +159,22 @@ class TestIRInvariants:
         design = _lower_design(RIME_CRC32, "rime_pcpi_crc32")
         self._check_module(design.top_module())
 
+    @requires_rime_soc
     def test_rime_v(self):
         design = _lower_design(RIME_V, "rime_v")
         self._check_module(design.top_module())
 
+    @requires_rime_soc
     def test_thaw(self):
         design = _lower_design(RIME_THAW_SOURCES, "top")
         self._check_module(design.top_module())
 
+    @requires_rime_soc
     def test_soc(self):
         design = _lower_design(RIME_SOC_SOURCES, "top")
         self._check_module(design.top_module())
 
+    @requires_rime_soc
     def test_after_optimization(self):
         """Invariants must hold after optimization too."""
         design = _lower_design(RIME_V, "rime_v")
@@ -253,8 +257,10 @@ class TestJSONInvariants:
     def test_sdram_bridge(self):
         self._check_json(RIME_SDRAM_BRIDGE, "sdram_bridge")
 
+    @requires_rime_soc
     def test_rime_v(self):
         self._check_json(RIME_V, "rime_v")
 
+    @requires_rime_soc
     def test_thaw(self):
         self._check_json(RIME_THAW_SOURCES, "top")

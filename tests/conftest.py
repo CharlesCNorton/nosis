@@ -73,7 +73,17 @@ def rime_available() -> bool:
     return os.path.isfile(RIME_UART_TX)
 
 
+def rime_soc_available() -> bool:
+    """Check if the full RIME SoC sources are accessible (not just bundled designs)."""
+    return all(os.path.isfile(f) for f in RIME_SOC_SOURCES)
+
+
 requires_rime = pytest.mark.skipif(
     not rime_available(),
     reason="RIME source not found (set NOSIS_RIME_ROOT)"
+)
+
+requires_rime_soc = pytest.mark.skipif(
+    not rime_soc_available(),
+    reason="Full RIME SoC sources not found (set NOSIS_RIME_ROOT)"
 )

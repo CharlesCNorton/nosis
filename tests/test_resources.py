@@ -7,7 +7,7 @@ from nosis.resources import (
     calculate_area,
     report_utilization,
 )
-from tests.conftest import RIME_UART_TX, RIME_V, RIME_SOC_SOURCES
+from tests.conftest import RIME_UART_TX, RIME_V, RIME_SOC_SOURCES, requires_rime_soc
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +186,7 @@ class TestAreaOnRealDesigns:
         assert 0 < area.ff_packing <= 100
         assert area.binding_resource in ("lut", "ff", "carry")
 
+    @requires_rime_soc
     def test_rime_v_area(self):
         result = parse_files([RIME_V], top="rime_v")
         design = lower_to_ir(result, top="rime_v")
@@ -196,6 +197,7 @@ class TestAreaOnRealDesigns:
         assert area.ff_cells >= 500
         assert area.slices_total >= 500
 
+    @requires_rime_soc
     def test_soc_area(self):
         from nosis.bram import infer_brams
         from nosis.dsp import infer_dsps
@@ -218,6 +220,7 @@ class TestAreaOnRealDesigns:
         assert area.slices_total >= area.slices_for_carry
         assert area.total_tiles == area.slices_total + area.bram_tiles + area.dsp_tiles
 
+    @requires_rime_soc
     def test_soc_overutilization_detected(self):
         """The unoptimized SoC output exceeds 25k — report must detect this."""
         result = parse_files(RIME_SOC_SOURCES, top="top")

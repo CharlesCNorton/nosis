@@ -3,7 +3,7 @@
 from nosis.ir import Module, PrimOp
 from nosis.frontend import parse_files, lower_to_ir
 from nosis.lutpack import pack_luts_ir
-from tests.conftest import RIME_FW as RIME
+from tests.conftest import RIME_UART_TX
 
 
 def test_pack_and_chain():
@@ -111,7 +111,7 @@ def test_no_pack_multiple_consumers():
 
 def test_pack_on_real_design():
     """LUT packing on uart_tx should find at least some candidates."""
-    result = parse_files([f"{RIME}/core/uart/uart_tx.sv"], top="uart_tx")
+    result = parse_files([RIME_UART_TX], top="uart_tx")
     design = lower_to_ir(result, top="uart_tx")
     mod = design.top_module()
     cells_before = mod.stats()["cells"]

@@ -7,7 +7,7 @@ os.environ.setdefault("NOSIS_PYSLANG_PATH", "D:/slang/build/lib")
 from nosis.ir import Module, PrimOp
 from nosis.timing import analyze_timing
 from nosis.frontend import parse_files, lower_to_ir
-from tests.conftest import RIME_UART_TX, RIME_V
+from tests.conftest import RIME_UART_TX, RIME_V, requires_rime_soc
 
 
 def test_empty_module():
@@ -118,6 +118,7 @@ def test_uart_tx_timing():
     assert any("Critical path" in line for line in lines)
 
 
+@requires_rime_soc
 def test_rime_v_timing():
     result = parse_files([RIME_V], top="rime_v")
     design = lower_to_ir(result, top="rime_v")

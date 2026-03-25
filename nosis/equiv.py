@@ -37,6 +37,7 @@ from __future__ import annotations
 
 from nosis.eval import eval_cell as _shared_eval_cell
 from nosis.ir import Cell, Module, Net, PrimOp
+from nosis.sim import FastSimulator
 
 __all__ = [
     "EquivalenceResult",
@@ -196,6 +197,9 @@ def check_equivalence_exhaustive(
     input_port_list = sorted(input_ports_a.items(), key=lambda x: x[0])
     output_port_list = sorted(output_ports_a.items(), key=lambda x: x[0])
 
+    sim_a = FastSimulator(mod_a)
+    sim_b = FastSimulator(mod_b)
+
     for combo in range(total_combinations):
         # Build input assignment
         inputs: dict[str, int] = {}
@@ -206,8 +210,8 @@ def check_equivalence_exhaustive(
             bit_pos += net.width
 
         # Simulate both modules
-        vals_a = _simulate_combinational(mod_a, inputs)
-        vals_b = _simulate_combinational(mod_b, inputs)
+        vals_a = sim_a.step(inputs)
+        vals_b = sim_b.step(inputs)
 
         # Compare outputs (look up by net name, which is what the simulator uses)
         for name, net in output_port_list:
@@ -662,13 +666,16 @@ def check_equivalence(
     output_ports = {name: net for name, net in mod_a.ports.items() if name not in input_ports}
     output_port_list = sorted(output_ports.items(), key=lambda x: x[0])
 
+    sim_a = FastSimulator(mod_a)
+    sim_b = FastSimulator(mod_b)
+
     for _ in range(num_tests):
         inputs: dict[str, int] = {}
         for name, net in input_port_list:
             inputs[name] = rng.getrandbits(net.width)
 
-        vals_a = _simulate_combinational(mod_a, inputs)
-        vals_b = _simulate_combinational(mod_b, inputs)
+        vals_a = sim_a.step(inputs)
+        vals_b = sim_b.step(inputs)
 
         for name, net in output_port_list:
             va = vals_a.get(name, 0)

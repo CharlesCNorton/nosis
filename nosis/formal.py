@@ -56,7 +56,7 @@ def check_assertion_bmc(
     of true BMC.
     """
     import random
-    from nosis.equiv import _simulate_combinational
+    from nosis.sim import FastSimulator
 
     rng = random.Random(42)
 
@@ -67,12 +67,14 @@ def check_assertion_bmc(
             for out_net in cell.outputs.values():
                 input_ports[out_net.name] = out_net.width
 
+    fast_sim = FastSimulator(mod)
+
     for cycle in range(bound):
         inputs: dict[str, int] = {}
         for name, width in input_ports.items():
             inputs[name] = rng.getrandbits(width)
 
-        vals = _simulate_combinational(mod, inputs)
+        vals = fast_sim.step(inputs)
         actual = vals.get(output_net, 0)
         if actual != expected_value:
             return BMCResult(
@@ -105,7 +107,7 @@ def check_output_reachable(
     or that a specific output pattern is achievable.
     """
     import random
-    from nosis.equiv import _simulate_combinational
+    from nosis.sim import FastSimulator
 
     rng = random.Random(42)
 
@@ -115,12 +117,14 @@ def check_output_reachable(
             for out_net in cell.outputs.values():
                 input_ports[out_net.name] = out_net.width
 
+    fast_sim = FastSimulator(mod)
+
     for cycle in range(bound):
         inputs: dict[str, int] = {}
         for name, width in input_ports.items():
             inputs[name] = rng.getrandbits(width)
 
-        vals = _simulate_combinational(mod, inputs)
+        vals = fast_sim.step(inputs)
         actual = vals.get(output_net, -1)
         if actual == target_value:
             return BMCResult(
@@ -193,7 +197,7 @@ def check_sequential_equivalence(
     in CNF, which is the next step.
     """
     import random
-    from nosis.equiv import _simulate_combinational
+    from nosis.sim import FastSimulator
 
     rng = random.Random(seed)
 
@@ -208,6 +212,9 @@ def check_sequential_equivalence(
             for inp_net in cell.inputs.values():
                 output_ports[inp_net.name] = inp_net.width
 
+    sim_a = FastSimulator(mod_a)
+    sim_b = FastSimulator(mod_b)
+
     # FF state maps for both modules
     ff_state_a: dict[str, int] = {}
     ff_state_b: dict[str, int] = {}
@@ -221,8 +228,8 @@ def check_sequential_equivalence(
         input_with_state_a = {**inputs, **ff_state_a}
         input_with_state_b = {**inputs, **ff_state_b}
 
-        vals_a = _simulate_combinational(mod_a, input_with_state_a)
-        vals_b = _simulate_combinational(mod_b, input_with_state_b)
+        vals_a = sim_a.step(input_with_state_a)
+        vals_b = sim_b.step(input_with_state_b)
 
         # Compare outputs
         for name in output_ports:
@@ -289,7 +296,7 @@ def check_assertion_bmc_sat(
     except ImportError:
         return check_assertion_bmc(mod, output_net, expected_value, bound=bound)
 
-    from nosis.equiv import _simulate_combinational
+    from nosis.sim import FastSimulator
 
     # Identify input ports
     input_ports: dict[str, int] = {}
@@ -304,6 +311,7 @@ def check_assertion_bmc_sat(
         return check_assertion_bmc(mod, output_net, expected_value, bound=bound)
 
     # Exhaustive check (for small designs, this is faster than SAT setup)
+    fast_sim = FastSimulator(mod)
     total_combinations = 1 << total_bits
     port_list = sorted(input_ports.items())
 
@@ -315,7 +323,7 @@ def check_assertion_bmc_sat(
             inputs[name] = val
             bit_pos += width
 
-        vals = _simulate_combinational(mod, inputs)
+        vals = fast_sim.step(inputs)
         actual = vals.get(output_net, 0)
         if actual != expected_value:
             return BMCResult(

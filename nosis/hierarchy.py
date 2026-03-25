@@ -6,9 +6,7 @@ of sub-module instances with prefixed net and cell names.
 
 from __future__ import annotations
 
-from typing import Any
 
-from nosis.ir import Cell, Module, Net, PrimOp
 
 __all__ = [
     "ECP5_BLACKBOX_NAMES",

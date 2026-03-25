@@ -5,8 +5,8 @@ identical results whether called from passes.py or equiv.py. These
 tests verify the single source of truth.
 """
 
-from nosis.ir import Cell, Module, PrimOp
-from nosis.eval import eval_const_op, eval_cell, UnsupportedOpError
+from nosis.ir import Module, PrimOp
+from nosis.eval import eval_const_op, eval_cell
 
 
 # ---------------------------------------------------------------------------

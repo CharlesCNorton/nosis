@@ -1,15 +1,13 @@
 """Tests for nosis.resources — area calculation and resource utilization."""
 
-from nosis.ir import Module, PrimOp, Design
 from nosis.frontend import parse_files, lower_to_ir
 from nosis.techmap import map_to_ecp5, ECP5Netlist
 from nosis.resources import (
     ECP5_DEVICES,
-    AreaCalculation,
     calculate_area,
     report_utilization,
 )
-from tests.conftest import RIME_UART_TX, RIME_V, RIME_SOC_SOURCES, requires_rime
+from tests.conftest import RIME_UART_TX, RIME_V, RIME_SOC_SOURCES
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +52,7 @@ class TestAreaCalculation:
         """100 LUTs, 0 FFs -> 50 slices, bound by LUT."""
         nl = ECP5Netlist(top="test")
         for i in range(100):
-            c = nl.add_cell(f"lut{i}", "LUT4")
+            nl.add_cell(f"lut{i}", "LUT4")
         area = calculate_area(nl)
         assert area.lut_cells == 100
         assert area.ff_cells == 0
@@ -66,7 +64,7 @@ class TestAreaCalculation:
         """0 LUTs, 100 FFs -> 50 slices, bound by FF."""
         nl = ECP5Netlist(top="test")
         for i in range(100):
-            c = nl.add_cell(f"ff{i}", "TRELLIS_FF")
+            nl.add_cell(f"ff{i}", "TRELLIS_FF")
         area = calculate_area(nl)
         assert area.ff_cells == 100
         assert area.lut_cells == 0

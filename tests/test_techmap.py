@@ -1,7 +1,7 @@
 """Tests for nosis.techmap — ECP5 technology mapping."""
 
-from nosis.ir import Design, Module, PrimOp
-from nosis.techmap import ECP5Netlist, map_to_ecp5
+from nosis.ir import Design, PrimOp
+from nosis.techmap import map_to_ecp5
 
 
 def _simple_design(name="test"):
@@ -187,7 +187,7 @@ def test_map_add_produces_ccu2c():
 
 def test_map_ports_direction():
     design, mod = _simple_design()
-    a = _add_input(mod, "a", 4)
+    _add_input(mod, "a", 4)
     b = mod.add_net("b", 4)
     _add_output(mod, "b", b)
     nl = map_to_ecp5(design)

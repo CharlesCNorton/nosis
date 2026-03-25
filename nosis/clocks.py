@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from nosis.ir import Cell, Module, Net, PrimOp
+from nosis.ir import Module, Net, PrimOp
 
 __all__ = [
     "ClockDomain",

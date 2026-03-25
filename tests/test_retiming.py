@@ -49,7 +49,7 @@ def test_retime_forward_does_not_crash():
 def test_retime_preserves_cell_types():
     """Retiming must not change the set of cell types present."""
     mod = _ff_chain_module()
-    ops_before = {c.op for c in mod.cells.values()}
+    {c.op for c in mod.cells.values()}
     retime_forward(mod)
     ops_after = {c.op for c in mod.cells.values()}
     assert PrimOp.FF in ops_after

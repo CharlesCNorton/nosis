@@ -30,9 +30,9 @@ Example::
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from nosis.ir import Cell, Module, Net, PrimOp
+from nosis.ir import Module, PrimOp
 
 __all__ = [
     "TimingReport",

@@ -12,7 +12,7 @@ cell-to-net connectivity is explicit.
 
 from __future__ import annotations
 
-from nosis.ir import Cell, Module, Net, PrimOp
+from nosis.ir import Cell, Module, PrimOp
 from nosis.eval import eval_const_op
 
 __all__ = [

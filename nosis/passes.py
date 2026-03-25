@@ -8,7 +8,7 @@ it once.
 from __future__ import annotations
 
 from nosis.eval import eval_const_op
-from nosis.ir import Cell, Module, Net, PrimOp
+from nosis.ir import Cell, Module, PrimOp
 
 __all__ = [
     "constant_fold",
@@ -445,7 +445,6 @@ def _simplify_mux_with_zero(mod: Module) -> int:
         _cell_counter[0] += 1
         return name
 
-    to_remove: list[str] = []
 
     for cell in list(mod.cells.values()):
         if cell.op != PrimOp.MUX:
@@ -493,7 +492,6 @@ def _simplify_mux_with_zero(mod: Module) -> int:
 
         # MUX(sel, A, all_ones) = OR(sel, A) per bit
         b_is_ones = False
-        a_is_ones = False
         if b_net.driver and b_net.driver.op == PrimOp.CONST:
             bv = int(b_net.driver.params.get("value", 0))
             mask = (1 << out_net.width) - 1
@@ -503,7 +501,7 @@ def _simplify_mux_with_zero(mod: Module) -> int:
             av = int(a_net.driver.params.get("value", 0))
             mask = (1 << out_net.width) - 1
             if (av & mask) == mask:
-                a_is_ones = True
+                pass
 
         if b_is_ones:
             # MUX(sel, A, ones) = sel ? ones : A = OR(sel, A) per bit

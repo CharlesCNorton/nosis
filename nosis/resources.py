@@ -20,7 +20,11 @@ cell-derived number is the physical floor.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from nosis.ir import Module
 
 from nosis.techmap import ECP5Netlist
 

@@ -12,8 +12,7 @@ cells greedily, without the full priority-cut optimization.
 
 from __future__ import annotations
 
-from nosis.ir import Cell, Module, Net, PrimOp
-from nosis.eval import eval_const_op
+from nosis.ir import Cell, Module, PrimOp
 
 __all__ = [
     "cut_map_luts",

@@ -274,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
                     pnr_info = subprocess.run(
                         [nextpnr_cmd, f"--{args.device}", "--package", args.package,
                          "--json", str(json_path), "--textcfg", "/dev/null"],
-                        capture_output=True, text=True, env=env, timeout=120,
+                        capture_output=True, text=True, timeout=120,
                     )
                     pnr = parse_nextpnr_log(pnr_info.stderr)
                     if pnr.max_freq_mhz > 0:
@@ -291,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if (args.stats or args.verbose) and not getattr(args, 'json_stats', False):
         nl_stats = netlist.stats()
-        print(f"--- nosis synthesis complete ---")
+        print("--- nosis synthesis complete ---")
         print(f"top: {mod.name}")
         print(f"IR cells: {mod.stats()['cells']}, IR nets: {mod.stats()['nets']}")
         print(f"ECP5 cells: {nl_stats['cells']}")

@@ -73,7 +73,7 @@ class LpfConstraints:
 
     def summary_lines(self) -> list[str]:
         lines = [
-            f"--- LPF Constraints ---",
+            "--- LPF Constraints ---",
             f"Pin assignments: {len(self.pins)}",
             f"I/O standards: {len(self.io_standards)}",
             f"Frequency constraints: {len(self.frequencies)}",

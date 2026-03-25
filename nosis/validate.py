@@ -11,7 +11,6 @@ Any divergence between RTL and post-synthesis behavior is a synthesis bug.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import random
@@ -407,7 +406,6 @@ def validate_design(
 
     # --- Parse and synthesize ---
     from nosis.frontend import FrontendError, parse_files, lower_to_ir
-    from nosis.passes import run_default_passes
     from nosis.techmap import map_to_ecp5
     from nosis.json_backend import emit_json
 

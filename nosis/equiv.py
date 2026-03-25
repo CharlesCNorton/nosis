@@ -237,8 +237,8 @@ def _try_sat_equivalence(
 ) -> EquivalenceResult | None:
     """Try SAT-based equivalence checking. Returns None if PySAT unavailable."""
     try:
-        from pysat.solvers import Glucose3
-        from pysat.formula import CNF
+        from pysat.solvers import Glucose3  # noqa: F401
+        from pysat.formula import CNF  # noqa: F401
     except ImportError:
         return None
 
@@ -316,13 +316,17 @@ def _try_sat_equivalence(
                         if src_idx < len(src_vars):
                             out_vars.append(src_vars[src_idx])
                         else:
-                            v = new_var(); clauses.append([-v]); out_vars.append(v)
+                            v = new_var()
+                            clauses.append([-v])
+                            out_vars.append(v)
                     net_vars[out_net.name] = out_vars
                 elif cell.op == PrimOp.ZEXT:
                     src_vars = net_vars.get(cell.inputs["A"].name, []) if "A" in cell.inputs else []
                     out_vars = list(src_vars[:width])
                     while len(out_vars) < width:
-                        v = new_var(); clauses.append([-v]); out_vars.append(v)
+                        v = new_var()
+                        clauses.append([-v])
+                        out_vars.append(v)
                     net_vars[out_net.name] = out_vars
                 elif cell.op == PrimOp.SEXT:
                     src_vars = net_vars.get(cell.inputs["A"].name, []) if "A" in cell.inputs else []
@@ -339,7 +343,9 @@ def _try_sat_equivalence(
                         if inp and inp.name in net_vars:
                             out_vars.extend(net_vars[inp.name])
                     while len(out_vars) < width:
-                        v = new_var(); clauses.append([-v]); out_vars.append(v)
+                        v = new_var()
+                        clauses.append([-v])
+                        out_vars.append(v)
                     net_vars[out_net.name] = out_vars[:width]
                 elif cell.op == PrimOp.REPEAT:
                     src_vars = net_vars.get(cell.inputs["A"].name, []) if "A" in cell.inputs else []

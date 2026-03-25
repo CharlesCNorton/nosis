@@ -10,7 +10,7 @@ carry chain mapping instead of per-bit LUT decomposition.
 
 from __future__ import annotations
 
-from nosis.ir import Cell, Module, PrimOp
+from nosis.ir import Module, PrimOp
 
 __all__ = [
     "infer_carry_chains",

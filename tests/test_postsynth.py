@@ -7,7 +7,7 @@ os.environ.setdefault("NOSIS_PYSLANG_PATH", "D:/slang/build/lib")
 from nosis.frontend import parse_files, lower_to_ir
 from nosis.techmap import map_to_ecp5, ECP5Netlist
 from nosis.postsynth import generate_cell_models, generate_postsynth_verilog
-from tests.conftest import RIME_UART_TX, requires_rime
+from tests.conftest import RIME_UART_TX
 
 
 def test_cell_models_valid():
@@ -70,7 +70,8 @@ def test_postsynth_compiles_with_iverilog():
     if not iverilog:
         return
 
-    import tempfile, subprocess
+    import tempfile
+    import subprocess
     from pathlib import Path
 
     result = parse_files([RIME_UART_TX], top="uart_tx")
@@ -86,7 +87,7 @@ def test_postsynth_compiles_with_iverilog():
         postsynth_path = Path(tmp) / "postsynth.v"
         postsynth_path.write_text(postsynth, encoding="utf-8")
 
-        r = subprocess.run(
+        subprocess.run(
             [iverilog, "-g2012", "-o", "/dev/null", str(models_path), str(postsynth_path)],
             capture_output=True, text=True, cwd=tmp,
         )

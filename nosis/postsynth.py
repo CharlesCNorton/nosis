@@ -11,7 +11,7 @@ simulation output.
 
 from __future__ import annotations
 
-from nosis.techmap import ECP5Cell, ECP5Netlist
+from nosis.techmap import ECP5Netlist
 
 __all__ = [
     "generate_cell_models",

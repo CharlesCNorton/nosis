@@ -28,10 +28,9 @@ with many high-fanout nets are harder to route.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from collections import Counter
+from dataclasses import dataclass
 
-from nosis.ir import Module, PrimOp
+from nosis.ir import Module
 
 __all__ = [
     "CongestionReport",
@@ -135,7 +134,6 @@ def estimate_routing_metric(mod: Module) -> float:
     where N is the cell count and avg_fanout is the mean net fanout.
     Returns the estimated average wire length in grid units.
     """
-    import math
 
     fanout: dict[str, int] = {}
     for cell in mod.cells.values():

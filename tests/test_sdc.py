@@ -62,8 +62,8 @@ def test_summary_lines():
     try:
         c = parse_sdc(path)
         lines = c.summary_lines()
-        assert any("Clocks" in l for l in lines)
-        assert any("50.0 MHz" in l for l in lines)
+        assert any("Clocks" in ln for ln in lines)
+        assert any("50.0 MHz" in ln for ln in lines)
     finally:
         Path(path).unlink()
 

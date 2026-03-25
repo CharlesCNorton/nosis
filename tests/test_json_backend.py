@@ -2,7 +2,7 @@
 
 import json
 
-from nosis.ir import Design, Module, PrimOp
+from nosis.ir import Design, PrimOp
 from nosis.techmap import map_to_ecp5
 from nosis.json_backend import emit_json_str
 

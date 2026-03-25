@@ -8,29 +8,26 @@ or silently dropping information.
 
 import json
 import os
-import tempfile
-from pathlib import Path
 
-from hypothesis import given, settings, assume
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 os.environ.setdefault("NOSIS_PYSLANG_PATH", "D:/slang/build/lib")
 
-from nosis.ir import Module, PrimOp, Design, Cell, Net
-from nosis.eval import eval_const_op, eval_cell, UnsupportedOpError
-from nosis.passes import constant_fold, identity_simplify, dead_code_eliminate, run_default_passes
+from nosis.ir import Module, PrimOp, Design
+from nosis.eval import eval_const_op
+from nosis.passes import dead_code_eliminate, run_default_passes
 from nosis.cse import eliminate_common_subexpressions
-from nosis.fsm import extract_fsms, annotate_fsm_cells
+from nosis.fsm import extract_fsms
 from nosis.bram import infer_brams
 from nosis.dsp import infer_dsps
 from nosis.carry import infer_carry_chains
 from nosis.techmap import map_to_ecp5
 from nosis.json_backend import emit_json_str
-from nosis.equiv import check_equivalence, check_equivalence_exhaustive
+from nosis.equiv import check_equivalence
 from nosis.lutpack import pack_luts_ir
 from nosis.clocks import analyze_clock_domains
 from nosis.resources import report_utilization
-from nosis.blackbox import load_ecp5_blackboxes
 
 
 # ---------------------------------------------------------------------------

@@ -50,5 +50,5 @@ def test_summary_lines():
     mod.connect(c, "Y", y, direction="output")
     r = estimate_routing(mod, logic_delay_ns=1.0)
     lines = r.summary_lines()
-    assert any("Routing" in l for l in lines)
-    assert any("Fmax" in l for l in lines)
+    assert any("Routing" in ln for ln in lines)
+    assert any("Fmax" in ln for ln in lines)

@@ -201,4 +201,4 @@ def test_delta_summary_lines():
     s2 = snapshot_module(mod)
     delta = compute_delta(s1, s2)
     lines = delta.summary_lines()
-    assert any("added" in l.lower() for l in lines)
+    assert any("added" in ln.lower() for ln in lines)

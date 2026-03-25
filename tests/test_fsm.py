@@ -1,7 +1,7 @@
 """Tests for nosis.fsm — FSM extraction and annotation."""
 
-from nosis.ir import Design, Module, PrimOp
-from nosis.fsm import FSMInfo, FSMState, extract_fsms, annotate_fsm_cells, _classify_encoding
+from nosis.ir import Module, PrimOp
+from nosis.fsm import FSMState, extract_fsms, annotate_fsm_cells, _classify_encoding
 
 
 def test_classify_sequential():
@@ -135,7 +135,7 @@ def test_fsm_preserves_encoding():
     cells_before = {name: (c.op, dict(c.params)) for name, c in mod.cells.items()}
     nets_before = set(mod.nets.keys())
 
-    fsms = extract_fsms(mod)
+    extract_fsms(mod)
 
     # No cells or nets should have been added or removed
     assert set(mod.cells.keys()) == set(cells_before.keys())

@@ -6,7 +6,7 @@ reset patterns, and boundary values rather than purely random inputs.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from nosis.ir import Module, PrimOp
 

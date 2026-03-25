@@ -15,7 +15,7 @@ from __future__ import annotations
 import random
 from collections import defaultdict
 
-from nosis.ir import Module, Net, PrimOp
+from nosis.ir import Module, PrimOp
 from nosis.equiv import _simulate_combinational
 
 __all__ = [

@@ -5,9 +5,9 @@ import os
 os.environ.setdefault("NOSIS_PYSLANG_PATH", "D:/slang/build/lib")
 
 from nosis.ir import Module, PrimOp
-from nosis.timing import analyze_timing, CriticalPath
+from nosis.timing import analyze_timing
 from nosis.frontend import parse_files, lower_to_ir
-from tests.conftest import RIME_UART_TX, RIME_V, requires_rime
+from tests.conftest import RIME_UART_TX, RIME_V
 
 
 def test_empty_module():

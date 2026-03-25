@@ -2,7 +2,6 @@
 
 from nosis.validate import (
     PortInfo,
-    ValidationResult,
     generate_testbench,
     validate_design,
     _find_iverilog,
@@ -10,8 +9,6 @@ from nosis.validate import (
 )
 from tests.conftest import (
     RIME_UART_TX as UART_TX,
-    RIME_UART_RX as UART_RX,
-    requires_rime,
 )
 
 

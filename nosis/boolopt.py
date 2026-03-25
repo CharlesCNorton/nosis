@@ -14,7 +14,7 @@ Operates at the IR level before tech mapping.
 
 from __future__ import annotations
 
-from nosis.ir import Cell, Module, Net, PrimOp
+from nosis.ir import Cell, Module, PrimOp
 
 __all__ = [
     "boolean_optimize",

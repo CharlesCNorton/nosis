@@ -49,8 +49,8 @@ def test_summary_lines():
     nl.add_cell("lut0", "LUT4")
     r = estimate_power(nl)
     lines = r.summary_lines()
-    assert any("Total power" in l for l in lines)
-    assert any("MHz" in l for l in lines)
+    assert any("Total power" in ln for ln in lines)
+    assert any("MHz" in ln for ln in lines)
 
 
 def test_bram_power():

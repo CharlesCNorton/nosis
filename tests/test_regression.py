@@ -18,7 +18,6 @@ from tests.conftest import (
     RIME_FW as RIME,
     RIME_SOC_SOURCES,
     RIME_THAW_SOURCES,
-    requires_rime,
 )
 
 
@@ -145,14 +144,14 @@ class TestSdramBridge:
         design = lower_to_ir(result, top=self.TOP)
         mod = design.top_module()
         ffs = [c for c in mod.cells.values() if c.op == PrimOp.FF]
-        assert len(ffs) >= 5, f"sdram_bridge should have state + data FFs"
+        assert len(ffs) >= 5, "sdram_bridge should have state + data FFs"
 
     def test_fsm_detected(self):
         result = parse_files(self.SRC, top=self.TOP)
         design = lower_to_ir(result, top=self.TOP)
         mod = design.top_module()
         fsms = extract_fsms(mod)
-        assert len(fsms) >= 1, f"sdram_bridge has S_IDLE/S_REQ/S_WAIT/S_CAPTURE FSM"
+        assert len(fsms) >= 1, "sdram_bridge has S_IDLE/S_REQ/S_WAIT/S_CAPTURE FSM"
 
 
 class TestSdramController:
@@ -174,7 +173,7 @@ class TestSdramController:
         design = lower_to_ir(result, top=self.TOP)
         mod = design.top_module()
         ffs = [c for c in mod.cells.values() if c.op == PrimOp.FF]
-        assert len(ffs) >= 10, f"sdram_controller should have many state + data FFs"
+        assert len(ffs) >= 10, "sdram_controller should have many state + data FFs"
 
 
 class TestCrc32:
@@ -192,7 +191,7 @@ class TestCrc32:
         nl = map_to_ecp5(design)
         stats = nl.stats()
         # Should have FFs for pcpi_wr, pcpi_rd, pcpi_ready
-        assert stats.get("TRELLIS_FF", 0) >= 30, f"expected >= 30 FFs (32-bit rd + wr + ready)"
+        assert stats.get("TRELLIS_FF", 0) >= 30, "expected >= 30 FFs (32-bit rd + wr + ready)"
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +258,7 @@ class TestRimeV:
         design = lower_to_ir(result, top=self.TOP)
         mod = design.top_module()
         fsms = extract_fsms(mod)
-        assert len(fsms) >= 1, f"RIME-V has a multi-state CPU FSM"
+        assert len(fsms) >= 1, "RIME-V has a multi-state CPU FSM"
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +391,7 @@ class TestLanguageFeatures:
         design = lower_to_ir(result, top="picorv32")
         mod = design.top_module()
         # Should have REPEAT cells from replication expressions
-        repeat_cells = [c for c in mod.cells.values() if c.op == PrimOp.REPEAT]
+        [c for c in mod.cells.values() if c.op == PrimOp.REPEAT]
         # picorv32 uses {N{...}} patterns
         assert mod.stats()["cells"] > 0
 
@@ -514,7 +513,7 @@ class TestLanguageFeatures:
         design = lower_to_ir(result, top="top")
         mod = design.top_module()
         before = mod.stats()["cells"]
-        packed = pack_luts_ir(mod)
+        pack_luts_ir(mod)
         after = mod.stats()["cells"]
         # Packing should eliminate at least some cells, or at minimum not crash
         assert after <= before
@@ -617,11 +616,22 @@ class TestStructural:
 
         def _and_mod(name):
             mod = Module(name=name)
-            a = mod.add_net("a", 1); b = mod.add_net("b", 1); y = mod.add_net("y", 1)
-            ac = mod.add_cell("a_p", PrimOp.INPUT, port_name="a"); mod.connect(ac, "Y", a, direction="output"); mod.ports["a"] = a
-            bc = mod.add_cell("b_p", PrimOp.INPUT, port_name="b"); mod.connect(bc, "Y", b, direction="output"); mod.ports["b"] = b
-            yc = mod.add_cell("y_p", PrimOp.OUTPUT, port_name="y"); mod.connect(yc, "A", y); mod.ports["y"] = y
-            c = mod.add_cell("and0", PrimOp.AND); mod.connect(c, "A", a); mod.connect(c, "B", b); mod.connect(c, "Y", y, direction="output")
+            a = mod.add_net("a", 1)
+            b = mod.add_net("b", 1)
+            y = mod.add_net("y", 1)
+            ac = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
+            mod.connect(ac, "Y", a, direction="output")
+            mod.ports["a"] = a
+            bc = mod.add_cell("b_p", PrimOp.INPUT, port_name="b")
+            mod.connect(bc, "Y", b, direction="output")
+            mod.ports["b"] = b
+            yc = mod.add_cell("y_p", PrimOp.OUTPUT, port_name="y")
+            mod.connect(yc, "A", y)
+            mod.ports["y"] = y
+            c = mod.add_cell("and0", PrimOp.AND)
+            mod.connect(c, "A", a)
+            mod.connect(c, "B", b)
+            mod.connect(c, "Y", y, direction="output")
             return mod
 
         from nosis.equiv import check_equivalence
@@ -733,44 +743,44 @@ class TestLockedCellCounts:
 
     def test_uart_tx_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/uart/uart_tx.sv", "uart_tx")
-        assert 214 <= s["LUT4"] <= 223, f"LUT count changed: {s["LUT4"]}"
+        assert 214 <= s["LUT4"] <= 223, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 46, f"FF count changed: {s['TRELLIS_FF']}"
-        assert 125 <= s["CCU2C"] <= 130, f"CCU2C count changed: {s["CCU2C"]}"
+        assert 125 <= s["CCU2C"] <= 130, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_uart_rx_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/uart/uart_rx.sv", "uart_rx")
-        assert 277 <= s["LUT4"] <= 288, f"LUT count changed: {s["LUT4"]}"
+        assert 277 <= s["LUT4"] <= 288, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 47, f"FF count changed: {s['TRELLIS_FF']}"
-        assert 125 <= s["CCU2C"] <= 130, f"CCU2C count changed: {s["CCU2C"]}"
+        assert 125 <= s["CCU2C"] <= 130, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_sdram_bridge_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/service/sdram_bridge.sv", "sdram_bridge")
-        assert 467 <= s["LUT4"] <= 486, f"LUT count changed: {s["LUT4"]}"
+        assert 467 <= s["LUT4"] <= 486, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 348, f"FF count changed: {s['TRELLIS_FF']}"
-        assert 13 <= s["CCU2C"] <= 14, f"CCU2C count changed: {s["CCU2C"]}"
+        assert 13 <= s["CCU2C"] <= 14, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_crc32_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/cpu/rime_pcpi_crc32.sv", "rime_pcpi_crc32")
-        assert 0 <= s["LUT4"] <= 1, f"LUT count changed: {s["LUT4"]}"
+        assert 0 <= s["LUT4"] <= 1, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 34, f"FF count changed: {s['TRELLIS_FF']}"
 
     def test_rime_v_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/cpu/rime_v.sv", "rime_v")
-        assert 5571 <= s["LUT4"] <= 5798, f"LUT count changed: {s["LUT4"]}"
+        assert 5571 <= s["LUT4"] <= 5798, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 1727, f"FF count changed: {s['TRELLIS_FF']}"
-        assert 269 <= s["CCU2C"] <= 280, f"CCU2C count changed: {s["CCU2C"]}"
+        assert 269 <= s["CCU2C"] <= 280, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_thaw_exact(self):
         s = self._ecp5_stats(RIME_THAW_SOURCES, "top")
-        assert 16081 <= s["LUT4"] <= 16738, f"LUT count changed: {s["LUT4"]}"
+        assert 16081 <= s["LUT4"] <= 16738, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 6143, f"FF count changed: {s['TRELLIS_FF']}"
-        assert 1023 <= s["CCU2C"] <= 1064, f"CCU2C count changed: {s["CCU2C"]}"
+        assert 1023 <= s["CCU2C"] <= 1064, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_soc_exact(self):
         s = self._ecp5_stats(RIME_SOC_SOURCES, "top")
-        assert 69476 <= s["LUT4"] <= 72311, f"LUT count changed: {s["LUT4"]}"
+        assert 69476 <= s["LUT4"] <= 72311, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 16825, f"FF count changed: {s['TRELLIS_FF']}"
-        assert 4012 <= s["CCU2C"] <= 4175, f"CCU2C count changed: {s["CCU2C"]}"
+        assert 4012 <= s["CCU2C"] <= 4175, f"CCU2C count changed: {s['CCU2C']}"
 
 
 # ---------------------------------------------------------------------------
@@ -787,7 +797,7 @@ class TestErrorHandling:
         bad_sv.write("module bad(input wire clk); assign x = undefined_signal; endmodule\n")
         bad_sv.close()
         try:
-            result = parse_files([bad_sv.name], top="bad")
+            parse_files([bad_sv.name], top="bad")
             assert False, "should have raised FrontendError"
         except FrontendError as exc:
             assert "error" in str(exc).lower()

@@ -78,7 +78,7 @@ def retime_forward(mod: Module, *, max_moves: int = 100) -> int:
     Returns the number of FFs retimed.
     """
     # Pre-check: verify no existing clock mismatches
-    pre_warnings = verify_retime_clocks(mod)
+    verify_retime_clocks(mod)
 
     # Build consumer map
     net_consumers: dict[str, list[str]] = {}

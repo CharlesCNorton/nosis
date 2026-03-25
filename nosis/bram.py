@@ -11,7 +11,7 @@ DP16KD is a true dual-port 16Kbit BRAM:
 
 from __future__ import annotations
 
-from nosis.ir import Cell, Module, PrimOp
+from nosis.ir import Module, PrimOp
 
 __all__ = [
     "infer_brams",

@@ -126,5 +126,5 @@ def test_summary_lines_present():
     mod.connect(c, "Y", y, direction="output")
     r = analyze_congestion(mod)
     lines = r.summary_lines()
-    assert any("Max fanout" in l for l in lines)
-    assert any("Density score" in l for l in lines)
+    assert any("Max fanout" in ln for ln in lines)
+    assert any("Density score" in ln for ln in lines)

@@ -7,7 +7,7 @@ and redirects all consumers of the duplicate to the original's output.
 
 from __future__ import annotations
 
-from nosis.ir import Cell, Module, Net, PrimOp
+from nosis.ir import Cell, Module, PrimOp
 
 __all__ = [
     "eliminate_common_subexpressions",

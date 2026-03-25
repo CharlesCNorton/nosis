@@ -16,7 +16,7 @@ os.environ.setdefault("NOSIS_PYSLANG_PATH", "D:/slang/build/lib")
 from nosis.frontend import parse_files, lower_to_ir
 from nosis.techmap import map_to_ecp5
 from nosis.json_backend import emit_json_str, emit_json
-from tests.conftest import RIME_UART_TX, requires_rime
+from tests.conftest import RIME_UART_TX
 
 
 def _find_nextpnr() -> str | None:

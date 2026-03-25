@@ -5,7 +5,6 @@ from nosis.equiv import (
     check_equivalence,
     check_equivalence_exhaustive,
     wildcard_eq,
-    EquivalenceResult,
 )
 
 

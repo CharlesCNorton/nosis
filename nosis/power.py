@@ -28,8 +28,12 @@ ECP5 power data (typical, 1.1V core, -6 speed grade):
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from nosis.techmap import ECP5Netlist
+
+if TYPE_CHECKING:
+    from nosis.ir import Module
 
 __all__ = [
     "PowerReport",
@@ -140,7 +144,7 @@ def estimate_toggle_rates(
     Replaces the assumed 12.5% blanket toggle rate with measured values.
     """
     import random
-    from nosis.ir import Module as _M, PrimOp
+    from nosis.ir import PrimOp
     from nosis.equiv import _simulate_combinational
 
     rng = random.Random(seed)

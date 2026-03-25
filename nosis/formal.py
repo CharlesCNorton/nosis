@@ -15,7 +15,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from nosis.ir import Module, PrimOp
-from nosis.eval import eval_const_op
 
 __all__ = [
     "BMCResult",
@@ -286,11 +285,11 @@ def check_assertion_bmc_sat(
 
     # Combinational: try SAT
     try:
-        from pysat.solvers import Glucose3
+        from pysat.solvers import Glucose3  # noqa: F401
     except ImportError:
         return check_assertion_bmc(mod, output_net, expected_value, bound=bound)
 
-    from nosis.equiv import _simulate_combinational, _topological_order
+    from nosis.equiv import _simulate_combinational
 
     # Identify input ports
     input_ports: dict[str, int] = {}

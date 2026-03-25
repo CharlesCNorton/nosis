@@ -8,7 +8,7 @@ from pathlib import Path
 os.environ.setdefault("NOSIS_PYSLANG_PATH", "D:/slang/build/lib")
 
 from nosis.cli import main
-from tests.conftest import RIME_UART_TX, requires_rime
+from tests.conftest import RIME_UART_TX
 
 
 def test_cli_check_mode():
@@ -90,7 +90,7 @@ def test_cli_ecppack_without_tools():
     bit_path = out_path.replace(".json", ".bit")
     try:
         # Set PATH to empty so tools are not found (unless already in OSS_CAD env vars)
-        old_path = os.environ.get("PATH", "")
+        os.environ.get("PATH", "")
         # Don't clear PATH entirely — just verify the code doesn't crash
         rc = main(["-o", out_path, "--ecppack", bit_path, "--top", "uart_tx", RIME_UART_TX])
         # RC should be 0 (warns) or 1 (tool missing) — either is acceptable, no crash

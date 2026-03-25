@@ -103,7 +103,7 @@ def _compute_lut4_init(op: PrimOp, num_inputs: int) -> int:
         a = (i >> 0) & 1
         b = (i >> 1) & 1
         c = (i >> 2) & 1
-        d = (i >> 3) & 1
+        (i >> 3) & 1
 
         if op == PrimOp.AND:
             result = a & b
@@ -396,7 +396,6 @@ class _ECP5Mapper:
 
         # Check if the output feeds a single consumer that can be absorbed
         # into the CCU2C INIT (XOR with constant, NOT, etc.)
-        absorbed_op = None
         if out_net.name in self._net_map:
             pass  # can't easily check consumers at ECP5 level
         # For now, check the IR cell params for a packed_lut_init hint
@@ -475,7 +474,7 @@ class _ECP5Mapper:
                     bit = b_bits[i] if i < len(b_bits) else "0"
                     alu.ports[f"B{i}"] = [bit]
                 # C input (accumulator feedback from ADD output via FF)
-                acc_add_name = cell.params.get("dsp_acc_add")
+                cell.params.get("dsp_acc_add")
                 acc_ff_name = cell.params.get("dsp_acc_ff")
                 acc_bits: list[int | str] = []
                 if acc_ff_name:
@@ -585,7 +584,7 @@ class _ECP5Mapper:
 
         a_bits = self._get_bits(a_net)
         b_bits = self._get_bits(b_net)
-        out_bits = self._get_bits(out_net)
+        self._get_bits(out_net)
         is_right = cell.op in (PrimOp.SHR, PrimOp.SSHR)
         is_arith = cell.op == PrimOp.SSHR
 
@@ -815,7 +814,7 @@ class _ECP5Mapper:
 
             if bit_idx < len(out_bits):
                 out_ecp5 = self._get_net(out_net)
-                out_ecp5.bits[bit_idx] = level[0]
+                out_ecp5.bits[bit_idx] = current
 
     def _map_repeat(self, cell: Cell) -> None:
         """Map repeat — wiring."""
@@ -833,14 +832,14 @@ class _ECP5Mapper:
         """Map MEMORY cells to DP16KD when tagged by BRAM inference, else to FFs."""
         bram_config = cell.params.get("bram_config")
         if bram_config == "DP16KD":
-            addr_bits = int(cell.params.get("bram_addr_bits", 10))
+            int(cell.params.get("bram_addr_bits", 10))
             data_width = int(cell.params.get("bram_data_width", 18))
             depth = int(cell.params.get("depth", 0))
-            width = int(cell.params.get("width", 0))
+            int(cell.params.get("width", 0))
 
             # Determine the DP16KD data width configuration string
             width_map = {1: "X1", 2: "X2", 4: "X4", 9: "X9", 18: "X18", 36: "X36"}
-            data_str = width_map.get(data_width, "X18")
+            width_map.get(data_width, "X18")
 
             bram = self.nl.add_cell(self._fresh_name("bram"), "DP16KD")
             if cell.src:
@@ -946,7 +945,7 @@ class _ECP5Mapper:
         if bram_config in ("DPR16X4", "DPR16X4_TILED"):
             # Distributed RAM: TRELLIS_DPR16X4 (16 entries, 4 bits each)
             dpr_count = int(cell.params.get("bram_count", 1))
-            width = int(cell.params.get("width", 4))
+            int(cell.params.get("width", 4))
             rdata_net = list(cell.outputs.values())[0] if cell.outputs else None
             rdata_bits = self._get_bits(rdata_net) if rdata_net else []
 

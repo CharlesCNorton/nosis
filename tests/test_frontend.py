@@ -3,14 +3,13 @@
 import tempfile
 from pathlib import Path
 
-from nosis.frontend import FrontendError, SynthesisWarning, parse_files, lower_to_ir, _svint_to_int
+from nosis.frontend import FrontendError, parse_files, lower_to_ir, _svint_to_int
 from nosis.ir import PrimOp
 from tests.conftest import (
     RIME_UART_TX as UART_TX,
     RIME_UART_RX as UART_RX,
     RIME_SDRAM_BRIDGE as SDRAM_BRIDGE,
     RIME_CRC32 as CRC32,
-    requires_rime,
 )
 
 

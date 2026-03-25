@@ -13,10 +13,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
+from typing import TYPE_CHECKING
+
 from nosis.ir import Module, PrimOp
+
+if TYPE_CHECKING:
+    from nosis.ir import Design
+    from nosis.ecp5_netlist import ECP5Netlist
 
 __all__ = [
     "IRSnapshot",
@@ -165,7 +171,6 @@ def load_snapshot(path: str | Path) -> IRSnapshot:
 
 def serialize_module(mod: "Module") -> dict:
     """Serialize a full Module to a JSON-compatible dict."""
-    from nosis.ir import Module as _M
     cells = {}
     for name, cell in mod.cells.items():
         cells[name] = {
@@ -266,8 +271,8 @@ def incremental_remap(
     # and placement attributes for stable cells.
     new_netlist = map_to_ecp5(design)
 
-    changed_ir = set(delta.cells_added) | set(delta.cells_modified)
-    removed_ir = set(delta.cells_removed)
+    set(delta.cells_added) | set(delta.cells_modified)
+    set(delta.cells_removed)
 
     # Build a map from IR cell name patterns to ECP5 cell names
     # ECP5 cells are named like $lut_42, $tff_67 — they contain the

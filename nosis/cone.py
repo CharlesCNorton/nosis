@@ -11,7 +11,7 @@ analyzing the entire design.
 
 from __future__ import annotations
 
-from nosis.ir import Cell, Module, Net, PrimOp
+from nosis.ir import Module, PrimOp
 
 __all__ = [
     "extract_cone",

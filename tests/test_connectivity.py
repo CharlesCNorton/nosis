@@ -13,7 +13,6 @@ from nosis.ir import PrimOp, Module
 from tests.conftest import (
     RIME_UART_TX, RIME_UART_RX, RIME_SDRAM_BRIDGE, RIME_CRC32, RIME_V,
     RIME_THAW_SOURCES, RIME_SOC_SOURCES,
-    requires_rime,
 )
 
 import json

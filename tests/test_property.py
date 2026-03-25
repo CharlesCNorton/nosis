@@ -4,12 +4,12 @@ Uses Hypothesis to generate random cell configurations, input values,
 and module structures, then checks that synthesis invariants hold.
 """
 
-from hypothesis import given, settings, assume
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from nosis.ir import Module, PrimOp, Cell, Net
-from nosis.eval import eval_const_op, eval_cell, UnsupportedOpError
-from nosis.passes import constant_fold, dead_code_eliminate, identity_simplify
+from nosis.ir import Module, PrimOp
+from nosis.eval import eval_const_op
+from nosis.passes import constant_fold, dead_code_eliminate
 from nosis.cse import eliminate_common_subexpressions
 
 

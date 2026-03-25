@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -41,10 +41,10 @@ except ImportError as _exc:
         "and set NOSIS_PYSLANG_PATH to the directory containing the .pyd/.so."
     ) from _exc
 
-from nosis.ir import Cell, Design, Module, Net, PrimOp
-from nosis.hierarchy import ECP5_BLACKBOX_NAMES as _VENDOR_PRIMITIVES
+from nosis.ir import Cell, Design, Module, Net, PrimOp  # noqa: E402
+from nosis.hierarchy import ECP5_BLACKBOX_NAMES as _VENDOR_PRIMITIVES  # noqa: E402
 
-import re as _re
+import re as _re  # noqa: E402
 
 _VERILOG_LITERAL_RE = _re.compile(
     r"^(\d+)'([shSH]?)([bBoOdDhH])([0-9a-fA-FxXzZ_]+)$"
@@ -576,7 +576,6 @@ class _Lowerer:
         # left and right define the range — try constant evaluation
         offset = 0
         try:
-            left_val = expr.left
             right_val = expr.right
             # Try to read as literals via the constant attribute
             if hasattr(right_val, "constant") and right_val.constant is not None:
@@ -887,9 +886,9 @@ class _Lowerer:
                         op_w = self._bit_width(op)
                         lhs_net = self.lower_expr(op)
                         # Create SLICE of RHS for this element
-                        slice_net = self._fresh_net(f"concat_lhs_slice", op_w)
+                        slice_net = self._fresh_net("concat_lhs_slice", op_w)
                         slice_cell = self._fresh_cell(
-                            f"concat_lhs_slice", PrimOp.SLICE,
+                            "concat_lhs_slice", PrimOp.SLICE,
                             offset=offset, width=op_w,
                         )
                         self.mod.connect(slice_cell, "A", rhs)
@@ -1126,10 +1125,9 @@ class _Lowerer:
                 # Packed struct support
                 # Packed structs have a non-zero bitWidth — slang flattens them
                 # to a single bitvector. We treat them as regular nets.
-                is_packed_struct = False
                 type_str = str(getattr(t, "kind", "")) if t else ""
                 if "PackedStruct" in type_str or "PackedUnion" in type_str:
-                    is_packed_struct = True
+                    pass
                     # Already handled by _bit_width returning the total bitWidth
 
                 is_array = (
@@ -1161,7 +1159,7 @@ class _Lowerer:
                 else:
                     self._get_or_create_net(node.name, w)
                 if not is_array and node.initializer is not None:
-                    init_net = self.lower_expr(node.initializer)
+                    self.lower_expr(node.initializer)
 
             elif kind == "SymbolKind.Net":
                 w = self._bit_width(node)

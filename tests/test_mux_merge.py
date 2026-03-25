@@ -129,7 +129,7 @@ def test_mux_merge_on_real_design():
     d = lower_to_ir(r, top="uart_tx")
     m = d.top_module()
     before = m.stats()["cells"]
-    stats = run_default_passes(m)
+    run_default_passes(m)
     after = m.stats()["cells"]
     # Optimization should reduce cell count
     assert after < before
@@ -269,7 +269,6 @@ def test_soc_output_port_count():
     import os
     os.environ.setdefault("NOSIS_PYSLANG_PATH", "D:/slang/build/lib")
     from nosis.frontend import parse_files, lower_to_ir
-    from nosis.ir import PrimOp
     from tests.conftest import RIME_SOC_SOURCES
 
     r = parse_files(RIME_SOC_SOURCES, top="top")

@@ -8,7 +8,7 @@ def _gate_module():
     mod = Module(name="test")
     a = mod.add_net("a", 8)
     b = mod.add_net("b", 8)
-    y = mod.add_net("y", 8)
+    mod.add_net("y", 8)
     ac = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
     mod.connect(ac, "Y", a, direction="output")
     mod.ports["a"] = a

@@ -16,10 +16,9 @@ from pathlib import Path
 os.environ.setdefault("NOSIS_PYSLANG_PATH", "D:/slang/build/lib")
 
 from nosis.frontend import parse_files, lower_to_ir
-from nosis.passes import run_default_passes
 from nosis.techmap import map_to_ecp5
 from nosis.resources import calculate_area
-from tests.conftest import RIME_UART_TX, RIME_V, requires_rime
+from tests.conftest import RIME_UART_TX, RIME_V
 
 
 def _find_yosys() -> str | None:
@@ -93,7 +92,7 @@ def test_uart_tx_comparison():
     yosys_luts = yosys_counts.get("LUT4", 0) + yosys_counts.get("LUT4", 0)
     yosys_ffs = yosys_counts.get("TRELLIS_FF", 0)
 
-    print(f"uart_tx comparison:")
+    print("uart_tx comparison:")
     print(f"  nosis: {nosis_area.lut_cells} LUTs, {nosis_area.ff_cells} FFs")
     print(f"  yosys: {yosys_luts} LUTs, {yosys_ffs} FFs")
     if yosys_luts > 0:
@@ -122,7 +121,7 @@ def test_rime_v_comparison():
 
     yosys_luts = yosys_counts.get("LUT4", 0) + yosys_counts.get("LUT4", 0)
 
-    print(f"rime_v comparison:")
+    print("rime_v comparison:")
     print(f"  nosis: {nosis_area.lut_cells} LUTs")
     print(f"  yosys: {yosys_luts} LUTs")
     if yosys_luts > 0:

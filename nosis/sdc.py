@@ -202,7 +202,6 @@ def parse_sdc(path: str | Path) -> SdcConstraints:
         elif cmd == "set_multicycle_path":
             # Parse multicycle path — store as a delay constraint with
             # the multiplier encoded in the delay_ns field
-            multiplier = 1
             from_port = ""
             to_port = ""
             for i, t in enumerate(tokens):
@@ -212,7 +211,7 @@ def parse_sdc(path: str | Path) -> SdcConstraints:
                     to_port = _extract_port(tokens[i:])
                 else:
                     try:
-                        multiplier = int(t)
+                        int(t)
                     except ValueError:
                         pass
             # Multicycle paths are handled by downstream STA consumers

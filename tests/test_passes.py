@@ -1,6 +1,6 @@
 """Tests for nosis.passes — constant folding and dead code elimination."""
 
-from nosis.ir import Design, Module, PrimOp
+from nosis.ir import Module, PrimOp
 from nosis.passes import constant_fold, identity_simplify, dead_code_eliminate, run_default_passes
 
 
@@ -126,7 +126,7 @@ def test_dce_keeps_ff():
     mod.connect(ff, "D", d)
     mod.connect(ff, "Q", q, direction="output")
 
-    removed = dead_code_eliminate(mod)
+    dead_code_eliminate(mod)
     assert "ff0" in mod.cells
 
 

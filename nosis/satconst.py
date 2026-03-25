@@ -12,7 +12,6 @@ Falls back to exhaustive evaluation for nets with ≤16 input bits.
 from __future__ import annotations
 
 from nosis.ir import Cell, Module, Net, PrimOp
-from nosis.eval import eval_const_op
 
 __all__ = [
     "prove_constants_sat",
@@ -114,7 +113,9 @@ def prove_constants_sat(
 
             _vctr = [1]
             def _nv():
-                v = _vctr[0]; _vctr[0] += 1; return v
+                v = _vctr[0]
+                _vctr[0] += 1
+                return v
 
             _cls: list[list[int]] = []
             _bvars: dict[str, int] = {}

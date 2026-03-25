@@ -3,7 +3,7 @@
 from nosis.ir import Module, PrimOp
 from nosis.frontend import parse_files, lower_to_ir
 from nosis.lutpack import pack_luts_ir
-from tests.conftest import RIME_FW as RIME, RIME_V, requires_rime
+from tests.conftest import RIME_FW as RIME
 
 
 def test_pack_and_chain():

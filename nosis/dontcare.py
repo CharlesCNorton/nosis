@@ -109,7 +109,7 @@ def propagate_dont_cares(mod: Module) -> int:
         d_driver = d_net.driver
         if d_driver.op == PrimOp.MUX:
             mux_a = d_driver.inputs.get("A")  # false branch (sel=0)
-            mux_b = d_driver.inputs.get("B")  # true branch (sel=1)
+            d_driver.inputs.get("B")  # true branch (sel=1)
             mux_s = d_driver.inputs.get("S")
 
             # Check if the mask is NOT(mux_s) — same selector

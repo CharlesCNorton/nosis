@@ -383,6 +383,54 @@ def _try_sat_equivalence(
                             clauses.append([-av, bv, ov])
                 continue
 
+            # Multi-bit MUX: per-bit if-then-else encoding
+            if cell.op == PrimOp.MUX and width > 1:
+                s_vars_m = net_vars.get(cell.inputs["S"].name, []) if "S" in cell.inputs else []
+                a_vars_m = net_vars.get(cell.inputs["A"].name, []) if "A" in cell.inputs else []
+                b_vars_m = net_vars.get(cell.inputs["B"].name, []) if "B" in cell.inputs else []
+                s_v = s_vars_m[0] if s_vars_m else new_var()
+                for bit in range(width):
+                    ov = out_vars[bit]
+                    fv = a_vars_m[bit] if bit < len(a_vars_m) else new_var()
+                    tv = b_vars_m[bit] if bit < len(b_vars_m) else new_var()
+                    if bit >= len(a_vars_m):
+                        clauses.append([-fv])
+                    if bit >= len(b_vars_m):
+                        clauses.append([-tv])
+                    # o = s ? t : f  (Tseitin MUX encoding)
+                    clauses.append([-s_v, -tv, ov])
+                    clauses.append([-s_v, tv, -ov])
+                    clauses.append([s_v, -fv, ov])
+                    clauses.append([s_v, fv, -ov])
+                continue
+
+            # Multi-bit EQ/NE: reduce to per-bit XOR then AND/OR reduce
+            if cell.op in (PrimOp.EQ, PrimOp.NE) and width == 1 and a_vars and b_vars and len(a_vars) > 1:
+                # EQ: all bits equal -> AND(NOT(XOR(a[i],b[i])))
+                # Build per-bit XOR, then AND-reduce
+                xor_vars = []
+                for bit in range(min(len(a_vars), len(b_vars))):
+                    xv = new_var()
+                    clauses.append([-a_vars[bit], -b_vars[bit], -xv])
+                    clauses.append([a_vars[bit], b_vars[bit], -xv])
+                    clauses.append([a_vars[bit], -b_vars[bit], xv])
+                    clauses.append([-a_vars[bit], b_vars[bit], xv])
+                    xor_vars.append(xv)
+                o = out_vars[0]
+                if cell.op == PrimOp.EQ:
+                    # o = AND(NOT(xor[i])) = NOR(xor[0], xor[1], ...)
+                    # o -> NOT(xor[i]) for each i
+                    for xv in xor_vars:
+                        clauses.append([-o, -xv])
+                    # NOT(xor[0]) AND NOT(xor[1]) AND ... -> o
+                    clauses.append([o] + xor_vars)
+                else:
+                    # NE: o = OR(xor[i])
+                    for xv in xor_vars:
+                        clauses.append([-xv, o])
+                    clauses.append([-o] + xor_vars)
+                continue
+
             # For 1-bit operations, encode directly as CNF
             if width == 1 and len(a_vars) >= 1:
                 a = a_vars[0]

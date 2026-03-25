@@ -106,76 +106,97 @@ def prove_constants_sat(
             continue
 
         if n_inputs > 16:
-            # Try SAT for larger cones (up to max_cone_inputs)
+            # Tseitin CNF encoding for larger cones
             try:
                 from pysat.solvers import Glucose3
             except ImportError:
                 continue
 
-            # Build CNF: assert output != expected_val and check SAT
-            # If UNSAT, the net is provably constant.
-            var_ctr = [1]
-            def new_var():
-                v = var_ctr[0]; var_ctr[0] += 1; return v
+            _vctr = [1]
+            def _nv():
+                v = _vctr[0]; _vctr[0] += 1; return v
 
-            clauses: list[list[int]] = []
-            boundary_vars: dict[str, int] = {}
+            _cls: list[list[int]] = []
+            _bvars: dict[str, int] = {}
             for bname in sorted(boundary_nets):
-                boundary_vars[bname] = new_var()
+                _bvars[bname] = _nv()
 
-            # Evaluate cone cells in topological order for each SAT assignment
-            # This is the Tseitin encoding approach: encode each cell as clauses
-            cell_out_vars: dict[str, int] = {}
+            _ovars: dict[str, int] = {}
+            _encoding_ok = True
+
+            def _get(n):
+                if n.name in _ovars:
+                    return _ovars[n.name]
+                if n.name in _bvars:
+                    return _bvars[n.name]
+                if n.driver and n.driver.op == PrimOp.CONST:
+                    v = _nv()
+                    val = int(n.driver.params.get("value", 0)) & 1
+                    _cls.append([v] if val else [-v])
+                    _ovars[n.name] = v
+                    return v
+                v = _nv()
+                _ovars[n.name] = v
+                return v
+
             for c in cone_cells:
-                out_var = new_var()
-                for out in c.outputs.values():
-                    cell_out_vars[out.name] = out_var
-
-                # Get input vars
-                def get_var(n):
-                    if n.name in cell_out_vars:
-                        return cell_out_vars[n.name]
-                    if n.name in boundary_vars:
-                        return boundary_vars[n.name]
-                    if n.driver and n.driver.op == PrimOp.CONST:
-                        v = new_var()
-                        val = int(n.driver.params.get("value", 0)) & 1
-                        clauses.append([v] if val else [-v])
-                        return v
-                    return boundary_vars.get(n.name, new_var())
-
-                inp_vars = [get_var(inp_net) for inp_net in c.inputs.values()]
-                # For simplicity, skip CNF encoding for complex cells
-                # and fall back to exhaustive for cones up to 20 inputs
-                if len(inp_vars) > 4:
+                outs = list(c.outputs.values())
+                if not outs or outs[0].width != 1:
+                    _encoding_ok = False
                     break
-            else:
-                # If we got through all cells, check if we can do exhaustive up to 20
-                if n_inputs <= 20:
-                    boundary_list = sorted(boundary_nets)
-                    is_constant = True
-                    for i in range(1 << n_inputs):
-                        net_values = {}
-                        for idx, bname in enumerate(boundary_list):
-                            bnet = mod.nets.get(bname)
-                            if bnet:
-                                net_values[bname] = (i >> idx) & ((1 << bnet.width) - 1)
-                        for c in mod.cells.values():
-                            if c.op == PrimOp.CONST:
-                                for out in c.outputs.values():
-                                    net_values[out.name] = int(c.params.get("value", 0))
-                        for c in cone_cells:
-                            results = eval_cell(c, net_values)
-                            for pname, val in results.items():
-                                out = c.outputs.get(pname)
-                                if out:
-                                    net_values[out.name] = val
-                        actual = net_values.get(net_name, 0) & 1
-                        if actual != (expected_val & 1):
-                            is_constant = False
-                            break
-                    if is_constant:
-                        proven[net_name] = expected_val
+                o = _nv()
+                _ovars[outs[0].name] = o
+                inps = list(c.inputs.values())
+                ivs = [_get(inp) for inp in inps]
+                if c.op == PrimOp.AND and len(ivs) == 2:
+                    _cls.append([-ivs[0], -ivs[1], o])
+                    _cls.append([ivs[0], -o])
+                    _cls.append([ivs[1], -o])
+                elif c.op == PrimOp.OR and len(ivs) == 2:
+                    _cls.append([ivs[0], ivs[1], -o])
+                    _cls.append([-ivs[0], o])
+                    _cls.append([-ivs[1], o])
+                elif c.op == PrimOp.XOR and len(ivs) == 2:
+                    _cls.append([-ivs[0], -ivs[1], -o])
+                    _cls.append([ivs[0], ivs[1], -o])
+                    _cls.append([ivs[0], -ivs[1], o])
+                    _cls.append([-ivs[0], ivs[1], o])
+                elif c.op == PrimOp.NOT and len(ivs) >= 1:
+                    _cls.append([ivs[0], o])
+                    _cls.append([-ivs[0], -o])
+                elif c.op == PrimOp.MUX and len(ivs) == 3:
+                    s, f, t = ivs[0], ivs[1], ivs[2]
+                    _cls.append([-s, -t, o])
+                    _cls.append([-s, t, -o])
+                    _cls.append([s, -f, o])
+                    _cls.append([s, f, -o])
+                elif c.op == PrimOp.EQ and len(ivs) == 2:
+                    _cls.append([-ivs[0], -ivs[1], o])
+                    _cls.append([ivs[0], ivs[1], o])
+                    _cls.append([ivs[0], -ivs[1], -o])
+                    _cls.append([-ivs[0], ivs[1], -o])
+                elif c.op == PrimOp.NE and len(ivs) == 2:
+                    _cls.append([-ivs[0], -ivs[1], -o])
+                    _cls.append([ivs[0], ivs[1], -o])
+                    _cls.append([ivs[0], -ivs[1], o])
+                    _cls.append([-ivs[0], ivs[1], o])
+                else:
+                    _encoding_ok = False
+                    break
+
+            if _encoding_ok and net_name in _ovars:
+                target_var = _ovars[net_name]
+                # Assert output != expected: if expected is 1, assert target=0
+                if expected_val & 1:
+                    _cls.append([-target_var])
+                else:
+                    _cls.append([target_var])
+                solver = Glucose3()
+                for cl in _cls:
+                    solver.add_clause(cl)
+                if not solver.solve():
+                    proven[net_name] = expected_val
+                solver.delete()
             continue
 
         # Exhaustive: enumerate all 2^n input combinations

@@ -551,8 +551,78 @@ class _ECP5Mapper:
         self._map_lut(cell)
 
     def _map_shift(self, cell: Cell) -> None:
-        """Map shift operations to LUT chains."""
-        self._map_lut(cell)
+        """Map shift operations to a logarithmic barrel shifter.
+
+        For an N-bit shift with B shift-amount bits, builds B stages
+        of MUX2 layers. Each stage i shifts by 2^i positions when
+        shift_amount[i] is set. Total depth = B = ceil(log2(N)),
+        which is much shorter than a linear MUX chain.
+        Falls back to per-bit LUT for 1-bit operands.
+        """
+        a_net = cell.inputs.get("A")
+        b_net = cell.inputs.get("B")
+        out_nets = list(cell.outputs.values())
+        if not a_net or not b_net or not out_nets:
+            self._map_lut(cell)
+            return
+        out_net = out_nets[0]
+        width = out_net.width
+        if width <= 1:
+            self._map_lut(cell)
+            return
+
+        a_bits = self._get_bits(a_net)
+        b_bits = self._get_bits(b_net)
+        out_bits = self._get_bits(out_net)
+        is_right = cell.op in (PrimOp.SHR, PrimOp.SSHR)
+        is_arith = cell.op == PrimOp.SSHR
+
+        # Number of shift stages = bits needed to represent max shift
+        import math
+        n_stages = max(1, math.ceil(math.log2(max(width, 2))))
+        n_stages = min(n_stages, len(b_bits), 6)  # cap at 6 stages (64-bit)
+
+        # Current data bits (start with input)
+        current = list(a_bits[:width])
+        while len(current) < width:
+            current.append("0")
+
+        # Build logarithmic stages
+        for stage in range(n_stages):
+            shift_amount = 1 << stage
+            sel_bit = b_bits[stage] if stage < len(b_bits) else "0"
+            next_bits: list[int | str] = []
+            for i in range(width):
+                if is_right:
+                    src_idx = i + shift_amount
+                else:
+                    src_idx = i - shift_amount
+                if is_right and src_idx >= width:
+                    # Fill: zero for logical, sign bit for arithmetic
+                    fill = current[-1] if is_arith else "0"
+                    shifted = fill
+                elif not is_right and src_idx < 0:
+                    shifted = "0"
+                else:
+                    shifted = current[src_idx] if 0 <= src_idx < width else "0"
+
+                # MUX: sel=0 -> pass through, sel=1 -> shifted
+                # INIT for MUX(sel=A, false=B, true=C) = 0xCACA
+                mux_out = self.nl.alloc_bit()
+                lut = self.nl.add_cell(self._fresh_name("shft"), "LUT4")
+                lut.parameters["INIT"] = "1100101011001010"  # MUX
+                lut.ports["A"] = [sel_bit]
+                lut.ports["B"] = [current[i]]
+                lut.ports["C"] = [shifted]
+                lut.ports["D"] = ["0"]
+                lut.ports["Z"] = [mux_out]
+                next_bits.append(mux_out)
+            current = next_bits
+
+        # Wire final stage to output
+        out_ecp5 = self._get_net(out_net)
+        for i in range(min(width, len(current))):
+            out_ecp5.bits[i] = current[i]
 
     def _map_compare(self, cell: Cell) -> None:
         """Map comparison operations to LUT chains."""

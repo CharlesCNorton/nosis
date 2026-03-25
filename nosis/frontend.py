@@ -737,10 +737,14 @@ class _Lowerer:
             if str(expr.kind) == "ExpressionKind.Assignment" and not expr.isNonBlocking:
                 lhs = self.lower_expr(expr.left)
                 rhs = self.lower_expr(expr.right)
-                # If RHS is a constant, record as initial value attribute
+                # Record initial value: check RHS constant (from driver or pyslang)
+                init_val = None
                 if rhs.driver and rhs.driver.op == PrimOp.CONST:
-                    val = int(rhs.driver.params.get("value", 0))
-                    lhs.attributes["init_value"] = str(val)
+                    init_val = int(rhs.driver.params.get("value", 0))
+                elif hasattr(expr.right, "constant") and expr.right.constant is not None:
+                    init_val = _svint_to_int(expr.right.constant)
+                if init_val is not None:
+                    lhs.attributes["init_value"] = str(init_val)
         elif kind == "StatementKind.Block":
             if stmt.body is not None:
                 self._lower_initial_block(stmt.body)
@@ -1198,13 +1202,18 @@ class _Lowerer:
                             return  # skip this block entirely
                 self.lower_procedural_block(node)
 
-            elif kind == "SymbolKind.GenerateBlock":
-                # generate-for — slang fully unrolls generate blocks.
-                # If we see a GenerateBlock, it means slang has already unrolled
-                # the generate-for. Walk its members normally.
+            elif kind in ("SymbolKind.GenerateBlock", "SymbolKind.GenerateBlockArray"):
+                # generate-for/generate-if — slang fully unrolls generate blocks.
+                # Walk all members including nested generates, instances, and nets.
                 if hasattr(node, "members"):
                     for member in node.members:
                         walk_member(member)
+
+            elif kind == "SymbolKind.TypeAlias":
+                pass  # type aliases resolved by slang, no synthesis action
+
+            elif kind == "SymbolKind.Genvar":
+                pass  # genvar is a compile-time variable, resolved by slang
 
             elif kind == "SymbolKind.Instance":
                 self._lower_sub_instance(node)

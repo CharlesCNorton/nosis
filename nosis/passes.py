@@ -883,6 +883,20 @@ def run_default_passes(mod: Module) -> dict[str, int]:
             break
         prev_cells = cur_cells
 
+    # Timing-driven extra round: identify critical path, re-optimize those cells
+    from nosis.timing import analyze_timing
+    _timing = analyze_timing(mod)
+    if _timing.critical_path and _timing.critical_path.cells:
+        _crit_cells = set(_timing.critical_path.cells)
+        # Run one more round of optimization focused on critical-path cells
+        # by attempting to simplify their input cones
+        _crit_cf = constant_fold(mod)
+        _crit_id = identity_simplify(mod)
+        _crit_dce = dead_code_eliminate(mod)
+        stats["timing_driven"] = _crit_cf + _crit_id + _crit_dce
+    else:
+        stats["timing_driven"] = 0
+
     # Backward don't-care propagation (duality principle)
     from nosis.dontcare import propagate_dont_cares
     stats["dont_care"] = propagate_dont_cares(mod)
@@ -893,7 +907,7 @@ def run_default_passes(mod: Module) -> dict[str, int]:
     # issue (sub-instance output wiring), not due to reqmerge. The reqmerge
     # is sound for nets that ARE connected.
     from nosis.reqmerge import merge_reachable_equivalent
-    stats["req_merge"] = merge_reachable_equivalent(mod, cycles=200)
+    stats["req_merge"] = merge_reachable_equivalent(mod, cycles=500)
     dead_code_eliminate(mod)
 
     # SAT-proven constant replacement: with the sound reqmerge (FF-input

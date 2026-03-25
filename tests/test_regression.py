@@ -756,19 +756,19 @@ class TestLockedCellCounts:
 
     def test_rime_v_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/cpu/rime_v.sv", "rime_v")
-        assert s["LUT4"] == 5173, f"LUT count changed: {s['LUT4']}"
+        assert s["LUT4"] == 5689, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 1727, f"FF count changed: {s['TRELLIS_FF']}"
         assert s["CCU2C"] == 275, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_thaw_exact(self):
         s = self._ecp5_stats(RIME_THAW_SOURCES, "top")
-        assert s["LUT4"] == 15898, f"LUT count changed: {s['LUT4']}"
+        assert s["LUT4"] == 16410, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 6143, f"FF count changed: {s['TRELLIS_FF']}"
         assert s["CCU2C"] == 1044, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_soc_exact(self):
         s = self._ecp5_stats(RIME_SOC_SOURCES, "top")
-        assert s["LUT4"] == 55478, f"LUT count changed: {s['LUT4']}"
+        assert s["LUT4"] == 70894, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 16825, f"FF count changed: {s['TRELLIS_FF']}"
         assert s["CCU2C"] == 4094, f"CCU2C count changed: {s['CCU2C']}"
 

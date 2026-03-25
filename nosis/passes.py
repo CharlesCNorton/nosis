@@ -855,7 +855,7 @@ def _narrow_const_mux(mod: Module) -> int:
 def run_default_passes(mod: Module) -> dict[str, int]:
     """Run the default optimization pipeline. Returns pass statistics."""
     from nosis.cse import eliminate_common_subexpressions
-    from nosis.boolopt import boolean_optimize
+    from nosis.boolopt import boolean_optimize, tech_aware_optimize
 
     stats: dict[str, int] = {}
     prev_cells = len(mod.cells)
@@ -872,10 +872,10 @@ def run_default_passes(mod: Module) -> dict[str, int]:
         mm = merge_mux_chains(mod)
         mz = _simplify_mux_with_zero(mod)
         mn = _narrow_const_mux(mod)
-        neq = 0
+        ta = tech_aware_optimize(mod)
         dce = dead_code_eliminate(mod)
 
-        total = cf + ident + bo + cff + cse + fi + hit + dci + mm + mz + mn + neq + dce
+        total = cf + ident + bo + cff + cse + fi + hit + dci + mm + mz + mn + ta + dce
         stats[f"round_{iteration}"] = total
 
         cur_cells = len(mod.cells)
@@ -960,6 +960,18 @@ def run_default_passes(mod: Module) -> dict[str, int]:
     from nosis.cutmap import cut_map_luts
     stats["cut_map"] = cut_map_luts(mod)
     stats["dce_final"] = dead_code_eliminate(mod)
+
+    # Register retiming: move FFs across single-fanout combinational cells
+    from nosis.retiming import retime_forward, duplicate_high_fanout
+    stats["retime_fwd"] = retime_forward(mod, max_moves=50)
+    stats["fanout_dup"] = duplicate_high_fanout(mod, threshold=64)
+    if stats["retime_fwd"] > 0 or stats["fanout_dup"] > 0:
+        dead_code_eliminate(mod)
+
+    # CDC synchronizer insertion
+    from nosis.clocks import analyze_clock_domains, insert_synchronizers
+    domains, crossings = analyze_clock_domains(mod)
+    stats["cdc_sync"] = insert_synchronizers(mod, crossings)
 
     # Re-run inference after optimization
     from nosis.carry import infer_carry_chains

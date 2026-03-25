@@ -427,11 +427,20 @@ def validate_design(
     if not output_ports:
         return ValidationResult(design=design_name, passed=False, cycles=0, error="no output ports found")
 
-    # Generate testbench
-    tb_source = generate_testbench(
-        mod.name, ports, num_cycles=num_cycles, seed=seed,
-        output_file="rtl_output.txt",
-    )
+    # Generate test vectors (structured corner cases + random)
+    from nosis.testvec import generate_test_vectors
+    vectors = generate_test_vectors(mod, num_random=max(0, num_cycles - 20), seed=seed)
+
+    # Generate testbench from structured vectors if available, else random
+    if vectors:
+        tb_source = generate_testbench_from_vectors(
+            mod.name, ports, vectors, output_file="rtl_output.txt",
+        )
+    else:
+        tb_source = generate_testbench(
+            mod.name, ports, num_cycles=num_cycles, seed=seed,
+            output_file="rtl_output.txt",
+        )
 
     with tempfile.TemporaryDirectory(prefix="nosis_val_") as tmp:
         work = Path(tmp)

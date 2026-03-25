@@ -25,15 +25,19 @@ RIME_FW = os.path.join(RIME_ROOT, "firmware")
 _BUNDLED = os.path.join(_NOSIS_DIR, "tests", "designs")
 BUNDLED_UART_TX = os.path.join(_BUNDLED, "uart_tx.sv")
 BUNDLED_UART_RX = os.path.join(_BUNDLED, "uart_rx.sv")
+BUNDLED_SDRAM_BRIDGE = os.path.join(_BUNDLED, "sdram_bridge.sv")
+BUNDLED_CRC32 = os.path.join(_BUNDLED, "rime_pcpi_crc32.sv")
 
 # Standard RIME HDL source paths (may not exist in CI)
 _rime_uart_tx = os.path.join(RIME_FW, "core/uart/uart_tx.sv")
 _rime_uart_rx = os.path.join(RIME_FW, "core/uart/uart_rx.sv")
 RIME_UART_TX = _rime_uart_tx if os.path.isfile(_rime_uart_tx) else BUNDLED_UART_TX
 RIME_UART_RX = _rime_uart_rx if os.path.isfile(_rime_uart_rx) else BUNDLED_UART_RX
-RIME_SDRAM_BRIDGE = os.path.join(RIME_FW, "core/service/sdram_bridge.sv")
+_rime_sdram_bridge = os.path.join(RIME_FW, "core/service/sdram_bridge.sv")
+RIME_SDRAM_BRIDGE = _rime_sdram_bridge if os.path.isfile(_rime_sdram_bridge) else BUNDLED_SDRAM_BRIDGE
 RIME_SDRAM_CTRL = os.path.join(RIME_FW, "core/service/sdram_controller.sv")
-RIME_CRC32 = os.path.join(RIME_FW, "core/cpu/rime_pcpi_crc32.sv")
+_rime_crc32 = os.path.join(RIME_FW, "core/cpu/rime_pcpi_crc32.sv")
+RIME_CRC32 = _rime_crc32 if os.path.isfile(_rime_crc32) else BUNDLED_CRC32
 RIME_V = os.path.join(RIME_FW, "core/cpu/rime_v.sv")
 RIME_PICORV32 = os.path.join(RIME_FW, "core/cpu/picorv32.v")
 

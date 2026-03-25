@@ -155,6 +155,7 @@ class _ECP5Mapper:
         self.nl = netlist
         self._cell_counter = 0
         self._net_map: dict[str, ECP5Net] = {}
+        self._ir_mod: Module | None = None
 
     def _fresh_name(self, prefix: str) -> str:
         name = f"${prefix}_{self._cell_counter}"
@@ -182,6 +183,7 @@ class _ECP5Mapper:
 
     def map_module(self, mod: Module) -> None:
         """Map all cells in an IR module to ECP5 cells."""
+        self._ir_mod = mod
         # First pass: create ECP5 nets for all IR nets
         for net in mod.nets.values():
             self._get_net(net)
@@ -217,6 +219,12 @@ class _ECP5Mapper:
     def _map_cell(self, cell: Cell) -> None:
         """Map a single IR cell to one or more ECP5 cells."""
         op = cell.op
+
+        if op == PrimOp.LATCH:
+            # Map latches as TRELLIS_FF with transparent enable
+            # ECP5 doesn't have dedicated latches — use FF with CE as enable
+            self._map_ff(cell)
+            return
 
         if op == PrimOp.INPUT or op == PrimOp.OUTPUT:
             # Tri-state buffer inference for inout ports
@@ -456,9 +464,25 @@ class _ECP5Mapper:
                 for i in range(36):
                     bit = b_bits[i] if i < len(b_bits) else "0"
                     alu.ports[f"B{i}"] = [bit]
-                # C input (accumulator feedback) — tied to 0 for now
+                # C input (accumulator feedback from ADD output via FF)
+                acc_add_name = cell.params.get("dsp_acc_add")
+                acc_ff_name = cell.params.get("dsp_acc_ff")
+                acc_bits: list[int | str] = []
+                if acc_ff_name:
+                    from nosis.ir import PrimOp as _P
+                    acc_ff = None
+                    # Find the FF cell and get its Q output bits
+                    for _mod_cell in (self._ir_mod.cells.values() if self._ir_mod else []):
+                        if _mod_cell.name == acc_ff_name and _mod_cell.op == _P.FF:
+                            acc_ff = _mod_cell
+                            break
+                    if acc_ff:
+                        for q_net in acc_ff.outputs.values():
+                            acc_bits = self._get_bits(q_net)
+                            break
                 for i in range(54):
-                    alu.ports[f"C{i}"] = ["0"]
+                    bit = acc_bits[i] if i < len(acc_bits) else "0"
+                    alu.ports[f"C{i}"] = [bit]
                 # Output R (up to 54 bits)
                 for i in range(54):
                     bit = out_bits[i] if i < len(out_bits) else self.nl.alloc_bit()
@@ -764,9 +788,25 @@ class _ECP5Mapper:
             bram.parameters["WRITEMODE_A"] = "NORMAL"
             bram.parameters["WRITEMODE_B"] = "NORMAL"
             bram.parameters["GSR"] = "DISABLED"
-            # INIT values default to all zeros
-            for i in range(64):
-                bram.parameters[f"INITVAL_{i:02X}"] = "0x00000000000000000000"
+            # INIT values: use readmem data if available, else all zeros
+            init_file = cell.params.get("init_file")
+            if init_file:
+                from nosis.readmem import parse_readmemh, readmem_to_dp16kd_initvals
+                from pathlib import Path
+                init_path = Path(init_file)
+                if init_path.exists():
+                    mem_data = parse_readmemh(init_path)
+                    initvals = readmem_to_dp16kd_initvals(
+                        mem_data, data_width=data_width, depth=depth
+                    )
+                    for k, v in initvals.items():
+                        bram.parameters[k] = v
+                else:
+                    for i in range(64):
+                        bram.parameters[f"INITVAL_{i:02X}"] = "0x00000000000000000000"
+            else:
+                for i in range(64):
+                    bram.parameters[f"INITVAL_{i:02X}"] = "0x00000000000000000000"
 
             # Wire address port A (read)
             raddr_net = cell.inputs.get("RADDR")
@@ -797,8 +837,12 @@ class _ECP5Mapper:
             for i in range(18):
                 bit = rdata_bits[i] if i < len(rdata_bits) else self.nl.alloc_bit()
                 bram.ports[f"DOA{i}"] = [bit]
+            # Wire data output (port B read — for true dual-port)
+            rdata_b_net = cell.outputs.get("RDATA_B") if len(cell.outputs) > 1 else None
+            rdata_b_bits = self._get_bits(rdata_b_net) if rdata_b_net else []
             for i in range(18):
-                bram.ports[f"DOB{i}"] = [self.nl.alloc_bit()]
+                bit = rdata_b_bits[i] if i < len(rdata_b_bits) else self.nl.alloc_bit()
+                bram.ports[f"DOB{i}"] = [bit]
 
             # Clock
             clk_net = cell.inputs.get("CLK")

@@ -38,6 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="parse and validate only — do not emit any output")
     parser.add_argument("--stats", action="store_true", help="print synthesis statistics")
     parser.add_argument("--benchmark", action="store_true", help="emit machine-readable JSON with cell counts, timing, and wall-clock time per stage")
+    parser.add_argument("--json-stats", action="store_true", help="emit all synthesis statistics as a single JSON object to stdout (suppresses human output)")
     parser.add_argument("--ecppack", help="run ecppack on the output to produce a .bit bitstream file at this path")
     parser.add_argument("--snapshot", help="save an IR snapshot for incremental compilation")
     parser.add_argument("--delta", help="compare against a previous IR snapshot and print delta")
@@ -311,6 +312,60 @@ def main(argv: list[str] | None = None) -> int:
             "critical_path_ns": round(timing.max_delay_ns, 3),
         }
         print(json.dumps(bench, indent=2))
+
+    # --- --json-stats mode ---
+    if args.json_stats:
+        from nosis.resources import calculate_area, report_utilization
+        from nosis.timing import analyze_timing
+        from nosis.congestion import analyze_congestion
+        from nosis.clocks import analyze_clock_domains
+        from nosis.power import estimate_power
+        nl_stats = netlist.stats()
+        area = calculate_area(netlist)
+        timing = analyze_timing(mod)
+        congestion = analyze_congestion(mod)
+        domains, crossings = analyze_clock_domains(mod)
+        power = estimate_power(netlist)
+        output = {
+            "design": mod.name,
+            "timing": {
+                "parse_s": round(t_parse - t0, 4),
+                "lower_s": round(t_lower - t_parse, 4),
+                "opt_s": round(t_opt - t_lower, 4),
+                "map_s": round(t_map - t_pack, 4),
+                "total_s": round(t_total, 4),
+            },
+            "cells": nl_stats,
+            "area": {
+                "lut_cells": area.lut_cells,
+                "ff_cells": area.ff_cells,
+                "ccu2c_cells": area.ccu2c_cells,
+                "bram_tiles": area.bram_tiles,
+                "dsp_tiles": area.dsp_tiles,
+                "slices_total": area.slices_total,
+                "binding_resource": area.binding_resource,
+                "lut_packing_pct": round(area.lut_packing, 1),
+                "ff_packing_pct": round(area.ff_packing, 1),
+            },
+            "timing_analysis": {
+                "max_delay_ns": round(timing.max_delay_ns, 3),
+                "max_frequency_mhz": round(timing.max_frequency_mhz, 1),
+                "paths_analyzed": timing.total_paths_analyzed,
+            },
+            "power": {
+                "static_mw": round(power.static_power_mw, 3),
+                "dynamic_mw": round(power.dynamic_power_mw, 3),
+                "total_mw": round(power.total_power_mw, 3),
+            },
+            "clock_domains": len(domains),
+            "clock_crossings": len(crossings),
+            "congestion_score": round(congestion.density_score, 1),
+            "max_fanout": congestion.max_fanout,
+            "ir_cells": mod.stats()["cells"],
+            "ir_nets": mod.stats()["nets"],
+            "ports": len(mod.ports),
+        }
+        print(json.dumps(output, indent=2))
 
     return 0
 

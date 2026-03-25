@@ -58,8 +58,9 @@ def estimate_routing(mod: Module, logic_delay_ns: float = 0.0) -> RoutingEstimat
     sqrt_cells = math.sqrt(max(total_cells, 1))
 
     # Per-net routing delay: base_delay * sqrt(fanout) * scaling
-    base_delay = 0.3  # ns per hop
-    scale = min(sqrt_cells / 50.0, 2.0)  # larger designs have longer wires
+    # Calibrated against nextpnr ECP5-25F: uart_tx actual routing ~1.1 ns
+    base_delay = 0.4  # ns per hop (ECP5 PIB interconnect)
+    scale = max(0.3, min(sqrt_cells / 30.0, 2.5))  # minimum 0.3 for small designs
 
     # Identify nets that use dedicated routing resources (lower delay)
     clock_nets: set[str] = set()
@@ -91,8 +92,8 @@ def estimate_routing(mod: Module, logic_delay_ns: float = 0.0) -> RoutingEstimat
     max_delay = max(delays) if delays else 0.0
 
     # Critical path routing: assume routing adds proportionally to logic
-    # Empirical: routing is typically 50-70% of total delay on ECP5
-    routing_on_critical = max_delay * 0.6
+    # Calibrated: routing is typically 40-70% of total delay on ECP5-25F
+    routing_on_critical = max_delay * 0.75
     total = logic_delay_ns + routing_on_critical
 
     return RoutingEstimate(

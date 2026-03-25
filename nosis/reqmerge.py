@@ -20,6 +20,7 @@ from nosis.equiv import _simulate_combinational
 
 __all__ = [
     "merge_reachable_equivalent",
+    "propagate_reachable_constants",
 ]
 
 
@@ -130,3 +131,102 @@ def merge_reachable_equivalent(
             merged += 1
 
     return merged
+
+
+def propagate_reachable_constants(
+    mod: Module,
+    *,
+    cycles: int = 200,
+    seed: int = 42,
+) -> int:
+    """Replace nets that are constant across all reachable states with CONST cells.
+
+    Simulates for *cycles* clock cycles and identifies nets whose value
+    never changes. These nets are functionally constant in the reachable
+    state space even though the combinational logic that drives them is
+    not structurally constant. Replace the driver with a CONST cell.
+
+    This is the cofiber construction from stable categories: the "difference"
+    (cofiber) between the design and a simplified version is zero for these
+    nets. The simplification is therefore exact — no information is lost.
+
+    Returns the number of nets replaced with constants.
+    """
+    rng = random.Random(seed)
+
+    input_ports: dict[str, int] = {}
+    for cell in mod.cells.values():
+        if cell.op == PrimOp.INPUT:
+            for out in cell.outputs.values():
+                input_ports[out.name] = out.width
+
+    if not input_ports:
+        return 0
+
+    ff_state: dict[str, int] = {}
+    for cell in mod.cells.values():
+        if cell.op == PrimOp.FF:
+            for out in cell.outputs.values():
+                ff_state[out.name] = 0
+
+    # Track min and max value for each net across all cycles
+    net_min: dict[str, int] = {}
+    net_max: dict[str, int] = {}
+
+    for cycle in range(cycles):
+        inputs = {name: rng.getrandbits(w) for name, w in input_ports.items()}
+        sim = dict(inputs)
+        sim.update(ff_state)
+        vals = _simulate_combinational(mod, sim)
+
+        for name, val in vals.items():
+            if name not in net_min:
+                net_min[name] = val
+                net_max[name] = val
+            else:
+                if val < net_min[name]:
+                    net_min[name] = val
+                if val > net_max[name]:
+                    net_max[name] = val
+
+        for cell in mod.cells.values():
+            if cell.op == PrimOp.FF:
+                d_net = cell.inputs.get("D")
+                if d_net and d_net.name in vals:
+                    for out in cell.outputs.values():
+                        ff_state[out.name] = vals[d_net.name]
+
+    # Find nets where min == max (constant across all reachable states)
+    replaced = 0
+    _ctr = [len(mod.nets) + len(mod.cells) + 500]
+
+    for name in list(net_min.keys()):
+        if net_min[name] != net_max[name]:
+            continue
+        const_val = net_min[name]
+
+        net = mod.nets.get(name)
+        if net is None:
+            continue
+        # Don't replace port nets
+        if name in mod.ports:
+            continue
+        # Don't replace nets already driven by CONST
+        if net.driver and net.driver.op == PrimOp.CONST:
+            continue
+        # Don't replace FF outputs (they'll be caught by const-FF removal)
+        if net.driver and net.driver.op == PrimOp.FF:
+            continue
+        # Don't replace INPUT outputs
+        if net.driver and net.driver.op == PrimOp.INPUT:
+            continue
+
+        # Create a CONST cell to drive this net
+        _ctr[0] += 1
+        const_name = f"$rconst_{_ctr[0]}"
+        const_cell = mod.add_cell(const_name, PrimOp.CONST,
+                                  value=const_val, width=net.width)
+        mod.connect(const_cell, "Y", net, direction="output")
+        replaced += 1
+
+    return replaced

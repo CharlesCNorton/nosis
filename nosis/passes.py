@@ -763,6 +763,10 @@ def run_default_passes(mod: Module) -> dict[str, int]:
     stats["dce_dc"] = dead_code_eliminate(mod)
 
     # Reachable-state equivalence merging (HoTT quotient)
+    # Note: propagate_reachable_constants is too aggressive — it relies on
+    # simulation coverage which may miss rare code paths. Only use the
+    # net-level merge (which merges nets with identical signatures, not
+    # nets with constant signatures).
     from nosis.reqmerge import merge_reachable_equivalent
     stats["req_merge"] = merge_reachable_equivalent(mod, cycles=200)
     stats["dce_req"] = dead_code_eliminate(mod)

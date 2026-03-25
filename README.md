@@ -243,7 +243,7 @@ All 30+ vendor primitives have stub declarations in `ecp5_prims.sv` for slang el
 
 ## Repository
 
-45 source modules, 49 test modules, 622 tests, 22,500 lines of Python.
+45 source modules, 12 test suites, 585 tests, 21,000 lines of Python.
 
 | Module | Role |
 |--------|------|
@@ -372,7 +372,7 @@ nosis input.sv --top top -o output.json --ecppack output.bit
 
 ## Development
 
-Full test suite (622 tests):
+Full test suite (585 tests, 12 suites):
 
 ```
 pytest tests/ -v
@@ -381,13 +381,19 @@ pytest tests/ -v
 Unit tests only (no pyslang dependency):
 
 ```
-pytest tests/test_ir.py tests/test_eval.py tests/test_passes.py tests/test_techmap.py tests/test_json_backend.py -v
+pytest tests/test_ir.py tests/test_ops.py tests/test_pipeline.py -v
 ```
 
-Regression tests (requires pyslang and RIME source):
+Design tests (requires pyslang, bundled designs included):
 
 ```
-pytest tests/test_regression.py tests/test_frontend.py tests/test_mux_merge.py tests/test_connectivity.py -v
+pytest tests/test_designs.py tests/test_mapping.py tests/test_analysis.py -v
+```
+
+SoC tests (requires full RIME source tree):
+
+```
+pytest tests/test_soc.py -v
 ```
 
 Lint:

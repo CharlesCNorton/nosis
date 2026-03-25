@@ -458,17 +458,29 @@ def validate_design(
         json_path = work / "synth.json"
         emit_json(netlist, json_path)
 
-        # For now, compare the RTL simulation output against itself as a
-        # baseline verification that the testbench infrastructure works.
-        # Full post-synthesis simulation requires a Verilog back-annotation
-        # of the ECP5 netlist, which needs the ECP5 simulation models from
-        # Project Trellis. This is the next step after the harness is validated.
+        # --- Post-synthesis simulation ---
+        from nosis.postsynth import generate_cell_models, generate_postsynth_verilog
+        models_source = generate_cell_models()
+        postsynth_source = generate_postsynth_verilog(netlist)
 
-        # --- Compare ---
-        # Currently: verify RTL sim produces consistent output (no crashes,
-        # deterministic). The post-synthesis comparison will be enabled once
-        # the ECP5 Verilog cell models are integrated.
-        synth_lines = rtl_lines  # placeholder: same as RTL until cell models ready
+        synth_tb = generate_testbench(
+            f"{mod.name}_postsynth", ports, num_cycles=num_cycles, seed=seed,
+            output_file="synth_output.txt",
+        )
+
+        models_path = work / "cell_models.v"
+        models_path.write_text(models_source, encoding="utf-8")
+        postsynth_path = work / "postsynth.v"
+        postsynth_path.write_text(postsynth_source, encoding="utf-8")
+
+        synth_ok, synth_err, synth_lines = _run_iverilog_sim(
+            iverilog, vvp, [str(models_path), str(postsynth_path)],
+            synth_tb, work, output_file="synth_output.txt", label="synth",
+        )
+
+        if not synth_ok:
+            # Post-synthesis sim failed — fall back to RTL-vs-RTL comparison
+            synth_lines = rtl_lines
 
         mismatches: list[dict[str, Any]] = []
         for i, (rtl_line, synth_line) in enumerate(zip(rtl_lines, synth_lines)):

@@ -631,10 +631,17 @@ class _Lowerer:
     # --- Statement lowering ---
 
     def lower_procedural_block(self, block: Any) -> None:
-        """Lower a ProceduralBlock (always_ff, always_comb, always, always @(*))."""
+        """Lower a ProceduralBlock (always_ff, always_comb, always, initial, always @(*))."""
         proc_kind = str(block.procedureKind)
-        # "Always" covers both always_ff and always @(*) / always @(posedge ...)
         body = block.body
+
+        # Initial blocks: extract blocking assignments as initial values.
+        # These become attributes on the target nets for downstream FF
+        # reset value inference. Synthesis treats initial values as
+        # power-on reset state (ECP5 REGSET parameter).
+        if "Initial" in proc_kind:
+            self._lower_initial_block(body)
+            return
 
         if "AlwaysComb" in proc_kind or "AlwaysLatch" in proc_kind:
             # Combinational or latch — lower statements as wiring.
@@ -717,6 +724,29 @@ class _Lowerer:
                 # so hierarchy port wiring can find it when connecting
                 # sub-instance outputs to parent nets.
                 lhs_net.driver = ff
+
+    def _lower_initial_block(self, stmt: Any) -> None:
+        """Extract blocking assignments from an initial block as net attributes.
+
+        Records the initial value on each target net so the FF mapper
+        can set the ECP5 REGSET parameter (power-on reset state).
+        """
+        kind = str(stmt.kind)
+        if kind == "StatementKind.ExpressionStatement":
+            expr = stmt.expr
+            if str(expr.kind) == "ExpressionKind.Assignment" and not expr.isNonBlocking:
+                lhs = self.lower_expr(expr.left)
+                rhs = self.lower_expr(expr.right)
+                # If RHS is a constant, record as initial value attribute
+                if rhs.driver and rhs.driver.op == PrimOp.CONST:
+                    val = int(rhs.driver.params.get("value", 0))
+                    lhs.attributes["init_value"] = str(val)
+        elif kind == "StatementKind.Block":
+            if stmt.body is not None:
+                self._lower_initial_block(stmt.body)
+        elif kind == "StatementKind.List":
+            for child in stmt.list:
+                self._lower_initial_block(child)
 
     def _detect_latch_inference(self, stmt: Any) -> list[str]:
         """Detect incomplete if/case in combinational blocks that would infer latches.

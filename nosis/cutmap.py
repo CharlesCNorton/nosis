@@ -103,7 +103,7 @@ def cut_map_luts(mod: Module) -> int:
             continue
 
         # Try to find a 4-input cut for this cell
-        cone_inputs = _collect_cone_inputs(mod, cell, max_depth=3)
+        cone_inputs = _collect_cone_inputs(mod, cell, max_depth=5)
         if cone_inputs is None or len(cone_inputs) > 4:
             continue
         if len(cone_inputs) == 0:
@@ -117,7 +117,7 @@ def cut_map_luts(mod: Module) -> int:
                 return
             cone_cells.add(c.name)
             for net in c.inputs.values():
-                if net.driver and net.driver.op in _LUT_OPS and depth < 3:
+                if net.driver and net.driver.op in _LUT_OPS and depth < 5:
                     if net.name not in cone_inputs:
                         _collect(net.driver, depth + 1)
 

@@ -130,6 +130,11 @@ def _extract_ports_from_ir(design: Any) -> list[PortInfo]:
         direction = "input"
         for cell in mod.cells.values():
             if cell.op == PrimOp.OUTPUT:
+                cell_port = cell.params.get("port_name", "")
+                if cell_port == port_name:
+                    direction = "output"
+                    break
+                # Fallback: check if any input net matches the port name
                 for inp_net in cell.inputs.values():
                     if inp_net.name == port_name:
                         direction = "output"

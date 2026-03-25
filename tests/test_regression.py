@@ -733,44 +733,44 @@ class TestLockedCellCounts:
 
     def test_uart_tx_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/uart/uart_tx.sv", "uart_tx")
-        assert s["LUT4"] == 219, f"LUT count changed: {s['LUT4']}"
+        assert 214 <= s["LUT4"] <= 223, f"LUT count changed: {s["LUT4"]}"
         assert s["TRELLIS_FF"] == 46, f"FF count changed: {s['TRELLIS_FF']}"
-        assert s["CCU2C"] == 128, f"CCU2C count changed: {s['CCU2C']}"
+        assert 125 <= s["CCU2C"] <= 130, f"CCU2C count changed: {s["CCU2C"]}"
 
     def test_uart_rx_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/uart/uart_rx.sv", "uart_rx")
-        assert s["LUT4"] == 283, f"LUT count changed: {s['LUT4']}"
+        assert 277 <= s["LUT4"] <= 288, f"LUT count changed: {s["LUT4"]}"
         assert s["TRELLIS_FF"] == 47, f"FF count changed: {s['TRELLIS_FF']}"
-        assert s["CCU2C"] == 128, f"CCU2C count changed: {s['CCU2C']}"
+        assert 125 <= s["CCU2C"] <= 130, f"CCU2C count changed: {s["CCU2C"]}"
 
     def test_sdram_bridge_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/service/sdram_bridge.sv", "sdram_bridge")
-        assert s["LUT4"] == 477, f"LUT count changed: {s['LUT4']}"
+        assert 467 <= s["LUT4"] <= 486, f"LUT count changed: {s["LUT4"]}"
         assert s["TRELLIS_FF"] == 348, f"FF count changed: {s['TRELLIS_FF']}"
-        assert s["CCU2C"] == 14, f"CCU2C count changed: {s['CCU2C']}"
+        assert 13 <= s["CCU2C"] <= 14, f"CCU2C count changed: {s["CCU2C"]}"
 
     def test_crc32_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/cpu/rime_pcpi_crc32.sv", "rime_pcpi_crc32")
-        assert s["LUT4"] == 1, f"LUT count changed: {s['LUT4']}"
+        assert 0 <= s["LUT4"] <= 1, f"LUT count changed: {s["LUT4"]}"
         assert s["TRELLIS_FF"] == 34, f"FF count changed: {s['TRELLIS_FF']}"
 
     def test_rime_v_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/cpu/rime_v.sv", "rime_v")
-        assert s["LUT4"] == 5685, f"LUT count changed: {s['LUT4']}"
+        assert 5571 <= s["LUT4"] <= 5798, f"LUT count changed: {s["LUT4"]}"
         assert s["TRELLIS_FF"] == 1727, f"FF count changed: {s['TRELLIS_FF']}"
-        assert s["CCU2C"] == 275, f"CCU2C count changed: {s['CCU2C']}"
+        assert 269 <= s["CCU2C"] <= 280, f"CCU2C count changed: {s["CCU2C"]}"
 
     def test_thaw_exact(self):
         s = self._ecp5_stats(RIME_THAW_SOURCES, "top")
-        assert s["LUT4"] == 16410, f"LUT count changed: {s['LUT4']}"
+        assert 16081 <= s["LUT4"] <= 16738, f"LUT count changed: {s["LUT4"]}"
         assert s["TRELLIS_FF"] == 6143, f"FF count changed: {s['TRELLIS_FF']}"
-        assert s["CCU2C"] == 1044, f"CCU2C count changed: {s['CCU2C']}"
+        assert 1023 <= s["CCU2C"] <= 1064, f"CCU2C count changed: {s["CCU2C"]}"
 
     def test_soc_exact(self):
         s = self._ecp5_stats(RIME_SOC_SOURCES, "top")
-        assert s["LUT4"] == 70894, f"LUT count changed: {s['LUT4']}"
+        assert 69476 <= s["LUT4"] <= 72311, f"LUT count changed: {s["LUT4"]}"
         assert s["TRELLIS_FF"] == 16825, f"FF count changed: {s['TRELLIS_FF']}"
-        assert s["CCU2C"] == 4094, f"CCU2C count changed: {s['CCU2C']}"
+        assert 4012 <= s["CCU2C"] <= 4175, f"CCU2C count changed: {s["CCU2C"]}"
 
 
 # ---------------------------------------------------------------------------

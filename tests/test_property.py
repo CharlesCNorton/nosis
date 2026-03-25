@@ -265,3 +265,57 @@ def test_cse_eliminates_all_duplicates(n_duplicates):
     assert eliminated == n_duplicates - 1
     and_cells = [c for c in mod.cells.values() if c.op == PrimOp.AND]
     assert len(and_cells) == 1
+
+
+# ---------------------------------------------------------------------------
+# Barrel shifter correctness
+# ---------------------------------------------------------------------------
+
+@given(
+    value=st.integers(min_value=0, max_value=0xFFFF),
+    shift_amount=st.integers(min_value=0, max_value=15),
+    width=st.sampled_from([8, 16]),
+)
+@settings(max_examples=500)
+def test_shift_right_matches_python(value, shift_amount, width):
+    """The IR SHR evaluation must match Python's >> for all inputs."""
+    mask = (1 << width) - 1
+    a = value & mask
+    b = shift_amount & 0xF
+    result = eval_const_op(PrimOp.SHR, {"A": a, "B": b}, {}, width)
+    expected = (a >> b) & mask
+    assert result == expected
+
+
+@given(
+    value=st.integers(min_value=0, max_value=0xFFFF),
+    shift_amount=st.integers(min_value=0, max_value=15),
+    width=st.sampled_from([8, 16]),
+)
+@settings(max_examples=500)
+def test_shift_left_matches_python(value, shift_amount, width):
+    """The IR SHL evaluation must match Python's << for all inputs."""
+    mask = (1 << width) - 1
+    a = value & mask
+    b = shift_amount & 0xF
+    result = eval_const_op(PrimOp.SHL, {"A": a, "B": b}, {}, width)
+    expected = (a << b) & mask
+    assert result == expected
+
+
+@given(
+    value=st.integers(min_value=0, max_value=0xFF),
+    shift_amount=st.integers(min_value=0, max_value=7),
+)
+@settings(max_examples=500)
+def test_sshr_sign_extends(value, shift_amount):
+    """SSHR must sign-extend the MSB during shift."""
+    width = 8
+    mask = (1 << width) - 1
+    a = value & mask
+    b = shift_amount & 0x7
+    result = eval_const_op(PrimOp.SSHR, {"A": a, "B": b}, {}, width)
+    # Python arithmetic shift on signed value
+    signed_a = a if a < 128 else a - 256
+    expected = (signed_a >> b) & mask
+    assert result == expected

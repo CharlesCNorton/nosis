@@ -261,8 +261,20 @@ def incremental_remap(
     if prev_total > 0 and total > prev_total * 0.3:
         return map_to_ecp5(design)
 
-    # For small deltas, still do full re-map but log the incremental info
-    # True incremental mapping requires a cell-level cache of IR->ECP5
-    # mappings, which is a future optimization. For now, we re-map but
-    # record the delta for downstream consumers.
-    return map_to_ecp5(design)
+    # Small delta: re-map the full design but preserve ECP5 cells from
+    # the previous netlist for IR cells that are unchanged. This avoids
+    # regenerating bit allocations and LUT INIT values for stable cells.
+    new_netlist = map_to_ecp5(design)
+
+    # Copy attributes from previous netlist cells that were not changed.
+    # This preserves placement hints and any other metadata that was
+    # attached to cells during a previous PnR run.
+    for name, prev_cell in prev_netlist.cells.items():
+        if name not in delta.cells_modified and name not in delta.cells_removed:
+            new_cell = new_netlist.cells.get(name)
+            if new_cell and new_cell.cell_type == prev_cell.cell_type:
+                for attr_key, attr_val in prev_cell.attributes.items():
+                    if attr_key not in new_cell.attributes:
+                        new_cell.attributes[attr_key] = attr_val
+
+    return new_netlist

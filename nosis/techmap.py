@@ -764,10 +764,12 @@ class _ECP5Mapper:
         default_bits = self._get_bits(a_net)
         s_bits = self._get_bits(s_net)
 
-        # For each output bit, build a balanced MUX tree (log2 depth)
+        # For each output bit, build a priority MUX chain.
+        # Case statements produce mutually exclusive selects, so a simple
+        # priority chain (last-match-wins cascaded MUX) is correct and
+        # uses one LUT per case instead of two (MUX + OR-reduce).
         for bit_idx in range(width):
-            # Collect all (select_bit, data_bit) pairs for this output bit
-            candidates: list[tuple] = []  # (sel_bit, data_bit)
+            candidates: list[tuple] = []
             for sel_idx in range(count):
                 case_net = cell.inputs.get(f"I{sel_idx}")
                 if case_net is None:
@@ -785,39 +787,21 @@ class _ECP5Mapper:
                     out_ecp5.bits[bit_idx] = default_bit
                 continue
 
-            # Build balanced tree: pair up adjacent MUXes, reduce
-            # Start with leaf-level MUXes (each selects between default and one case)
-            level = []
+            # Priority chain: start from default, each case overrides if selected
+            current = default_bit
             for sel_bit, case_bit in candidates:
                 mux_out = self.nl.alloc_bit()
                 lut = self.nl.add_cell(self._fresh_name("pmux"), "LUT4")
                 if cell.src:
                     lut.attributes["src"] = cell.src
+                # MUX: sel=A, false=B (current), true=C (case_bit)
                 lut.parameters["INIT"] = "1100101011001010"
                 lut.ports["A"] = [sel_bit]
-                lut.ports["B"] = [default_bit]
+                lut.ports["B"] = [current]
                 lut.ports["C"] = [case_bit]
                 lut.ports["D"] = ["0"]
                 lut.ports["Z"] = [mux_out]
-                level.append(mux_out)
-
-            # Reduce tree: merge pairs with OR-select until one remains
-            while len(level) > 1:
-                next_level = []
-                for j in range(0, len(level), 2):
-                    if j + 1 < len(level):
-                        merged = self.nl.alloc_bit()
-                        lut = self.nl.add_cell(self._fresh_name("pmux_or"), "LUT4")
-                        lut.parameters["INIT"] = "1110111011101110"
-                        lut.ports["A"] = [level[j]]
-                        lut.ports["B"] = [level[j + 1]]
-                        lut.ports["C"] = ["0"]
-                        lut.ports["D"] = ["0"]
-                        lut.ports["Z"] = [merged]
-                        next_level.append(merged)
-                    else:
-                        next_level.append(level[j])
-                level = next_level
+                current = mux_out
 
             if bit_idx < len(out_bits):
                 out_ecp5 = self._get_net(out_net)

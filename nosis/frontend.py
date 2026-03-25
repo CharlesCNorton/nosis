@@ -1232,9 +1232,14 @@ class _Lowerer:
 
             elif kind in ("SymbolKind.GenerateBlock", "SymbolKind.GenerateBlockArray"):
                 # generate-for/generate-if — slang fully unrolls generate blocks.
-                # Walk all members including nested generates, instances, and nets.
+                # Each member may have an array index (e.g., genblk1[0]).
+                # Walk all members. For GenerateBlockArray, slang gives each
+                # iteration a unique name that prevents net collisions.
                 if hasattr(node, "members"):
                     for member in node.members:
+                        walk_member(member)
+                elif hasattr(node, "body") and hasattr(node.body, "members"):
+                    for member in node.body.members:
                         walk_member(member)
 
             elif kind == "SymbolKind.TypeAlias":
@@ -1398,13 +1403,27 @@ class _Lowerer:
             # Wire based on port direction:
             # Input port: parent drives sub-instance net
             # Output port: sub-instance drives parent net
-            if "In" in direction and "Out" not in direction:
-                # Parent -> sub: sub_net should be driven by parent_net
-                # If sub_net has no driver, point it at the parent driver
+            # InOut port: both directions
+            is_input = "In" in direction
+            is_output = "Out" in direction
+
+            if is_input and not is_output:
                 if sub_net.driver is None and parent_net.driver is not None:
                     sub_net.driver = parent_net.driver
-            elif "Out" in direction:
-                # Sub -> parent: parent_net should be driven by sub_net's driver
+                # Also redirect cells that read sub_net to read parent_net
+                # (handles expression-based port connections like {x, y})
+                if parent_net is not sub_net and parent_net.driver is not None:
+                    for cell in self.mod.cells.values():
+                        for pn, pnet in list(cell.inputs.items()):
+                            if pnet is sub_net:
+                                cell.inputs[pn] = parent_net
+            elif is_output and not is_input:
+                if parent_net.driver is None and sub_net.driver is not None:
+                    parent_net.driver = sub_net.driver
+            elif is_input and is_output:
+                # InOut: wire both directions
+                if sub_net.driver is None and parent_net.driver is not None:
+                    sub_net.driver = parent_net.driver
                 if parent_net.driver is None and sub_net.driver is not None:
                     parent_net.driver = sub_net.driver
 

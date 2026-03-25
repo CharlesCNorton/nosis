@@ -39,12 +39,13 @@ module TRELLIS_FF_SIM #(
     parameter CLKMUX = "CLK",
     parameter LSRMUX = "LSR",
     parameter REGSET = "RESET",
-    parameter SRMODE = "LSR_OVER_CE"
+    parameter SRMODE = "LSR_OVER_CE",
+    parameter INIT = 0
 ) (
     input CLK, DI, LSR, CE,
     output reg Q
 );
-    initial Q = 0;
+    initial Q = INIT;
     always @(posedge CLK) begin
         if (LSR && LSRMUX == "LSR")
             Q <= (REGSET == "SET") ? 1'b1 : 1'b0;
@@ -212,7 +213,8 @@ def generate_postsynth_verilog(netlist: ECP5Netlist) -> str:
             lsr = _bit_ref(cell.ports.get("LSR", ["0"]))
             ce = _bit_ref(cell.ports.get("CE", ["1"]))
             q = _bit_ref(cell.ports.get("Q", ["0"]))
-            lines.append(f"  TRELLIS_FF_SIM {safe_name} (")
+            init_val = cell.attributes.get("init_value", "0")
+            lines.append(f"  TRELLIS_FF_SIM #(.INIT({init_val})) {safe_name} (")
             lines.append(f"    .CLK({clk}), .DI({di}), .LSR({lsr}), .CE({ce}), .Q({q}));")
         elif cell.cell_type == "CCU2C":
             init0 = cell.parameters.get("INIT0", "0000000000000000")

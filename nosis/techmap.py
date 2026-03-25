@@ -857,11 +857,15 @@ class _ECP5Mapper:
             # INIT values: use readmem data if available, else all zeros
             init_file = cell.params.get("init_file")
             if init_file:
-                from nosis.readmem import parse_readmemh, readmem_to_dp16kd_initvals
+                from nosis.readmem import parse_readmemh, parse_readmemb, readmem_to_dp16kd_initvals
                 from pathlib import Path
                 init_path = Path(init_file)
                 if init_path.exists():
-                    mem_data = parse_readmemh(init_path)
+                    init_format = cell.params.get("init_format", "hex")
+                    if init_format == "bin":
+                        mem_data = parse_readmemb(init_path)
+                    else:
+                        mem_data = parse_readmemh(init_path)
                     initvals = readmem_to_dp16kd_initvals(
                         mem_data, data_width=data_width, depth=depth
                     )

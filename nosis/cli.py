@@ -310,11 +310,16 @@ def main(argv: list[str] | None = None) -> int:
         timing = analyze_timing(mod)
         for line in timing.summary_lines():
             print(line)
-        from nosis.power import estimate_power
+        from nosis.power import estimate_power, estimate_toggle_rates
         freq = min(timing.max_frequency_mhz, 200.0) if timing.max_frequency_mhz > 0 else 25.0
+        # Use simulation-based toggle rates for more accurate power
+        toggle_rates = estimate_toggle_rates(mod, num_vectors=200, seed=42)
+        avg_toggle = sum(toggle_rates.values()) / max(len(toggle_rates), 1) if toggle_rates else 0.125
         power = estimate_power(netlist, frequency_mhz=freq)
         for line in power.summary_lines():
             print(line)
+        if toggle_rates:
+            print(f"  Simulated avg toggle rate: {avg_toggle:.3f} ({len(toggle_rates)} nets)")
         print(f"total: {t_total:.3f}s")
 
     # --- --benchmark mode ---

@@ -49,11 +49,17 @@ class PnRResult:
     raw_log: str = ""
 
 
+# Primary patterns (nextpnr 0.6/0.7 format)
 _FREQ_RE = re.compile(r"Max frequency for clock '([^']+)':\s+([\d.]+)\s+MHz")
 _ARC_RE = re.compile(r"Info:\s+(clk-to-q|routing|logic|setup)\s+([\d.]+)\s+([\d.]+)\s+(Source|Net|Sink)\s+(\S+)")
 _LUT_RE = re.compile(r"Total LUT4s:\s+(\d+)")
 _FF_RE = re.compile(r"Total DFFs:\s+(\d+)")
 _NET_RE = re.compile(r"Net\s+(\S+)\s+\(")
+
+# Fallback patterns for format variations across nextpnr versions
+_FREQ_RE2 = re.compile(r"Fmax.*?:\s+([\d.]+)\s+MHz.*?clock\s+'([^']+)'")
+_LUT_RE2 = re.compile(r"(?:LUT|LUT4|TRELLIS_SLICE).*?(\d+)\s*/\s*\d+")
+_FF_RE2 = re.compile(r"(?:DFF|FF|TRELLIS_FF).*?(\d+)\s*/\s*\d+")
 
 
 def parse_nextpnr_log(log: str) -> PnRResult:
@@ -98,6 +104,29 @@ def parse_nextpnr_log(log: str) -> PnRResult:
                 cumulative_ns=float(m.group(3)),
                 source=m.group(5),
             ))
+
+    # Fallback: try alternate frequency pattern
+    if result.max_freq_mhz == 0.0:
+        for line in log.splitlines():
+            m = _FREQ_RE2.search(line)
+            if m:
+                result.max_freq_mhz = float(m.group(1))
+                result.clock_name = m.group(2)
+                break
+
+    # Fallback: try alternate LUT/FF patterns
+    if result.total_luts == 0:
+        for line in log.splitlines():
+            m = _LUT_RE2.search(line)
+            if m:
+                result.total_luts = int(m.group(1))
+                break
+    if result.total_ffs == 0:
+        for line in log.splitlines():
+            m = _FF_RE2.search(line)
+            if m:
+                result.total_ffs = int(m.group(1))
+                break
 
     if result.errors:
         result.success = False

@@ -105,3 +105,32 @@ def test_readmemh_real_firmware():
     assert len(data) > 0
     # First word should be @0 address
     assert 0 in data
+
+
+def test_readmem_to_dp16kd_roundtrip():
+    """Parse a hex file and convert to DP16KD INITVAL parameters."""
+    from nosis.readmem import parse_readmemh, readmem_to_dp16kd_initvals
+    import tempfile
+    from pathlib import Path
+
+    # Create a small hex file
+    with tempfile.NamedTemporaryFile(suffix=".hex", mode="w", delete=False, encoding="utf-8") as f:
+        f.write("@0\n")
+        f.write("DEADBEEF\n")
+        f.write("CAFEBABE\n")
+        f.write("12345678\n")
+        hex_path = f.name
+
+    try:
+        mem_data = parse_readmemh(hex_path)
+        assert 0 in mem_data
+        assert mem_data[0] == 0xDEADBEEF
+        assert mem_data[1] == 0xCAFEBABE
+        assert mem_data[2] == 0x12345678
+
+        initvals = readmem_to_dp16kd_initvals(mem_data, data_width=18, depth=1024)
+        assert "INITVAL_00" in initvals
+        # First row should contain the data
+        assert initvals["INITVAL_00"] != "0x" + "0" * 80
+    finally:
+        Path(hex_path).unlink()

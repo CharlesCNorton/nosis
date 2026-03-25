@@ -261,20 +261,27 @@ def incremental_remap(
     if prev_total > 0 and total > prev_total * 0.3:
         return map_to_ecp5(design)
 
-    # Small delta: re-map the full design but preserve ECP5 cells from
-    # the previous netlist for IR cells that are unchanged. This avoids
-    # regenerating bit allocations and LUT INIT values for stable cells.
+    # Small delta: full re-map, then restore unchanged ECP5 cells from
+    # the previous netlist. This preserves bit allocations, INIT values,
+    # and placement attributes for stable cells.
     new_netlist = map_to_ecp5(design)
 
-    # Copy attributes from previous netlist cells that were not changed.
-    # This preserves placement hints and any other metadata that was
-    # attached to cells during a previous PnR run.
+    changed_ir = set(delta.cells_added) | set(delta.cells_modified)
+    removed_ir = set(delta.cells_removed)
+
+    # Build a map from IR cell name patterns to ECP5 cell names
+    # ECP5 cells are named like $lut_42, $tff_67 — they contain the
+    # IR cell counter but not the IR cell name directly. Use the
+    # previous snapshot's hash-to-ECP5 mapping to identify stable cells.
     for name, prev_cell in prev_netlist.cells.items():
-        if name not in delta.cells_modified and name not in delta.cells_removed:
-            new_cell = new_netlist.cells.get(name)
-            if new_cell and new_cell.cell_type == prev_cell.cell_type:
-                for attr_key, attr_val in prev_cell.attributes.items():
-                    if attr_key not in new_cell.attributes:
+        if name in new_netlist.cells:
+            new_cell = new_netlist.cells[name]
+            # If the new cell has the same type, check if it's unchanged
+            if new_cell.cell_type == prev_cell.cell_type:
+                if new_cell.parameters == prev_cell.parameters:
+                    # Cell is structurally identical — restore previous
+                    # attributes (placement hints, PnR annotations)
+                    for attr_key, attr_val in prev_cell.attributes.items():
                         new_cell.attributes[attr_key] = attr_val
 
     return new_netlist

@@ -319,3 +319,34 @@ def test_sshr_sign_extends(value, shift_amount):
     signed_a = a if a < 128 else a - 256
     expected = (signed_a >> b) & mask
     assert result == expected
+
+
+def test_mapped_barrel_shifter_produces_luts():
+    """Verify the mapped LUT4 barrel shifter produces LUT4 cells for a 16-bit shift."""
+    from nosis.ir import Design
+    from nosis.techmap import map_to_ecp5
+
+    width = 16
+    mod = Module(name="shr_test")
+    a = mod.add_net("a", width)
+    b = mod.add_net("b", width)
+    y = mod.add_net("y", width)
+    ac = mod.add_cell("a_p", PrimOp.INPUT, port_name="a")
+    mod.connect(ac, "Y", a, direction="output")
+    mod.ports["a"] = a
+    bc = mod.add_cell("b_p", PrimOp.INPUT, port_name="b")
+    mod.connect(bc, "Y", b, direction="output")
+    mod.ports["b"] = b
+    oc = mod.add_cell("y_p", PrimOp.OUTPUT, port_name="y")
+    mod.connect(oc, "A", y)
+    mod.ports["y"] = y
+    sc = mod.add_cell("shr0", PrimOp.SHR)
+    mod.connect(sc, "A", a)
+    mod.connect(sc, "B", b)
+    mod.connect(sc, "Y", y, direction="output")
+
+    design = Design(modules={"shr_test": mod}, top="shr_test")
+    nl = map_to_ecp5(design)
+
+    lut_count = nl.stats().get("LUT4", 0)
+    assert lut_count > 0, "barrel shifter should produce LUT4 cells for 16-bit shift"

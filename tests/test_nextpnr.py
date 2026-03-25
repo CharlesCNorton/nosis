@@ -130,3 +130,34 @@ def test_json_all_cell_connections_valid():
                 assert isinstance(bit, int) or (isinstance(bit, str) and bit in ("0", "1", "x")), (
                     f"cell {cell_name} port {port} has invalid bit: {bit!r}"
                 )
+
+
+def test_run_nextpnr_missing_binary():
+    """run_nextpnr should return a failed PnRResult when nextpnr is not found."""
+    from nosis.pnr_feedback import run_nextpnr
+    result = run_nextpnr("nonexistent.json", nextpnr_cmd="/nonexistent/nextpnr-ecp5")
+    assert result.success is False
+    assert len(result.errors) > 0
+
+
+def test_run_nextpnr_integration():
+    """If nextpnr is available, run the full pipeline through run_nextpnr."""
+    from nosis.pnr_feedback import run_nextpnr
+
+    nextpnr = _find_nextpnr()
+    if not nextpnr:
+        return
+
+    result = parse_files([RIME_UART_TX], top="uart_tx")
+    design = lower_to_ir(result, top="uart_tx")
+    nl = map_to_ecp5(design)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        json_path = Path(tmp) / "test.json"
+        emit_json(nl, json_path)
+
+        pnr = run_nextpnr(json_path, nextpnr_cmd=nextpnr)
+        assert pnr.raw_log != ""
+        # Should at least parse without crashing
+        if pnr.success:
+            assert pnr.max_freq_mhz > 0

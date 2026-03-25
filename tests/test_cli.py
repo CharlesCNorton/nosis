@@ -98,3 +98,24 @@ def test_cli_ecppack_without_tools():
     finally:
         Path(out_path).unlink(missing_ok=True)
         Path(bit_path).unlink(missing_ok=True)
+
+
+def test_cli_entry_point_version():
+    """The nosis CLI entry point should work via python -m."""
+    import subprocess
+    r = subprocess.run(
+        ["python", "-m", "nosis.cli", "--version"],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert r.returncode == 0
+    assert "0.1.0" in r.stdout or "0.1.0" in r.stderr
+
+
+def test_cli_entry_point_check():
+    """The nosis CLI should parse a file via python -m."""
+    import subprocess
+    r = subprocess.run(
+        ["python", "-m", "nosis.cli", "--check", "--top", "uart_tx", RIME_UART_TX],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert r.returncode == 0

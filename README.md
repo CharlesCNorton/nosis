@@ -248,7 +248,7 @@ All 30+ vendor primitives have stub declarations in `ecp5_prims.sv` for slang el
 |--------|------|
 | `nosis/ir.py` | IR: `Design`, `Module`, `Cell`, `Net`, 30 `PrimOp` variants, Verilog emission |
 | `nosis/frontend.py` | pyslang frontend: parse, elaborate, lower to IR, hierarchy flattening |
-| `nosis/passes.py` | 12 optimization passes + pipeline orchestration |
+| `nosis/passes.py` | 13 iterative passes + pipeline orchestration |
 | `nosis/boolopt.py` | Boolean algebra: AND/OR distribution, complement, idempotent |
 | `nosis/cse.py` | Hash-based common subexpression elimination |
 | `nosis/cutmap.py` | Cut-based LUT4 remapping with composed truth tables |

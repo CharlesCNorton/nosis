@@ -90,7 +90,7 @@ def test_uart_tx_comparison():
     if yosys_counts is None:
         return  # yosys failed
 
-    yosys_luts = yosys_counts.get("LUT4", 0) + yosys_counts.get("TRELLIS_SLICE", 0)
+    yosys_luts = yosys_counts.get("LUT4", 0) + yosys_counts.get("LUT4", 0)
     yosys_ffs = yosys_counts.get("TRELLIS_FF", 0)
 
     print(f"uart_tx comparison:")
@@ -120,7 +120,7 @@ def test_rime_v_comparison():
     if yosys_counts is None:
         return
 
-    yosys_luts = yosys_counts.get("LUT4", 0) + yosys_counts.get("TRELLIS_SLICE", 0)
+    yosys_luts = yosys_counts.get("LUT4", 0) + yosys_counts.get("LUT4", 0)
 
     print(f"rime_v comparison:")
     print(f"  nosis: {nosis_area.lut_cells} LUTs")

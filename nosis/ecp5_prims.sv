@@ -257,3 +257,37 @@ module CCU2C #(
     output wire S0, S1, COUT
 );
 endmodule
+
+module PCSCLKDIV (
+    input  wire CLKI,
+    input  wire RST,
+    input  wire SEL2, SEL1, SEL0,
+    output wire CDIV1, CDIVX
+);
+endmodule
+
+module DCSC (
+    input  wire CLK0, CLK1,
+    input  wire SEL0, SEL1,
+    input  wire MODESEL,
+    output wire DCSOUT
+);
+endmodule
+
+module DQSCE (
+    input  wire CLK, DQSW, CE,
+    output wire DQSW270
+);
+endmodule
+
+module ECLKSYNCB (
+    input  wire ECLKI, STOP,
+    output wire ECLKO
+);
+endmodule
+
+module ECLKBRIDGECS (
+    input  wire CLK0, CLK1, SEL,
+    output wire ECSOUT
+);
+endmodule

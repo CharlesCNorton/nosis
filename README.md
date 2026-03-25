@@ -15,7 +15,7 @@ On a 13-file PicoRV32 SoC (PicoRV32 + UART + SPI flash + SD + SDRAM + CRC32), no
            |
      [2. IR Lowering]      behavioral HDL to technology-independent netlist
            |
-     [3. Optimization]     12 passes in 6 iterative rounds + post-optimization
+     [3. Optimization]     13 passes in 6 iterative rounds + post-optimization
            |
      [4. Inference]        FSM, BRAM, DSP, carry chain annotation
            |
@@ -51,13 +51,13 @@ Unoptimized (lowering + tech mapping only, no passes):
 
 | Design | LUT slices | FFs | CCU2C |
 |--------|-----------|-----|-------|
-| uart_tx | 117 | 46 | 128 |
-| uart_rx | 149 | 47 | 128 |
-| rime_v (RV32IMC CPU) | 2,659 | 1,727 | 275 |
-| Thaw (flash service image) | 8,521 | 6,143 | 1,044 |
-| PicoRV32 SoC | 30,562 | 16,825 | 4,094 |
+| uart_tx | 343 | 46 | 128 |
+| uart_rx | 344 | 47 | 128 |
+| rime_v (RV32IMC CPU) | 6,097 | 1,727 | 275 |
+| Thaw (flash service image) | 17,690 | 6,143 | 1,044 |
+| PicoRV32 SoC | 74,484 | 16,825 | 4,094 |
 
-These locked counts serve as regression baselines. Any pipeline change that alters them fails CI.
+These locked counts serve as regression baselines. Any pipeline change that alters them fails CI. Counts increased from earlier versions because comparison operations (LT, LE, GT, GE) are now correctly mapped to multi-LUT comparator chains instead of the previous incorrect constant-0 mapping.
 
 ## Synthesis Pipeline
 
@@ -108,7 +108,7 @@ The lowering handles:
 
 ### Stage 3: Optimization (`nosis/passes.py` and supporting modules)
 
-Twelve optimization passes run in up to six iterative rounds, followed by four post-optimization stages. The pipeline runs to fixed point: iteration stops when no round reduces the cell count.
+Thirteen optimization passes run in up to six iterative rounds, followed by four post-optimization stages. The pipeline runs to fixed point: iteration stops when no round reduces the cell count.
 
 **Iterative passes (per round):**
 
@@ -140,7 +140,7 @@ Twelve optimization passes run in up to six iterative rounds, followed by four p
 
 13. **Backward don't-care propagation** (`dontcare.py`): Identifies FFs whose outputs are always AND-masked, meaning their value outside the mask's active window is irrelevant. Derived from the duality principle of stable categories.
 
-14. **Reachable-state equivalence merging** (`reqmerge.py`): Simulates the design for 200 clock cycles with random inputs, tracking per-net value signatures. Nets that carry identical values across all reachable states are merged. Safety guards exclude nets in the output-reachable cone and nets feeding FF D inputs (sequential feedback). Derived from quotient types in HoTT.
+14. **Reachable-state equivalence merging** (`reqmerge.py`): Simulates the design for 500+ clock cycles (adaptive based on FF chain depth) with random inputs via pre-compiled `FastSimulator`, tracking per-net value signatures. Nets that carry identical values across all reachable states are merged. Safety guards exclude nets in the output-reachable cone and nets feeding FF D inputs (sequential feedback). Derived from quotient types in HoTT.
 
 15. **SAT-based constant proof** (`satconst.py`): For nets observed as constant during simulation, constructs the combinational logic cone and exhaustively evaluates all input combinations (up to 16 cone inputs). If the net's value is invariant, it is provably constant and replaced with a CONST cell. Cones containing FF boundaries are excluded.
 
@@ -165,6 +165,7 @@ Converts the IR into ECP5-specific cells.
 - **Multiply:** Tagged MUL cells emit MULT18X18D or ALU54B (for MAC patterns).
 - **Memory:** Tagged MEMORY cells emit DP16KD (block RAM) or TRELLIS_DPR16X4 (distributed RAM) with full address/data/control wiring.
 - **PMUX:** Narrow cases (1-bit output, up to 4 cases) compute a single LUT4 truth table. Wider cases build balanced MUX trees with log2 depth.
+- **Comparison:** LT/GT map to bit-serial borrow/carry chains (1 LUT4 per bit, LSB to MSB). LE/GE add an equality chain and final OR. Signed comparisons invert the MSB comparison. Produces correct results for multi-bit unsigned and signed operands.
 - **Wiring:** CONCAT, SLICE, ZEXT, SEXT, REPEAT reassign bit indices without physical cells.
 - **Inout:** BB (bidirectional buffer) cells for inout ports.
 
@@ -242,7 +243,7 @@ All 30+ vendor primitives have stub declarations in `ecp5_prims.sv` for slang el
 
 ## Repository
 
-43 source modules, 47 test modules, 609 tests, 21,000 lines of Python.
+45 source modules, 49 test modules, 622 tests, 22,500 lines of Python.
 
 | Module | Role |
 |--------|------|
@@ -255,7 +256,8 @@ All 30+ vendor primitives have stub declarations in `ecp5_prims.sv` for slang el
 | `nosis/dontcare.py` | Backward don't-care propagation |
 | `nosis/reqmerge.py` | Reachable-state equivalence merging (HoTT quotient types) |
 | `nosis/satconst.py` | SAT-based constant proof via exhaustive cone evaluation |
-| `nosis/eval.py` | Single source of truth for PrimOp evaluation semantics |
+| `nosis/eval.py` | Single source of truth for PrimOp evaluation semantics (signed and unsigned) |
+| `nosis/sim.py` | Pre-compiled flat-array simulator for fast multi-cycle simulation |
 | `nosis/equiv.py` | Equivalence checking: exhaustive, SAT, random simulation |
 | `nosis/formal.py` | Bounded model checking and sequential equivalence |
 | `nosis/techmap.py` | ECP5 technology mapping with dual-LUT packing |
@@ -284,7 +286,8 @@ All 30+ vendor primitives have stub declarations in `ecp5_prims.sv` for slang el
 | `nosis/warnings.py` | Design warning detection |
 | `nosis/readmem.py` | `$readmemh`/`$readmemb` file parsing for BRAM initialization |
 | `nosis/retiming.py` | Register retiming (forward/backward) and high-fanout duplication |
-| `nosis/cli.py` | Command-line interface with `--stats`, `--benchmark`, `--ecppack` |
+| `nosis/pnr_feedback.py` | Parse nextpnr logs for timing closure, critical path extraction |
+| `nosis/cli.py` | Command-line interface with `--stats`, `--benchmark`, `--ecppack`, `--lpf` |
 | `nosis/ecp5_prims.sv` | ECP5 vendor primitive stubs for slang elaboration |
 
 ## Design Principles
@@ -293,7 +296,7 @@ All 30+ vendor primitives have stub declarations in `ecp5_prims.sv` for slang el
 
 2. **Respect the RTL.** Designer intent is preserved. State encodings, explicit structure, and named signals survive into the netlist unchanged.
 
-3. **Single evaluation semantics.** Every PrimOp has exactly one evaluation function in `eval.py`. Constant folding, equivalence checking, simulation, and truth table computation all use the same code path.
+3. **Single evaluation semantics.** Every PrimOp has exactly one evaluation function in `eval.py`. Constant folding, equivalence checking, simulation, and truth table computation all use the same code path. Signed operations (comparison, division, modulo) are handled via the `signed` parameter with correct two's complement conversion.
 
 4. **Provable where possible.** SAT-based constant proof, exhaustive truth table verification for small cones, formal BMC for assertions. Simulation-based methods are clearly labeled as probabilistic.
 
@@ -314,7 +317,7 @@ All 30+ vendor primitives have stub declarations in `ecp5_prims.sv` for slang el
 - PySAT (`pip install python-sat`) for SAT-based equivalence checking
 
 **Development:**
-- pytest, hypothesis, ruff
+- pytest, hypothesis, ruff, mypy
 
 ## Install
 
@@ -369,7 +372,7 @@ nosis input.sv --top top -o output.json --ecppack output.bit
 
 ## Development
 
-Full test suite (609 tests):
+Full test suite (622 tests):
 
 ```
 pytest tests/ -v

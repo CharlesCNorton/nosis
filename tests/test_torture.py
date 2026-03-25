@@ -261,7 +261,7 @@ class TestDegenerateIR:
 
         design = Design(modules={"deep_mux": mod}, top="deep_mux")
         nl = map_to_ecp5(design)
-        assert nl.stats()["TRELLIS_SLICE"] > 0
+        assert nl.stats()["LUT4"] > 0
 
     def test_single_bit_ff(self):
         """A single-bit FF should produce exactly one TRELLIS_FF."""

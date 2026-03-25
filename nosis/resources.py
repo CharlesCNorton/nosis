@@ -181,7 +181,7 @@ def calculate_area(netlist: ECP5Netlist) -> AreaCalculation:
     the actual cells in the netlist.
     """
     stats = netlist.stats()
-    lut_cells = stats.get("TRELLIS_SLICE", 0)
+    lut_cells = stats.get("LUT4", 0)
     ff_cells = stats.get("TRELLIS_FF", 0)
     ccu2c_cells = stats.get("CCU2C", 0)
     bram_cells = stats.get("DP16KD", 0)

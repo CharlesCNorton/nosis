@@ -54,7 +54,7 @@ class TestAreaCalculation:
         """100 LUTs, 0 FFs -> 50 slices, bound by LUT."""
         nl = ECP5Netlist(top="test")
         for i in range(100):
-            c = nl.add_cell(f"lut{i}", "TRELLIS_SLICE")
+            c = nl.add_cell(f"lut{i}", "LUT4")
         area = calculate_area(nl)
         assert area.lut_cells == 100
         assert area.ff_cells == 0
@@ -78,7 +78,7 @@ class TestAreaCalculation:
         """200 CCU2C cells need 200 slices (1 per slice), even with few LUTs."""
         nl = ECP5Netlist(top="test")
         for i in range(10):
-            nl.add_cell(f"lut{i}", "TRELLIS_SLICE")
+            nl.add_cell(f"lut{i}", "LUT4")
         for i in range(200):
             nl.add_cell(f"ccu{i}", "CCU2C")
         area = calculate_area(nl)
@@ -91,7 +91,7 @@ class TestAreaCalculation:
         """100 LUTs + 100 FFs -> 50 slices (both fit in same slices)."""
         nl = ECP5Netlist(top="test")
         for i in range(100):
-            nl.add_cell(f"lut{i}", "TRELLIS_SLICE")
+            nl.add_cell(f"lut{i}", "LUT4")
         for i in range(100):
             nl.add_cell(f"ff{i}", "TRELLIS_FF")
         area = calculate_area(nl)
@@ -103,7 +103,7 @@ class TestAreaCalculation:
         """100 LUTs + 10 FFs -> 50 slices, FF packing is 10%."""
         nl = ECP5Netlist(top="test")
         for i in range(100):
-            nl.add_cell(f"lut{i}", "TRELLIS_SLICE")
+            nl.add_cell(f"lut{i}", "LUT4")
         for i in range(10):
             nl.add_cell(f"ff{i}", "TRELLIS_FF")
         area = calculate_area(nl)
@@ -115,7 +115,7 @@ class TestAreaCalculation:
         """Odd LUT count rounds up slices."""
         nl = ECP5Netlist(top="test")
         for i in range(101):
-            nl.add_cell(f"lut{i}", "TRELLIS_SLICE")
+            nl.add_cell(f"lut{i}", "LUT4")
         area = calculate_area(nl)
         assert area.slices_for_luts == 51  # ceil(101/2)
 
@@ -147,7 +147,7 @@ class TestAreaCalculation:
         """Total tiles = slices + BRAM + DSP."""
         nl = ECP5Netlist(top="test")
         for i in range(100):
-            nl.add_cell(f"lut{i}", "TRELLIS_SLICE")
+            nl.add_cell(f"lut{i}", "LUT4")
         for i in range(5):
             nl.add_cell(f"bram{i}", "DP16KD")
         for i in range(3):
@@ -164,7 +164,7 @@ class TestAreaCalculation:
 
     def test_single_lut(self):
         nl = ECP5Netlist(top="test")
-        nl.add_cell("lut0", "TRELLIS_SLICE")
+        nl.add_cell("lut0", "LUT4")
         area = calculate_area(nl)
         assert area.slices_total == 1
         assert area.lut_packing == 50.0  # 1 LUT in 2 slots
@@ -271,7 +271,7 @@ class TestReportUtilization:
         """A design that exceeds device capacity should produce warnings."""
         nl = ECP5Netlist(top="test")
         for i in range(20000):
-            nl.add_cell(f"lut{i}", "TRELLIS_SLICE")
+            nl.add_cell(f"lut{i}", "LUT4")
         report = report_utilization(nl, "12k")
         assert len(report.warnings) > 0
         assert any("overutilized" in w for w in report.warnings)

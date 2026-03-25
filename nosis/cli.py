@@ -285,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
             "map_s": round(t_map - t_pack, 4),
             "total_s": round(t_total, 4),
             "cells": nl_stats.get("cells", 0),
-            "luts": nl_stats.get("TRELLIS_SLICE", 0),
+            "luts": nl_stats.get("LUT4", 0),
             "ffs": nl_stats.get("TRELLIS_FF", 0),
             "slices": area.slices_total,
             "max_freq_mhz": round(timing.max_frequency_mhz, 1),

@@ -38,7 +38,7 @@ def test_postsynth_with_cells():
     nl = ECP5Netlist(top="test")
     nl.ports["a"] = {"direction": "input", "bits": [2]}
     nl.ports["y"] = {"direction": "output", "bits": [3]}
-    c = nl.add_cell("lut0", "TRELLIS_SLICE")
+    c = nl.add_cell("lut0", "LUT4")
     c.parameters["LUT0_INITVAL"] = "0x8888"
     c.ports["A0"] = [2]
     c.ports["B0"] = [2]
@@ -116,7 +116,7 @@ def test_postsynth_verilog_has_all_cell_types():
     nl = map_to_ecp5(design)
     stats = nl.stats()
     v = generate_postsynth_verilog(nl)
-    if stats.get("TRELLIS_SLICE", 0) > 0:
+    if stats.get("LUT4", 0) > 0:
         assert "TRELLIS_SLICE_SIM" in v
     if stats.get("TRELLIS_FF", 0) > 0:
         assert "TRELLIS_FF_SIM" in v

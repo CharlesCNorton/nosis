@@ -40,7 +40,7 @@ __all__ = [
 
 # Power model: (static_uw, dynamic_uw_per_mhz)
 _CELL_POWER: dict[str, tuple[float, float]] = {
-    "TRELLIS_SLICE": (8.5, 12.0),
+    "LUT4": (8.5, 12.0),
     "TRELLIS_FF": (2.0, 3.5),
     "CCU2C": (9.0, 13.0),
     "DP16KD": (50.0, 85.0),

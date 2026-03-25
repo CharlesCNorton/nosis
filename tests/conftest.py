@@ -21,9 +21,16 @@ _DEFAULT_RIME = os.path.join(os.path.dirname(_NOSIS_DIR), "rime")
 RIME_ROOT = os.environ.get("NOSIS_RIME_ROOT", _DEFAULT_RIME)
 RIME_FW = os.path.join(RIME_ROOT, "firmware")
 
-# Standard RIME HDL source paths
-RIME_UART_TX = os.path.join(RIME_FW, "core/uart/uart_tx.sv")
-RIME_UART_RX = os.path.join(RIME_FW, "core/uart/uart_rx.sv")
+# Bundled test designs (always available, no RIME dependency)
+_BUNDLED = os.path.join(_NOSIS_DIR, "tests", "designs")
+BUNDLED_UART_TX = os.path.join(_BUNDLED, "uart_tx.sv")
+BUNDLED_UART_RX = os.path.join(_BUNDLED, "uart_rx.sv")
+
+# Standard RIME HDL source paths (may not exist in CI)
+_rime_uart_tx = os.path.join(RIME_FW, "core/uart/uart_tx.sv")
+_rime_uart_rx = os.path.join(RIME_FW, "core/uart/uart_rx.sv")
+RIME_UART_TX = _rime_uart_tx if os.path.isfile(_rime_uart_tx) else BUNDLED_UART_TX
+RIME_UART_RX = _rime_uart_rx if os.path.isfile(_rime_uart_rx) else BUNDLED_UART_RX
 RIME_SDRAM_BRIDGE = os.path.join(RIME_FW, "core/service/sdram_bridge.sv")
 RIME_SDRAM_CTRL = os.path.join(RIME_FW, "core/service/sdram_controller.sv")
 RIME_CRC32 = os.path.join(RIME_FW, "core/cpu/rime_pcpi_crc32.sv")

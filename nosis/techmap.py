@@ -305,11 +305,11 @@ class _ECP5Mapper:
             ff.ports["Q"] = [q_bits[i] if i < len(q_bits) else self.nl.alloc_bit()]
 
     def _map_lut(self, cell: Cell) -> None:
-        """Map a logic operation to TRELLIS_SLICE LUT4 cells.
+        """Map a logic operation to LUT4 cells (one per output bit).
 
-        For multi-bit operations, packs two adjacent bits into a single
-        TRELLIS_SLICE using both LUT0 and LUT1 slots. This halves the
-        slice count for bitwise operations compared to one-LUT-per-bit.
+        Each LUT4 has ports A, B, C, D (inputs) and Z (output) with a
+        16-bit INIT parameter as a binary string. This matches the cell
+        format that nextpnr-ecp5 expects from yosys.
         """
         out_nets = list(cell.outputs.values())
         if not out_nets:
@@ -322,55 +322,32 @@ class _ECP5Mapper:
         s_net = cell.inputs.get("S")
 
         init = _compute_lut4_init(cell.op, len(cell.inputs))
-        init_hex = f"0x{init:04X}"
+        init_bin = format(init, "016b")
 
         out_bits = self._get_bits(out_net)
 
-        def _lut_ports(bit_idx: int, slot: str) -> dict[str, list]:
-            """Build port connections for one LUT slot (0 or 1)."""
-            ports: dict[str, list] = {}
-            sfx = slot  # "0" or "1"
-            if cell.op == PrimOp.MUX:
-                ports[f"A{sfx}"] = [self._get_bit(s_net, min(bit_idx, s_net.width - 1)) if s_net else "0"]
-                ports[f"B{sfx}"] = [self._get_bit(a_net, bit_idx) if a_net else "0"]
-                ports[f"C{sfx}"] = [self._get_bit(b_net, bit_idx) if b_net else "0"]
-                ports[f"D{sfx}"] = ["0"]
-            elif cell.op == PrimOp.NOT:
-                ports[f"A{sfx}"] = [self._get_bit(a_net, bit_idx) if a_net else "0"]
-                ports[f"B{sfx}"] = ["0"]
-                ports[f"C{sfx}"] = ["0"]
-                ports[f"D{sfx}"] = ["0"]
-            else:
-                ports[f"A{sfx}"] = [self._get_bit(a_net, bit_idx) if a_net else "0"]
-                ports[f"B{sfx}"] = [self._get_bit(b_net, bit_idx) if b_net else "0"]
-                ports[f"C{sfx}"] = ["0"]
-                ports[f"D{sfx}"] = ["0"]
-            ports[f"F{sfx}"] = [out_bits[bit_idx] if bit_idx < len(out_bits) else self.nl.alloc_bit()]
-            return ports
-
-        i = 0
-        while i < width:
-            lut = self.nl.add_cell(self._fresh_name("lut"), "TRELLIS_SLICE")
+        for i in range(width):
+            lut = self.nl.add_cell(self._fresh_name("lut"), "LUT4")
             if cell.src:
                 lut.attributes["src"] = cell.src
-            lut.parameters["LUT0_INITVAL"] = init_hex
-            lut.parameters["REG0_SD"] = "0"
-            lut.parameters["SRMODE"] = "LSR_OVER_CE"
-            lut.parameters["GSR"] = "DISABLED"
-            lut.parameters["MODE"] = "LOGIC"
+            lut.parameters["INIT"] = init_bin
 
-            # LUT0 — bit i
-            for k, v in _lut_ports(i, "0").items():
-                lut.ports[k] = v
-
-            # LUT1 — bit i+1 (dual-pack if available)
-            if i + 1 < width:
-                lut.parameters["LUT1_INITVAL"] = init_hex
-                for k, v in _lut_ports(i + 1, "1").items():
-                    lut.ports[k] = v
-                i += 2
+            if cell.op == PrimOp.MUX:
+                lut.ports["A"] = [self._get_bit(s_net, min(i, s_net.width - 1)) if s_net else "0"]
+                lut.ports["B"] = [self._get_bit(a_net, i) if a_net else "0"]
+                lut.ports["C"] = [self._get_bit(b_net, i) if b_net else "0"]
+                lut.ports["D"] = ["0"]
+            elif cell.op == PrimOp.NOT:
+                lut.ports["A"] = [self._get_bit(a_net, i) if a_net else "0"]
+                lut.ports["B"] = ["0"]
+                lut.ports["C"] = ["0"]
+                lut.ports["D"] = ["0"]
             else:
-                i += 1
+                lut.ports["A"] = [self._get_bit(a_net, i) if a_net else "0"]
+                lut.ports["B"] = [self._get_bit(b_net, i) if b_net else "0"]
+                lut.ports["C"] = ["0"]
+                lut.ports["D"] = ["0"]
+            lut.ports["Z"] = [out_bits[i] if i < len(out_bits) else self.nl.alloc_bit()]
 
     def _map_arithmetic(self, cell: Cell) -> None:
         """Map ADD/SUB to CCU2C carry chain cells.
@@ -409,7 +386,7 @@ class _ECP5Mapper:
         if packed_init is not None:
             base_init = int(packed_init) & 0xFFFF
 
-        lut_init = f"0x{base_init:04X}"
+        lut_init = format(base_init, "016b")
 
         prev_cout = "1" if is_sub else "0"  # carry-in
 
@@ -671,17 +648,15 @@ class _ECP5Mapper:
 
                 out_bits = self._get_bits(out_net)
                 s_bits = self._get_bits(s_net)
-                lut = self.nl.add_cell(self._fresh_name("pmux_lut"), "TRELLIS_SLICE")
+                lut = self.nl.add_cell(self._fresh_name("pmux_lut"), "LUT4")
                 if cell.src:
                     lut.attributes["src"] = cell.src
-                lut.parameters["LUT0_INITVAL"] = f"0x{init:04X}"
-                lut.parameters["MODE"] = "LOGIC"
-                lut.parameters["GSR"] = "DISABLED"
-                lut.ports["A0"] = [s_bits[0] if len(s_bits) > 0 else "0"]
-                lut.ports["B0"] = [s_bits[1] if len(s_bits) > 1 else "0"]
-                lut.ports["C0"] = ["0"]
-                lut.ports["D0"] = ["0"]
-                lut.ports["F0"] = [out_bits[0] if out_bits else self.nl.alloc_bit()]
+                lut.parameters["INIT"] = format(init, "016b")
+                lut.ports["A"] = [s_bits[0] if len(s_bits) > 0 else "0"]
+                lut.ports["B"] = [s_bits[1] if len(s_bits) > 1 else "0"]
+                lut.ports["C"] = ["0"]
+                lut.ports["D"] = ["0"]
+                lut.ports["Z"] = [out_bits[0] if out_bits else self.nl.alloc_bit()]
                 return
         width = out_net.width
         count = int(cell.params.get("count", 0))
@@ -719,17 +694,15 @@ class _ECP5Mapper:
             level = []
             for sel_bit, case_bit in candidates:
                 mux_out = self.nl.alloc_bit()
-                lut = self.nl.add_cell(self._fresh_name("pmux"), "TRELLIS_SLICE")
+                lut = self.nl.add_cell(self._fresh_name("pmux"), "LUT4")
                 if cell.src:
                     lut.attributes["src"] = cell.src
-                lut.parameters["LUT0_INITVAL"] = "0xCACA"
-                lut.parameters["MODE"] = "LOGIC"
-                lut.parameters["GSR"] = "DISABLED"
-                lut.ports["A0"] = [sel_bit]
-                lut.ports["B0"] = [default_bit]
-                lut.ports["C0"] = [case_bit]
-                lut.ports["D0"] = ["0"]
-                lut.ports["F0"] = [mux_out]
+                lut.parameters["INIT"] = "1100101011001010"
+                lut.ports["A"] = [sel_bit]
+                lut.ports["B"] = [default_bit]
+                lut.ports["C"] = [case_bit]
+                lut.ports["D"] = ["0"]
+                lut.ports["Z"] = [mux_out]
                 level.append(mux_out)
 
             # Reduce tree: merge pairs with OR-select until one remains
@@ -738,16 +711,13 @@ class _ECP5Mapper:
                 for j in range(0, len(level), 2):
                     if j + 1 < len(level):
                         merged = self.nl.alloc_bit()
-                        lut = self.nl.add_cell(self._fresh_name("pmux_or"), "TRELLIS_SLICE")
-                        # OR gate: if either sub-tree selected, pass through
-                        lut.parameters["LUT0_INITVAL"] = "0xEEEE"
-                        lut.parameters["MODE"] = "LOGIC"
-                        lut.parameters["GSR"] = "DISABLED"
-                        lut.ports["A0"] = [level[j]]
-                        lut.ports["B0"] = [level[j + 1]]
-                        lut.ports["C0"] = ["0"]
-                        lut.ports["D0"] = ["0"]
-                        lut.ports["F0"] = [merged]
+                        lut = self.nl.add_cell(self._fresh_name("pmux_or"), "LUT4")
+                        lut.parameters["INIT"] = "1110111011101110"
+                        lut.ports["A"] = [level[j]]
+                        lut.ports["B"] = [level[j + 1]]
+                        lut.ports["C"] = ["0"]
+                        lut.ports["D"] = ["0"]
+                        lut.ports["Z"] = [merged]
                         next_level.append(merged)
                     else:
                         next_level.append(level[j])

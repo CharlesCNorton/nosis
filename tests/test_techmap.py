@@ -36,7 +36,7 @@ def test_map_const():
     mod.ports["out"] = out_net
     nl = map_to_ecp5(design)
     # Constants become tied bits — no TRELLIS_SLICE needed
-    luts = [c for c in nl.cells.values() if c.cell_type == "TRELLIS_SLICE"]
+    luts = [c for c in nl.cells.values() if c.cell_type == "LUT4"]
     assert len(luts) == 0
 
 
@@ -85,9 +85,9 @@ def test_map_and_init():
     mod.connect(gc, "B", b)
     mod.connect(gc, "Y", y, direction="output")
     nl = map_to_ecp5(design)
-    luts = [c for c in nl.cells.values() if c.cell_type == "TRELLIS_SLICE"]
+    luts = [c for c in nl.cells.values() if c.cell_type == "LUT4"]
     assert len(luts) == 1
-    assert luts[0].parameters["LUT0_INITVAL"] == "0x8888"
+    assert luts[0].parameters["INIT"] == "1000100010001000"
 
 
 def test_map_or_init():
@@ -101,9 +101,9 @@ def test_map_or_init():
     mod.connect(gc, "B", b)
     mod.connect(gc, "Y", y, direction="output")
     nl = map_to_ecp5(design)
-    luts = [c for c in nl.cells.values() if c.cell_type == "TRELLIS_SLICE"]
+    luts = [c for c in nl.cells.values() if c.cell_type == "LUT4"]
     assert len(luts) == 1
-    assert luts[0].parameters["LUT0_INITVAL"] == "0xEEEE"
+    assert luts[0].parameters["INIT"] == "1110111011101110"
 
 
 def test_map_xor_init():
@@ -117,9 +117,9 @@ def test_map_xor_init():
     mod.connect(gc, "B", b)
     mod.connect(gc, "Y", y, direction="output")
     nl = map_to_ecp5(design)
-    luts = [c for c in nl.cells.values() if c.cell_type == "TRELLIS_SLICE"]
+    luts = [c for c in nl.cells.values() if c.cell_type == "LUT4"]
     assert len(luts) == 1
-    assert luts[0].parameters["LUT0_INITVAL"] == "0x6666"
+    assert luts[0].parameters["INIT"] == "0110011001100110"
 
 
 def test_map_not_init():
@@ -131,9 +131,9 @@ def test_map_not_init():
     mod.connect(gc, "A", a)
     mod.connect(gc, "Y", y, direction="output")
     nl = map_to_ecp5(design)
-    luts = [c for c in nl.cells.values() if c.cell_type == "TRELLIS_SLICE"]
+    luts = [c for c in nl.cells.values() if c.cell_type == "LUT4"]
     assert len(luts) == 1
-    assert luts[0].parameters["LUT0_INITVAL"] == "0x5555"
+    assert luts[0].parameters["INIT"] == "0101010101010101"
 
 
 def test_map_mux_init():
@@ -149,9 +149,9 @@ def test_map_mux_init():
     mod.connect(mc, "B", b)
     mod.connect(mc, "Y", y, direction="output")
     nl = map_to_ecp5(design)
-    luts = [c for c in nl.cells.values() if c.cell_type == "TRELLIS_SLICE"]
+    luts = [c for c in nl.cells.values() if c.cell_type == "LUT4"]
     assert len(luts) == 1
-    assert luts[0].parameters["LUT0_INITVAL"] == "0xE4E4"
+    assert luts[0].parameters["INIT"] == "1110010011100100"
 
 
 def test_map_multibit_produces_per_bit_luts():
@@ -166,7 +166,7 @@ def test_map_multibit_produces_per_bit_luts():
     mod.connect(gc, "B", b)
     mod.connect(gc, "Y", y, direction="output")
     nl = map_to_ecp5(design)
-    assert nl.stats()["TRELLIS_SLICE"] == 4  # dual-LUT: 8 bits / 2 per slice
+    assert nl.stats()["LUT4"] == 8  # one LUT4 per output bit
 
 
 def test_map_add_produces_ccu2c():
@@ -209,7 +209,7 @@ def test_map_netlist_stats():
     mod.connect(gc, "Y", y, direction="output")
     nl = map_to_ecp5(design)
     stats = nl.stats()
-    assert stats["TRELLIS_SLICE"] == 4  # dual-LUT: 8 bits / 2 per slice
+    assert stats["LUT4"] == 8  # one LUT4 per output bit
     assert stats["ports"] == 3
 
 
@@ -225,7 +225,7 @@ def test_map_concat_is_wiring_only():
     mod.connect(cc, "I1", b)
     mod.connect(cc, "Y", y, direction="output")
     nl = map_to_ecp5(design)
-    assert nl.stats().get("TRELLIS_SLICE", 0) == 0
+    assert nl.stats().get("LUT4", 0) == 0
 
 
 def test_map_slice_is_wiring_only():
@@ -238,4 +238,4 @@ def test_map_slice_is_wiring_only():
     mod.connect(sc, "A", a)
     mod.connect(sc, "Y", y, direction="output")
     nl = map_to_ecp5(design)
-    assert nl.stats().get("TRELLIS_SLICE", 0) == 0
+    assert nl.stats().get("LUT4", 0) == 0

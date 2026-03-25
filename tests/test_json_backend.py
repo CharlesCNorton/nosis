@@ -75,10 +75,10 @@ def test_json_cells():
     mod = data["modules"]["test_and"]
     cells = mod["cells"]
     # Should have at least one TRELLIS_SLICE
-    slice_cells = [c for c in cells.values() if c["type"] == "TRELLIS_SLICE"]
+    slice_cells = [c for c in cells.values() if c["type"] == "LUT4"]
     assert len(slice_cells) >= 1
     cell = slice_cells[0]
-    assert "LUT0_INITVAL" in cell["parameters"]
+    assert "INIT" in cell["parameters"]
     assert "connections" in cell
     assert "port_directions" in cell
 

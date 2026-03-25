@@ -64,7 +64,7 @@ class TestUartTx:
         design, _ = self._synth(optimize=False)
         nl = map_to_ecp5(design)
         stats = nl.stats()
-        assert stats.get("TRELLIS_SLICE", 0) > 0
+        assert stats.get("LUT4", 0) > 0
         assert stats.get("TRELLIS_FF", 0) > 0
 
     def test_json_valid(self):
@@ -121,7 +121,7 @@ class TestUartRx:
         design = lower_to_ir(result, top=self.TOP)
         nl = map_to_ecp5(design)
         stats = nl.stats()
-        assert stats.get("TRELLIS_SLICE", 0) > 0
+        assert stats.get("LUT4", 0) > 0
         assert stats.get("TRELLIS_FF", 0) > 0
 
 
@@ -227,7 +227,7 @@ class TestRimeV:
         design = lower_to_ir(result, top=self.TOP)
         nl = map_to_ecp5(design)
         stats = nl.stats()
-        assert stats.get("TRELLIS_SLICE", 0) >= 500
+        assert stats.get("LUT4", 0) >= 500
         assert stats.get("TRELLIS_FF", 0) >= 500
 
     def test_json_roundtrip(self):
@@ -288,7 +288,7 @@ class TestThaw:
         design = lower_to_ir(result, top=self.TOP)
         nl = map_to_ecp5(design)
         stats = nl.stats()
-        assert stats.get("TRELLIS_SLICE", 0) >= 1000
+        assert stats.get("LUT4", 0) >= 1000
         assert stats.get("TRELLIS_FF", 0) >= 500
 
     def test_port_count(self):
@@ -343,7 +343,7 @@ class TestPicoRV32Soc:
         design = lower_to_ir(result, top=self.TOP)
         nl = map_to_ecp5(design)
         stats = nl.stats()
-        assert stats.get("TRELLIS_SLICE", 0) >= 5000
+        assert stats.get("LUT4", 0) >= 5000
         assert stats.get("TRELLIS_FF", 0) >= 3000
 
     def test_port_count(self):
@@ -377,7 +377,7 @@ class TestPicoRV32Soc:
         for name, cell in mod_json["cells"].items():
             assert "type" in cell
             assert "connections" in cell
-            assert cell["type"] in ("TRELLIS_SLICE", "TRELLIS_FF", "CCU2C", "MULT18X18D", "DP16KD", "TRELLIS_DPR16X4"), f"unexpected cell type: {cell['type']}"
+            assert cell["type"] in ("LUT4", "TRELLIS_FF", "CCU2C", "MULT18X18D", "DP16KD", "TRELLIS_DPR16X4"), f"unexpected cell type: {cell['type']}"
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +428,7 @@ class TestLanguageFeatures:
         design = lower_to_ir(result, top="picorv32")
         nl = map_to_ecp5(design)
         stats = nl.stats()
-        assert stats.get("TRELLIS_SLICE", 0) > 0
+        assert stats.get("LUT4", 0) > 0
 
     def test_repeat_in_picorv32(self):
         """PicoRV32 uses replication — REPEAT cells must be emitted."""
@@ -733,42 +733,42 @@ class TestLockedCellCounts:
 
     def test_uart_tx_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/uart/uart_tx.sv", "uart_tx")
-        assert s["TRELLIS_SLICE"] == 117, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["LUT4"] == 219, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 46, f"FF count changed: {s['TRELLIS_FF']}"
         assert s["CCU2C"] == 128, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_uart_rx_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/uart/uart_rx.sv", "uart_rx")
-        assert s["TRELLIS_SLICE"] == 149, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["LUT4"] == 283, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 47, f"FF count changed: {s['TRELLIS_FF']}"
         assert s["CCU2C"] == 128, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_sdram_bridge_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/service/sdram_bridge.sv", "sdram_bridge")
-        assert s["TRELLIS_SLICE"] == 255, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["LUT4"] == 477, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 348, f"FF count changed: {s['TRELLIS_FF']}"
         assert s["CCU2C"] == 14, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_crc32_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/cpu/rime_pcpi_crc32.sv", "rime_pcpi_crc32")
-        assert s["TRELLIS_SLICE"] == 1, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["LUT4"] == 1, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 34, f"FF count changed: {s['TRELLIS_FF']}"
 
     def test_rime_v_exact(self):
         s = self._ecp5_stats(f"{RIME}/core/cpu/rime_v.sv", "rime_v")
-        assert s["TRELLIS_SLICE"] == 2659, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["LUT4"] == 5173, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 1727, f"FF count changed: {s['TRELLIS_FF']}"
         assert s["CCU2C"] == 275, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_thaw_exact(self):
         s = self._ecp5_stats(RIME_THAW_SOURCES, "top")
-        assert s["TRELLIS_SLICE"] == 8521, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["LUT4"] == 15898, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 6143, f"FF count changed: {s['TRELLIS_FF']}"
         assert s["CCU2C"] == 1044, f"CCU2C count changed: {s['CCU2C']}"
 
     def test_soc_exact(self):
         s = self._ecp5_stats(RIME_SOC_SOURCES, "top")
-        assert s["TRELLIS_SLICE"] == 30562, f"LUT count changed: {s['TRELLIS_SLICE']}"
+        assert s["LUT4"] == 55478, f"LUT count changed: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 16825, f"FF count changed: {s['TRELLIS_FF']}"
         assert s["CCU2C"] == 4094, f"CCU2C count changed: {s['CCU2C']}"
 

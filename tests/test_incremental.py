@@ -153,7 +153,7 @@ def test_incremental_remap_empty_delta():
     design.top = "test"
 
     prev = ECP5Netlist(top="test")
-    prev.add_cell("lut0", "TRELLIS_SLICE")
+    prev.add_cell("lut0", "LUT4")
 
     s1 = snapshot_module(mod)
     delta = compute_delta(s1, s1)

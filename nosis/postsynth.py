@@ -196,7 +196,7 @@ def generate_postsynth_verilog(netlist: ECP5Netlist) -> str:
     # Cell instantiations
     for name, cell in sorted(netlist.cells.items()):
         safe_name = name.replace("$", "_").replace(".", "_")
-        if cell.cell_type == "TRELLIS_SLICE":
+        if cell.cell_type == "LUT4":
             init = cell.parameters.get("LUT0_INITVAL", "0x0000")
             a0 = _bit_ref(cell.ports.get("A0", ["0"]))
             b0 = _bit_ref(cell.ports.get("B0", ["0"]))

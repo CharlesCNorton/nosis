@@ -225,7 +225,7 @@ class TestJSONInvariants:
                     errors.append(f"cell {name} port {port} has no direction")
 
             # 5. Cell type is a known ECP5 primitive
-            known_types = {"TRELLIS_SLICE", "TRELLIS_FF", "CCU2C", "MULT18X18D", "DP16KD"}
+            known_types = {"LUT4", "TRELLIS_FF", "CCU2C", "MULT18X18D", "DP16KD"}
             if cell.get("type") not in known_types:
                 errors.append(f"cell {name} has unknown type {cell.get('type')}")
 

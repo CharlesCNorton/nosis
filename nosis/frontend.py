@@ -834,15 +834,36 @@ class _Lowerer:
                             async_reset = True
                 stmt = body.stmt
 
-            # Collect all non-blocking assignments in this block
-            assignments = self._collect_nb_assignments(stmt)
-            # Deduplicate by target: last assignment to each target wins
-            # (matches Verilog semantics for multiple assignments in one block)
-            deduped: dict[str, tuple[Net, Net, Net | None, Net | None]] = {}
-            for lhs_net, rhs_net, rst_net, rst_val_net in assignments:
-                deduped[lhs_net.name] = (lhs_net, rhs_net, rst_net, rst_val_net)
+            # Build MUX trees for the always_ff body using the same
+            # recursive handler that works for always_comb. This correctly
+            # handles nested case/if with conditional guards.
+            # Then detect reset patterns and create FFs.
 
-            for lhs_net, rhs_net, rst_net, rst_val_net in deduped.values():
+            # Check for reset pattern: if (rst) {blocking} else {nb logic}
+            rst_vals: dict[str, Net] = {}
+            ff_body = stmt
+            if str(stmt.kind) == "StatementKind.Conditional":
+                conds = list(stmt.conditions)
+                if conds and stmt.ifFalse is not None:
+                    # Check if true branch has blocking resets
+                    true_blocking = self._collect_blocking_assignments(stmt.ifTrue)
+                    false_nb = self._collect_blocking_with_muxes(stmt.ifFalse, allow_nb=True)
+                    if true_blocking and false_nb:
+                        rst_vals = true_blocking
+                        nb_map = false_nb
+                    else:
+                        nb_map = self._collect_blocking_with_muxes(stmt, allow_nb=True)
+                else:
+                    nb_map = self._collect_blocking_with_muxes(stmt, allow_nb=True)
+            else:
+                nb_map = self._collect_blocking_with_muxes(stmt, allow_nb=True)
+
+            for lhs_name, rhs_net in nb_map.items():
+                lhs_net = self.mod.nets.get(lhs_name)
+                if lhs_net is None:
+                    continue
+                rst_val_net = rst_vals.get(lhs_name)
+                ff_rst = reset_net if async_reset else (reset_net if reset_net else None)
                 # If the target already has a combinational driver (from
                 # always_comb or continuous assign), don't create an FF.
                 # The combinational decode is the primary value; the NB
@@ -851,7 +872,7 @@ class _Lowerer:
                 if lhs_net.driver is not None and lhs_net.driver.op not in (PrimOp.FF, PrimOp.CONST):
                     continue
 
-                ff_rst = rst_net if not async_reset else reset_net
+                ff_rst = reset_net
                 ff = self._fresh_cell(
                     f"ff_{lhs_net.name}", PrimOp.FF,
                     ff_target=lhs_net.name,
@@ -1166,21 +1187,26 @@ class _Lowerer:
                 results.extend(self._collect_nb_assignments(inner))
 
         elif kind == "StatementKind.List":
-            # Sequential statements in a block. If multiple children assign
-            # to the same target, chain them: later assignments override
-            # earlier ones via MUX with the earlier result as default.
-            running_list: dict[str, Net] = {}
+            # Sequential statements: chain multiple assignments to the same target.
+            # The second assignment's MUX should use the first's output as hold,
+            # not the raw target net. This creates a priority chain.
+            running_nb: dict[str, Net] = {}  # target_name -> latest MUX output
             for child in stmt.list:
                 child_results = self._collect_nb_assignments(child)
                 for lhs, rhs, rc, rv in child_results:
-                    if lhs.name in running_list:
-                        # This target was already assigned by a previous
-                        # statement. The previous result becomes the
-                        # "hold" value — it's already wired as part of
-                        # the MUX chain from the earlier assignment.
-                        pass
-                    running_list[lhs.name] = rhs
-                results.extend(child_results)
+                    if lhs.name in running_nb:
+                        # This target was already assigned. The new rhs is a
+                        # guarded MUX(cond, hold, val). Replace its hold (A input)
+                        # with the previous assignment's MUX output.
+                        prev_rhs = running_nb[lhs.name]
+                        if rhs.driver and rhs.driver.op == PrimOp.MUX:
+                            # Rewire MUX A input to previous result
+                            for pn, pnet in list(rhs.driver.inputs.items()):
+                                if pn == "A" and (pnet is lhs or pnet.name == lhs.name):
+                                    rhs.driver.inputs["A"] = prev_rhs
+                                    break
+                    running_nb[lhs.name] = rhs
+                    results.append((lhs, rhs, rc, rv))
 
             # Deduplicate: only keep the LAST assignment to each target
             seen: dict[str, int] = {}
@@ -1190,28 +1216,31 @@ class _Lowerer:
 
         return results
 
-    def _collect_blocking_with_muxes(self, stmt: Any) -> dict[str, "Net"]:
-        """Collect blocking assignments, building MUXes for nested conditionals.
+    def _collect_blocking_with_muxes(self, stmt: Any, allow_nb: bool = False) -> dict[str, "Net"]:
+        """Collect assignments, building MUXes for nested conditionals.
 
         Returns {target_name: value_net} where value_net includes conditional
         MUX trees for if/else/case within the statement.
+
+        If allow_nb is True, also captures non-blocking (<=) assignments.
         """
         results: dict[str, Net] = {}
         kind = str(stmt.kind)
 
         if kind == "StatementKind.ExpressionStatement":
             expr = stmt.expr
-            if str(expr.kind) == "ExpressionKind.Assignment" and not expr.isNonBlocking:
-                lhs = self.lower_expr(expr.left)
-                rhs = self.lower_expr(expr.right)
-                results[lhs.name] = rhs
+            if str(expr.kind) == "ExpressionKind.Assignment":
+                if not expr.isNonBlocking or allow_nb:
+                    lhs = self.lower_expr(expr.left)
+                    rhs = self.lower_expr(expr.right)
+                    results[lhs.name] = rhs
 
         elif kind == "StatementKind.Conditional":
             conds = list(stmt.conditions)
             if conds:
                 cond_net = self.lower_expr(conds[0].expr)
-                true_map = self._collect_blocking_with_muxes(stmt.ifTrue) if stmt.ifTrue else {}
-                false_map = self._collect_blocking_with_muxes(stmt.ifFalse) if stmt.ifFalse else {}
+                true_map = self._collect_blocking_with_muxes(stmt.ifTrue, allow_nb=allow_nb) if stmt.ifTrue else {}
+                false_map = self._collect_blocking_with_muxes(stmt.ifFalse, allow_nb=allow_nb) if stmt.ifFalse else {}
                 all_targets = set(true_map) | set(false_map)
                 for tgt_name in all_targets:
                     tgt_net = self.mod.nets.get(tgt_name)
@@ -1244,10 +1273,10 @@ class _Lowerer:
 
         elif kind == "StatementKind.Case":
             inner_sel = self.lower_expr(stmt.expr)
-            inner_default = self._collect_blocking_with_muxes(stmt.defaultCase) if stmt.defaultCase else {}
+            inner_default = self._collect_blocking_with_muxes(stmt.defaultCase, allow_nb=allow_nb) if stmt.defaultCase else {}
             inner_running: dict[str, Net] = dict(inner_default)
             for inner_item in stmt.items:
-                inner_map = self._collect_blocking_with_muxes(inner_item.stmt)
+                inner_map = self._collect_blocking_with_muxes(inner_item.stmt, allow_nb=allow_nb)
                 for inner_expr in inner_item.expressions:
                     iv = self.lower_expr(inner_expr)
                     ieq = self._fresh_net("bcase_eq", 1)
@@ -1276,11 +1305,11 @@ class _Lowerer:
 
         elif kind == "StatementKind.Block":
             if stmt.body is not None:
-                results.update(self._collect_blocking_with_muxes(stmt.body))
+                results.update(self._collect_blocking_with_muxes(stmt.body, allow_nb=allow_nb))
 
         elif kind == "StatementKind.List":
             for child in stmt.list:
-                child_map = self._collect_blocking_with_muxes(child)
+                child_map = self._collect_blocking_with_muxes(child, allow_nb=allow_nb)
                 results.update(child_map)
 
         return results

@@ -296,3 +296,136 @@ def test_pc_increment_exact():
     # 4 instructions * 4 cycles each = 16 cycles to reach PC=0x10
     result = _run_program(program, max_cycles=16)
     assert result["_pc"] == 0x10, f"PC should be 0x10, got 0x{result['_pc']:08X}"
+
+
+# ---------------------------------------------------------------------------
+# ALU ops
+# ---------------------------------------------------------------------------
+
+def _andi(rd, rs1, imm):
+    return ((imm & 0xFFF) << 20) | (rs1 << 15) | (0b111 << 12) | (rd << 7) | 0b0010011
+
+def _ori(rd, rs1, imm):
+    return ((imm & 0xFFF) << 20) | (rs1 << 15) | (0b110 << 12) | (rd << 7) | 0b0010011
+
+def _xori(rd, rs1, imm):
+    return ((imm & 0xFFF) << 20) | (rs1 << 15) | (0b100 << 12) | (rd << 7) | 0b0010011
+
+def _slli(rd, rs1, shamt):
+    return (shamt << 20) | (rs1 << 15) | (0b001 << 12) | (rd << 7) | 0b0010011
+
+def _srli(rd, rs1, shamt):
+    return (shamt << 20) | (rs1 << 15) | (0b101 << 12) | (rd << 7) | 0b0010011
+
+def _slti(rd, rs1, imm):
+    return ((imm & 0xFFF) << 20) | (rs1 << 15) | (0b010 << 12) | (rd << 7) | 0b0010011
+
+
+@requires_rime_soc
+def test_andi():
+    prog = [_addi(1, 0, 0xFF), _andi(2, 1, 0x0F), _nop()]
+    result = _run_program(prog, max_cycles=30)
+    assert result["_regs"].get(2) == 0x0F, f"x2={result['_regs'].get(2):#x}"
+
+@requires_rime_soc
+def test_ori():
+    prog = [_addi(1, 0, 0xF0), _ori(2, 1, 0x0F), _nop()]
+    result = _run_program(prog, max_cycles=30)
+    assert result["_regs"].get(2) == 0xFF, f"x2={result['_regs'].get(2):#x}"
+
+@requires_rime_soc
+def test_xori():
+    prog = [_addi(1, 0, 0xFF), _xori(2, 1, 0xFF), _nop()]
+    result = _run_program(prog, max_cycles=30)
+    assert result["_regs"].get(2) == 0, f"x2={result['_regs'].get(2)}"
+
+@requires_rime_soc
+def test_slli():
+    prog = [_addi(1, 0, 1), _slli(2, 1, 4), _nop()]
+    result = _run_program(prog, max_cycles=30)
+    assert result["_regs"].get(2) == 16, f"x2={result['_regs'].get(2)}"
+
+@requires_rime_soc
+def test_srli():
+    prog = [_addi(1, 0, 256), _srli(2, 1, 4), _nop()]
+    result = _run_program(prog, max_cycles=30)
+    assert result["_regs"].get(2) == 16, f"x2={result['_regs'].get(2)}"
+
+@requires_rime_soc
+def test_slti():
+    prog = [_addi(1, 0, 5), _slti(2, 1, 10), _slti(3, 1, 3), _nop()]
+    result = _run_program(prog, max_cycles=40)
+    assert result["_regs"].get(2) == 1, f"x2={result['_regs'].get(2)} (5<10 should be 1)"
+    assert result["_regs"].get(3) == 0, f"x3={result['_regs'].get(3)} (5<3 should be 0)"
+
+@requires_rime_soc
+def test_lui_value():
+    prog = [_lui(1, 0x12345), _nop()]
+    result = _run_program(prog, max_cycles=20)
+    assert result["_regs"].get(1) == 0x12345000, f"x1={result['_regs'].get(1):#x}"
+
+
+# ---------------------------------------------------------------------------
+# Branches
+# ---------------------------------------------------------------------------
+
+@requires_rime_soc
+def test_beq_taken():
+    """BEQ x0, x0, +8 — always taken (x0==x0), skip next instruction."""
+    prog = [
+        _beq(0, 0, 8),      # PC=0: branch to PC=8
+        _addi(1, 0, 99),    # PC=4: skipped
+        _addi(2, 0, 42),    # PC=8: target
+        _nop(),
+    ]
+    result = _run_program(prog, max_cycles=40)
+    r = result["_regs"]
+    assert r.get(1, 0) == 0, f"x1={r.get(1)} — should be 0 (skipped)"
+    assert r.get(2) == 42, f"x2={r.get(2)} — should be 42"
+
+@requires_rime_soc
+def test_beq_not_taken():
+    """BEQ x1, x0, +8 — not taken (x1!=x0), execute next instruction."""
+    prog = [
+        _addi(1, 0, 1),     # PC=0: x1=1
+        _beq(1, 0, 8),      # PC=4: not taken (1!=0)
+        _addi(2, 0, 77),    # PC=8: executed
+        _nop(),
+    ]
+    result = _run_program(prog, max_cycles=40)
+    assert result["_regs"].get(2) == 77, f"x2={result['_regs'].get(2)}"
+
+@requires_rime_soc
+def test_bne_taken():
+    """BNE x1, x0, +8 — taken (1!=0)."""
+    prog = [
+        _addi(1, 0, 1),
+        _bne(1, 0, 8),      # PC=4: taken
+        _addi(2, 0, 99),    # PC=8: skipped
+        _addi(3, 0, 55),    # PC=12: target (4+8=12)
+        _nop(),
+    ]
+    result = _run_program(prog, max_cycles=40)
+    r = result["_regs"]
+    assert r.get(2, 0) == 0, f"x2={r.get(2)} — should be 0 (skipped)"
+    assert r.get(3) == 55, f"x3={r.get(3)} — should be 55"
+
+
+# ---------------------------------------------------------------------------
+# JAL
+# ---------------------------------------------------------------------------
+
+@requires_rime_soc
+def test_jal():
+    """JAL x1, +8 — jump forward, store return address."""
+    prog = [
+        _jal(1, 8),         # PC=0: jump to PC=8, x1=PC+4=4
+        _addi(2, 0, 99),    # PC=4: skipped
+        _addi(3, 0, 42),    # PC=8: target
+        _nop(),
+    ]
+    result = _run_program(prog, max_cycles=40)
+    r = result["_regs"]
+    assert r.get(1) == 4, f"x1={r.get(1)} — return address should be 4"
+    assert r.get(2, 0) == 0, f"x2={r.get(2)} — should be 0 (skipped)"
+    assert r.get(3) == 42, f"x3={r.get(3)} — should be 42"

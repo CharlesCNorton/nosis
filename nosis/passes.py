@@ -1464,12 +1464,14 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
         for _mi in range(_mem["depth"]):
             _mem["storage"][_mi] = _rng2.getrandbits(_mem["width"]) if _mem["width"] > 0 else 0
     _nv2: dict[str, set[int]] = {}
-    for _ in range(200):
+    _nv2_seq: dict[str, list[int]] = {}  # per-vector value sequences for equiv detection
+    for _ in range(1000):
         _si2 = {n: _rng2.getrandbits(w) for n, w in _ip2.items()}
         _si2.update(_ff2)
         _vs2 = _fast2.step(_si2)
         for _n, _v in _vs2.items():
             _nv2.setdefault(_n, set()).add(_v)
+            _nv2_seq.setdefault(_n, []).append(_v)
         for _dn, _qn in _ff_pairs2:
             if _dn in _vs2:
                 _ff2[_qn] = _vs2[_dn]
@@ -1514,18 +1516,20 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
     from collections import defaultdict
 
     _sig_groups: dict[tuple, list[str]] = defaultdict(list)
-    for _n, _svs in _nv2.items():
-        if len(_svs) != 1:
-            # Non-constant: use the full value signature as a key
-            _net = mod.nets.get(_n)
-            if _net is None or _n in mod.ports:
-                continue
-            if _net.driver and _net.driver.op in (PrimOp.CONST, PrimOp.INPUT, PrimOp.FF):
-                continue
-            if _n in _mem_fanout2:
-                continue
-            sig = tuple(sorted(_svs))
-            _sig_groups[sig].append(_n)
+    for _n, _seq in _nv2_seq.items():
+        if _n in _nv2 and len(_nv2[_n]) <= 1:
+            continue  # constants handled by sat_const
+        _net = mod.nets.get(_n)
+        if _net is None or _n in mod.ports:
+            continue
+        if _net.driver and _net.driver.op in (PrimOp.CONST, PrimOp.INPUT, PrimOp.FF):
+            continue
+        if _n in _mem_fanout2:
+            continue
+        # Use the value SEQUENCE as the grouping key — only nets that
+        # produce identical values on every vector are candidates
+        sig = tuple(_seq)
+        _sig_groups[sig].append(_n)
 
     _eq_candidates: list[tuple[str, str]] = []
     for sig, nets in _sig_groups.items():
@@ -1566,6 +1570,14 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
     # Cut-based re-mapping: absorb multi-cell cones into single LUT4s
     from nosis.cutmap import cut_map_luts
     stats["cut_map"] = cut_map_luts(mod)
+
+    # BDD-inspired decode function minimization
+    from nosis.bdd import minimize_decode_functions
+    stats["bdd_minimize"] = minimize_decode_functions(mod, max_inputs=10)
+    if stats["bdd_minimize"] > 0:
+        constant_fold(mod)
+        identity_simplify(mod)
+
     stats["dce_final"] = dead_code_eliminate(mod)
 
     # Register retiming: move FFs across single-fanout combinational cells

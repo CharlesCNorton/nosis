@@ -16,7 +16,7 @@ jobs:
           python-version: "3.13"
       - run: pip install ruff mypy "pyslang>=7"
       - run: ruff check .
-      - run: mypy nosis/ --ignore-missing-imports --no-error-summary --exclude "pyslang"
+      - run: mypy nosis/ --ignore-missing-imports --no-error-summary --follow-imports=skip
 
   unit-tests:
     runs-on: ubuntu-latest

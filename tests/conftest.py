@@ -77,6 +77,13 @@ RIME_SLUSH_SOURCES = [
     os.path.join(RIME_FW, "core/service/sdram_bridge.sv"),
 ]
 
+RIME_EMBER_SOURCES = [
+    os.path.join(RIME_FW, "images/ember/top.sv"),
+    os.path.join(RIME_FW, "images/ember/aes128.sv"),
+    RIME_UART_RX,
+    RIME_UART_TX,
+]
+
 RIME_SOC_SOURCES = [
     os.path.join(RIME_FW, "images/picorv32/top.sv"),
     RIME_PICORV32,
@@ -200,6 +207,8 @@ def get_design(name: str) -> _DesignCache:
             _caches[name] = _DesignCache(RIME_FROST_SOURCES, "top")
         elif name == "slush":
             _caches[name] = _DesignCache(RIME_SLUSH_SOURCES, "top")
+        elif name == "ember":
+            _caches[name] = _DesignCache(RIME_EMBER_SOURCES, "top")
         elif name == "soc":
             _caches[name] = _DesignCache(RIME_SOC_SOURCES, "top")
         elif name == "picorv32":

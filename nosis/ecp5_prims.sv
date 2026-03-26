@@ -291,3 +291,12 @@ module ECLKBRIDGECS (
     output wire ECSOUT
 );
 endmodule
+
+// nextpnr LUT4 cell — used directly in ring oscillator designs
+module LUT4 #(
+    parameter [15:0] INIT = 16'h0000
+) (
+    input  wire A, B, C, D,
+    output wire Z
+);
+endmodule

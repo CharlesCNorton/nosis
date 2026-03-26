@@ -204,6 +204,28 @@ class TestSlush:
 
 
 # ---------------------------------------------------------------------------
+# Ember — hardware TRNG with ring oscillators and AES-128-CBC
+# ---------------------------------------------------------------------------
+
+@requires_rime_soc
+class TestEmber:
+
+    def _d(self):
+        return get_design("ember")
+
+    def test_parse_zero_errors(self):
+        assert len(self._d().parsed.errors) == 0
+
+    def test_ir_cell_count(self):
+        assert self._d().mod.stats()["cells"] >= 200
+
+    def test_techmap(self):
+        s = self._d().netlist.stats()
+        assert s.get("LUT4", 0) >= 500
+        assert s.get("TRELLIS_FF", 0) >= 500
+
+
+# ---------------------------------------------------------------------------
 # PicoRV32 SoC — full board image
 # ---------------------------------------------------------------------------
 

@@ -15,6 +15,7 @@ __all__ = [
 
 # ECP5 vendor primitives that should not be lowered
 ECP5_BLACKBOX_NAMES = frozenset({
+    "LUT4",
     "USRMCLK", "GSR", "SGSR", "PUR", "JTAGG", "DTR", "OSCG",
     "EHXPLLL", "EHXPLLJ", "CLKDIVF", "DCCA", "DCC", "SEDGA",
     "EXTREFB", "TSALL", "START", "BCINRD", "DCSC", "DQSCE",

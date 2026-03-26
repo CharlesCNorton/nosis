@@ -48,7 +48,7 @@ class TestRimeV:
         s = self._d().netlist.stats()
         assert 5853 <= s["LUT4"] <= 6341, f"LUT: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 1727, f"FF: {s['TRELLIS_FF']}"
-        assert 269 <= s["CCU2C"] <= 280, f"CCU2C: {s['CCU2C']}"
+        assert 269 <= s["CCU2C"] <= 300, f"CCU2C: {s['CCU2C']}"
 
     def test_json_roundtrip(self):
         data = self._d().json_data

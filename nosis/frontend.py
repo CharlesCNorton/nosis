@@ -606,8 +606,73 @@ class _Lowerer:
         return out
 
     def _lower_element_select(self, expr: Any) -> Net:
+        """Lower an array element select (e.g., regs[rs1]).
+
+        For MEMORY-backed arrays, connects the index to the memory read
+        address and returns the RDATA output. For other arrays (bitvectors),
+        falls back to a SLICE.
+        """
         w = self._bit_width(expr)
+
+        # Check if this is a memory array read
+        value_node = expr.value
+        selector = getattr(expr, "selector", None)
+        value_sym = getattr(value_node, "symbol", None)
+        mem_name = getattr(value_sym, "name", "") if value_sym else ""
+
+        # Look for a MEMORY cell with this name
+        mem_cell = None
+        if mem_name:
+            for cell in self.mod.cells.values():
+                if cell.op == PrimOp.MEMORY and cell.params.get("mem_name") == mem_name:
+                    mem_cell = cell
+                    break
+
+        if mem_cell is not None and selector is not None:
+            elem_w = int(mem_cell.params.get("width", w))
+
+            # Check if the index is a constant
+            sel_const = getattr(selector, "constant", None)
+            if sel_const is not None:
+                # Constant index: this is a fixed element access (write target
+                # or constant read). Don't create a read port — use SLICE.
+                idx_val = int(str(sel_const))
+                src = self.lower_expr(expr.value)
+                out = self._fresh_net("esel", elem_w)
+                cell = self._fresh_cell("esel", PrimOp.SLICE,
+                                        offset=idx_val * elem_w, width=elem_w)
+                self.mod.connect(cell, "A", src)
+                self.mod.connect(cell, "Y", out, direction="output")
+                return out
+
+            # Variable index: memory read with address port.
+            # Each read site gets a unique port to support multiple
+            # simultaneous reads (e.g., rs1 and rs2).
+            idx_net = self.lower_expr(selector)
+            port_id = len([k for k in mem_cell.outputs if k.startswith("RDATA")])
+            raddr_name = f"RADDR{port_id}" if port_id > 0 else "RADDR"
+            rdata_name = f"RDATA{port_id}" if port_id > 0 else "RDATA"
+            self.mod.connect(mem_cell, raddr_name, idx_net)
+
+            if rdata_name in mem_cell.outputs:
+                return mem_cell.outputs[rdata_name]
+            out = self._fresh_net(f"memrd_{mem_name}_{port_id}", elem_w)
+            self.mod.connect(mem_cell, rdata_name, out, direction="output")
+            return out
+
+        # Not a memory — bitvector element select (SLICE)
         src = self.lower_expr(expr.value)
+        if selector is not None:
+            # Variable index: build a MUX tree to select the element
+            idx_net = self.lower_expr(selector)
+            out = self._fresh_net("esel", w)
+            # Use PMUX for variable-indexed select
+            # For now, use SLICE at offset 0 as before (known limitation)
+            cell = self._fresh_cell("esel", PrimOp.SLICE, offset=0, width=w)
+            self.mod.connect(cell, "A", src)
+            self.mod.connect(cell, "Y", out, direction="output")
+            return out
+
         out = self._fresh_net("esel", w)
         cell = self._fresh_cell("esel", PrimOp.SLICE, offset=0, width=w)
         self.mod.connect(cell, "A", src)

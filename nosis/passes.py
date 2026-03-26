@@ -10,6 +10,11 @@ from __future__ import annotations
 from nosis.eval import eval_const_op
 from nosis.ir import Cell, Module, PrimOp
 
+# Memory-fanout protection set — populated by run_default_passes,
+# read by constant_fold and identity_simplify to avoid folding
+# cells whose values depend on stateful memory reads.
+_active_mem_protect: set[str] = set()
+
 __all__ = [
     "constant_fold",
     "identity_simplify",
@@ -33,6 +38,26 @@ def constant_fold(mod: Module) -> int:
 
     Returns the number of cells folded.
     """
+    # Protect nets in the transitive fanout of MEMORY read ports.
+    # Memory reads are data-dependent — their output is not constant
+    # even though simulation may see only the reset-state value.
+    _mem_fanout: set[str] = set()
+    _mem_wl: list[str] = []
+    for cell in mod.cells.values():
+        if cell.op == PrimOp.MEMORY:
+            for net in cell.outputs.values():
+                _mem_fanout.add(net.name)
+                _mem_wl.append(net.name)
+    while _mem_wl:
+        _n = _mem_wl.pop()
+        for cell in mod.cells.values():
+            for inp in cell.inputs.values():
+                if inp.name == _n:
+                    for out in cell.outputs.values():
+                        if out.name not in _mem_fanout:
+                            _mem_fanout.add(out.name)
+                            _mem_wl.append(out.name)
+
     folded = 0
     changed = True
 
@@ -43,7 +68,12 @@ def constant_fold(mod: Module) -> int:
         for cell in mod.cells.values():
             if _is_const_cell(cell):
                 continue
-            if cell.op in (PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.FF):
+            if cell.op in (PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.FF, PrimOp.MEMORY):
+                continue
+            # Don't fold cells whose inputs or outputs are in the memory fanout cone
+            if any(net.name in _mem_fanout for net in cell.inputs.values()):
+                continue
+            if any(net.name in _mem_fanout for net in cell.outputs.values()):
                 continue
 
             # Check if all inputs are driven by CONST cells
@@ -112,6 +142,9 @@ def identity_simplify(mod: Module) -> int:
 
     for cell in mod.cells.values():
         if cell.op in (PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.FF, PrimOp.CONST):
+            continue
+        # Don't simplify cells in the memory fanout cone
+        if _active_mem_protect and any(net.name in _active_mem_protect for net in cell.outputs.values()):
             continue
 
         out_nets = list(cell.outputs.values())
@@ -224,7 +257,7 @@ def _find_live_nets(mod: Module) -> set[str]:
     live: set[str] = set()
     worklist: list[str] = []
 
-    # Seeds: output ports and FF data inputs
+    # Seeds: output ports, FF data inputs, and MEMORY cells
     for cell in mod.cells.values():
         if cell.op == PrimOp.OUTPUT:
             for net in cell.inputs.values():
@@ -233,6 +266,16 @@ def _find_live_nets(mod: Module) -> set[str]:
                     worklist.append(net.name)
         elif cell.op == PrimOp.FF:
             for port_name, net in cell.inputs.items():
+                if net.name not in live:
+                    live.add(net.name)
+                    worklist.append(net.name)
+        elif cell.op == PrimOp.MEMORY:
+            # MEMORY cells are stateful — all their inputs and outputs are live
+            for net in cell.inputs.values():
+                if net.name not in live:
+                    live.add(net.name)
+                    worklist.append(net.name)
+            for net in cell.outputs.values():
                 if net.name not in live:
                     live.add(net.name)
                     worklist.append(net.name)
@@ -906,6 +949,29 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
     stats: dict[str, int] = {}
     prev_cells = len(mod.cells)
 
+    # Build MEMORY fanout set once — all nets transitively driven by
+    # MEMORY read outputs. These must be protected from simulation-based
+    # optimization because the simulator cannot model stateful memory reads.
+    _mem_protect: set[str] = set()
+    _mpwl: list[str] = []
+    for _c in mod.cells.values():
+        if _c.op == PrimOp.MEMORY:
+            for _o in _c.outputs.values():
+                _mem_protect.add(_o.name)
+                _mpwl.append(_o.name)
+    while _mpwl:
+        _mn = _mpwl.pop()
+        for _c in mod.cells.values():
+            for _inp in _c.inputs.values():
+                if _inp.name == _mn:
+                    for _o in _c.outputs.values():
+                        if _o.name not in _mem_protect:
+                            _mem_protect.add(_o.name)
+                            _mpwl.append(_o.name)
+    # Store as module-level variable for passes to check
+    global _active_mem_protect
+    _active_mem_protect = _mem_protect
+
     # Skip verification for large designs (deep-copy is O(cells))
     if verify and len(mod.cells) > 500:
         verify = False
@@ -1004,6 +1070,25 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
             if _dn in _vs2:
                 _ff2[_qn] = _vs2[_dn]
 
+    # Build MEMORY fanout set — these nets must not be proven constant
+    # because simulation cannot model stateful memory reads.
+    _mem_fanout2: set[str] = set()
+    _mwl2: list[str] = []
+    for _c in mod.cells.values():
+        if _c.op == PrimOp.MEMORY:
+            for _o in _c.outputs.values():
+                _mem_fanout2.add(_o.name)
+                _mwl2.append(_o.name)
+    while _mwl2:
+        _mn = _mwl2.pop()
+        for _c in mod.cells.values():
+            for _inp in _c.inputs.values():
+                if _inp.name == _mn:
+                    for _o in _c.outputs.values():
+                        if _o.name not in _mem_fanout2:
+                            _mem_fanout2.add(_o.name)
+                            _mwl2.append(_o.name)
+
     _cands2 = {}
     for _n, _svs in _nv2.items():
         if len(_svs) != 1:
@@ -1012,6 +1097,8 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
         if _net is None or _n in mod.ports:
             continue
         if _net.driver and _net.driver.op in (PrimOp.CONST, PrimOp.INPUT, PrimOp.FF):
+            continue
+        if _n in _mem_fanout2:
             continue
         _cands2[_n] = next(iter(_svs))
 

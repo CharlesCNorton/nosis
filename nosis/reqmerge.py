@@ -177,6 +177,16 @@ def merge_reachable_equivalent(
                 ff_input_reachable.add(_inp.name)
                 _ff_wl.append(_inp.name)
 
+    # Protect all nets connected to MEMORY cells — simulation cannot model
+    # stateful memory reads (the value depends on past writes, not current inputs).
+    memory_reachable: set[str] = set()
+    for cell in mod.cells.values():
+        if cell.op == PrimOp.MEMORY:
+            for net in cell.inputs.values():
+                memory_reachable.add(net.name)
+            for net in cell.outputs.values():
+                memory_reachable.add(net.name)
+
     # Compute the set of nets that feed output ports (directly or through
     # combinational logic). These must not be merged — they carry the
     # design's externally visible behavior.
@@ -243,6 +253,10 @@ def merge_reachable_equivalent(
             # 2. Don't merge nets that feed FF D inputs (sequential state).
             #    Simulation may not cover all state transitions.
             if name in ff_input_reachable:
+                continue
+            # 3. Don't merge nets connected to MEMORY cells.
+            #    Simulation cannot model stateful memory behavior.
+            if name in memory_reachable:
                 continue
             if canonical_name in ff_input_reachable:
                 continue

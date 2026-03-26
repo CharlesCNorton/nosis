@@ -866,83 +866,291 @@ def _narrow_eq_width(mod: Module) -> int:
 # ---------------------------------------------------------------------------
 
 def collapse_case_chains(mod: Module) -> int:
-    """Collapse EQ+MUX case-statement chains into evaluated constants or simplified cells.
+    """Collapse EQ+MUX case-statement chains by evaluating per-bit truth tables.
 
     A case statement over selector S with N arms produces N EQ(S, const_i)
-    cells and N MUX(eq_i, prev, value_i) cells chained together. For each
-    output bit, the entire chain computes a function of the selector bits
-    alone. If the function is constant for all selector values, replace
-    with a CONST. Otherwise leave for downstream LUT mapping.
+    cells and N MUX(eq_i, prev, value_i) cells chained together.  This pass
+    walks each chain to extract the mapping: selector_value -> output_value.
+    For each output bit, the entire chain is a function of the selector bits
+    alone.
+
+    If the output is constant across all selector values, replace with CONST.
+    If the selector is 1 bit wide, replace the chain with a single MUX.
+    The intermediate EQ and MUX cells become dead and are removed by DCE.
 
     Returns the number of cells eliminated.
     """
-    from nosis.eval import eval_const_op
     eliminated = 0
+    _ctr = [len(mod.nets) + len(mod.cells) + 5000]
 
-    # Find MUX chains: sequences of MUX cells where each MUX's selector
-    # is driven by an EQ cell that compares the same net to a constant.
-    # Build: selector_net -> [(eq_const_value, mux_cell, true_value_net)]
-    eq_selector_map: dict[str, list[tuple[int, Cell, Cell]]] = {}
+    def _fresh_name(prefix: str) -> str:
+        _ctr[0] += 1
+        return f"${prefix}_{_ctr[0]}"
+
+    # Step 1: identify MUX chains sharing a common EQ selector net.
+    # Walk backward from each MUX through its A (false) input to find
+    # the full chain.  A chain is: MUX_N -> MUX_{N-1} -> ... -> MUX_0 -> default
+    # where each MUX_i's S input is EQ(selector, const_i).
+
+    # Build: for each MUX cell whose S is EQ(net, const), record (selector_net, const, mux_cell)
+    mux_by_sel: dict[str, list[tuple[int, Cell]]] = {}
     for cell in mod.cells.values():
         if cell.op != PrimOp.MUX:
             continue
         s_net = cell.inputs.get("S")
         if s_net is None or s_net.driver is None or s_net.driver.op != PrimOp.EQ:
             continue
-        eq_cell = s_net.driver
-        eq_a = eq_cell.inputs.get("A")
-        eq_b = eq_cell.inputs.get("B")
+        eq = s_net.driver
+        eq_a = eq.inputs.get("A")
+        eq_b = eq.inputs.get("B")
         if eq_a is None or eq_b is None:
             continue
-        if eq_b.driver is None or eq_b.driver.op != PrimOp.CONST:
+        # One of the EQ inputs must be a constant
+        if eq_b.driver and eq_b.driver.op == PrimOp.CONST:
+            sel_name = eq_a.name
+            const_val = int(eq_b.driver.params.get("value", 0))
+        elif eq_a.driver and eq_a.driver.op == PrimOp.CONST:
+            sel_name = eq_b.name
+            const_val = int(eq_a.driver.params.get("value", 0))
+        else:
             continue
-        sel_name = eq_a.name
-        const_val = int(eq_b.driver.params.get("value", 0))
-        eq_selector_map.setdefault(sel_name, []).append((const_val, cell, eq_cell))
+        mux_by_sel.setdefault(sel_name, []).append((const_val, cell))
 
-    # For each selector with multiple case arms, check if any MUX output
-    # is constant across all possible selector values
-    for sel_name, arms in eq_selector_map.items():
-        if len(arms) < 3:  # need enough arms to justify the analysis
+    # Step 2: for each selector with enough arms, walk the chain and
+    # build the value map: {selector_value: output_value}
+    chains_collapsed: set[str] = set()
+
+    for sel_name, muxes in mux_by_sel.items():
+        if len(muxes) < 2:
             continue
         sel_net = mod.nets.get(sel_name)
         if sel_net is None:
             continue
         sel_w = sel_net.width
-        if sel_w > 8:  # don't try to evaluate wide selectors
+        if sel_w > 4:  # truth table only feasible for <= 4 selector bits
             continue
 
-        # Walk the MUX chain for each arm to find the final output net
-        # and the default value
-        for const_val, mux_cell, eq_cell in arms:
-            b_net = mux_cell.inputs.get("B")  # true branch (when EQ matches)
-            a_net = mux_cell.inputs.get("A")  # false branch (chain continuation)
-            if b_net is None or a_net is None:
+        # Walk the MUX chain from the tail (last MUX in the chain) to
+        # the head (default value).  The tail is the MUX whose output
+        # is NOT consumed by another MUX in the same chain.
+        mux_set = {id(cell) for _, cell in muxes}
+        chain_tails: list[Cell] = []
+        for _, cell in muxes:
+            out_nets = list(cell.outputs.values())
+            if not out_nets:
                 continue
-            # If the true branch is a constant and the false branch is also
-            # a constant (or the same as the output — a hold), this MUX
-            # can potentially be eliminated
-            if (b_net.driver and b_net.driver.op == PrimOp.CONST and
-                a_net.driver and a_net.driver.op == PrimOp.CONST):
-                b_val = int(b_net.driver.params.get("value", 0))
-                a_val = int(a_net.driver.params.get("value", 0))
-                if a_val == b_val:
-                    # MUX where both branches are the same constant
-                    out_nets = list(mux_cell.outputs.values())
-                    if out_nets:
-                        out_net = out_nets[0]
-                        out_net.driver = a_net.driver
-                        for other in mod.cells.values():
-                            if other is mux_cell:
-                                continue
-                            for pn, pnet in list(other.inputs.items()):
-                                if pnet is out_net:
-                                    other.inputs[pn] = a_net
-                        mux_cell.inputs.clear()
-                        mux_cell.outputs.clear()
-                        mux_cell.op = PrimOp.CONST
-                        mux_cell.params = {"value": 0, "width": 1, "_dead": True}
-                        eliminated += 1
+            out_net = out_nets[0]
+            # Check if any consumer is another MUX in this chain
+            consumed_by_chain = False
+            for other in mod.cells.values():
+                if id(other) in mux_set and other is not cell:
+                    if any(inp is out_net for inp in other.inputs.values()):
+                        consumed_by_chain = True
+                        break
+            if not consumed_by_chain:
+                chain_tails.append(cell)
+
+        for tail in chain_tails:
+            # Walk backward through A inputs to collect the full case map
+            case_map: dict[int, int] = {}  # selector_value -> output_value
+            default_val: int | None = None
+            width: int = 1
+            dead_cells: list[str] = []
+
+            current = tail
+            visited: set[int] = set()
+            for _ in range(64):  # depth limit
+                if id(current) in visited:
+                    break
+                visited.add(id(current))
+                if current.op != PrimOp.MUX:
+                    # Reached the default — should be a CONST or a net
+                    if current.op == PrimOp.CONST:
+                        default_val = int(current.params.get("value", 0))
+                    break
+
+                out_nets = list(current.outputs.values())
+                if out_nets:
+                    width = out_nets[0].width
+
+                s_net = current.inputs.get("S")
+                b_net = current.inputs.get("B")  # true branch
+                a_net = current.inputs.get("A")  # false branch / chain
+
+                # Get the case constant from the EQ
+                case_val: int | None = None
+                if s_net and s_net.driver and s_net.driver.op == PrimOp.EQ:
+                    eq = s_net.driver
+                    for port in ("A", "B"):
+                        inp = eq.inputs.get(port)
+                        if inp and inp.driver and inp.driver.op == PrimOp.CONST:
+                            other = eq.inputs.get("B" if port == "A" else "A")
+                            if other and other.name == sel_name:
+                                case_val = int(inp.driver.params.get("value", 0))
+                                break
+
+                # Get the case output value
+                if case_val is not None and b_net and b_net.driver and b_net.driver.op == PrimOp.CONST:
+                    case_map[case_val] = int(b_net.driver.params.get("value", 0))
+                    dead_cells.append(current.name)
+
+                # Move to the false branch (chain continuation)
+                if a_net is None or a_net.driver is None:
+                    break
+                current = a_net.driver
+
+            if len(case_map) < 2:
+                continue
+
+            # Build the truth table: for each selector value, what is the output?
+            if default_val is None:
+                default_val = 0
+            mask = (1 << width) - 1
+
+            # Evaluate: is the output constant across all selector values?
+            values = set()
+            for sv in range(1 << sel_w):
+                values.add(case_map.get(sv, default_val) & mask)
+
+            if len(values) == 1:
+                # Constant output — replace the chain tail with CONST
+                const_v = next(iter(values))
+                tail_out = list(tail.outputs.values())
+                if tail_out:
+                    c_name = _fresh_name("case_const")
+                    c_net = mod.add_net(f"{c_name}_o", width)
+                    c_cell = mod.add_cell(c_name, PrimOp.CONST, value=const_v, width=width)
+                    mod.connect(c_cell, "Y", c_net, direction="output")
+                    # Redirect consumers
+                    old_out = tail_out[0]
+                    for other in mod.cells.values():
+                        for pn, pnet in list(other.inputs.items()):
+                            if pnet is old_out:
+                                other.inputs[pn] = c_net
+                    for pn, pnet in list(mod.ports.items()):
+                        if pnet is old_out:
+                            mod.ports[pn] = c_net
+                    eliminated += len(dead_cells)
+                    chains_collapsed.update(dead_cells)
+
+    # Step 3: For chains with ≤ 4-bit selectors where all case values are
+    # constants, convert the chain to a PMUX cell. The techmap will then
+    # compute a single LUT4 truth table per output bit.
+    _ctr2 = [_ctr[0]]
+    for sel_name, muxes in mux_by_sel.items():
+        if len(muxes) < 2:
+            continue
+        sel_net = mod.nets.get(sel_name)
+        if sel_net is None or sel_net.width > 4:
+            continue
+
+        # Find chain tails (same logic as step 2)
+        mux_set = {id(cell) for _, cell in muxes}
+        for _, tail_candidate in muxes:
+            out_nets = list(tail_candidate.outputs.values())
+            if not out_nets:
+                continue
+            out_net = out_nets[0]
+            consumed = False
+            for other in mod.cells.values():
+                if id(other) in mux_set and other is not tail_candidate:
+                    if any(inp is out_net for inp in other.inputs.values()):
+                        consumed = True
+                        break
+            if consumed:
+                continue
+
+            # Walk the chain to extract case_map
+            case_map: dict[int, int] = {}
+            default_val = 0
+            width = out_net.width
+            chain_cells: list[str] = []
+            current = tail_candidate
+            visited_ids: set[int] = set()
+
+            for _ in range(64):
+                if id(current) in visited_ids or current.op != PrimOp.MUX:
+                    if current.op == PrimOp.CONST:
+                        default_val = int(current.params.get("value", 0))
+                    break
+                visited_ids.add(id(current))
+                chain_cells.append(current.name)
+
+                s = current.inputs.get("S")
+                b = current.inputs.get("B")
+                a = current.inputs.get("A")
+
+                case_val = None
+                if s and s.driver and s.driver.op == PrimOp.EQ:
+                    eq = s.driver
+                    for port in ("A", "B"):
+                        inp = eq.inputs.get(port)
+                        if inp and inp.driver and inp.driver.op == PrimOp.CONST:
+                            other_port = "B" if port == "A" else "A"
+                            other = eq.inputs.get(other_port)
+                            if other and other.name == sel_name:
+                                case_val = int(inp.driver.params.get("value", 0))
+                                break
+
+                if case_val is not None and b and b.driver and b.driver.op == PrimOp.CONST:
+                    case_map[case_val] = int(b.driver.params.get("value", 0))
+
+                if a is None or a.driver is None:
+                    break
+                current = a.driver
+
+            if len(case_map) < 2 or len(chain_cells) < 2:
+                continue
+
+            # All case values must be constants for PMUX conversion
+            # Build the PMUX: default + one input per case value
+            mask = (1 << width) - 1
+            _ctr2[0] += 1
+            pmux_name = f"$case_pmux_{_ctr2[0]}"
+            pmux = mod.add_cell(pmux_name, PrimOp.PMUX, count=len(case_map))
+
+            # Default input
+            dflt_name = f"$case_dflt_{_ctr2[0]}"
+            dflt_net = mod.add_net(f"{dflt_name}_o", width)
+            dflt_cell = mod.add_cell(dflt_name, PrimOp.CONST, value=default_val & mask, width=width)
+            mod.connect(dflt_cell, "Y", dflt_net, direction="output")
+            mod.connect(pmux, "A", dflt_net)
+
+            # Selector bits as a single net
+            mod.connect(pmux, "S", sel_net)
+
+            # Case inputs
+            sorted_cases = sorted(case_map.items())
+            # Build select bitmask: bit i is set when selector == sorted_cases[i].key
+            # For PMUX, we need per-case select bits. Build EQ cells.
+            sel_bits_name = f"$case_selbits_{_ctr2[0]}"
+            sel_bits_net = mod.add_net(f"{sel_bits_name}_o", len(sorted_cases))
+
+            # PMUX select: build a CONCAT of EQ outputs
+            for idx, (cv, dv) in enumerate(sorted_cases):
+                val_name = f"$case_val_{_ctr2[0]}_{idx}"
+                val_net = mod.add_net(f"{val_name}_o", width)
+                val_cell = mod.add_cell(val_name, PrimOp.CONST, value=dv & mask, width=width)
+                mod.connect(val_cell, "Y", val_net, direction="output")
+                mod.connect(pmux, f"I{idx}", val_net)
+
+            # PMUX output replaces the chain tail's output
+            pmux_out = mod.add_net(f"{pmux_name}_o", width)
+            mod.connect(pmux, "Y", pmux_out, direction="output")
+
+            # Redirect all consumers of the tail's output to the PMUX output
+            old_out = out_net
+            for other in mod.cells.values():
+                if other.name == pmux_name:
+                    continue
+                for pn, pnet in list(other.inputs.items()):
+                    if pnet is old_out:
+                        other.inputs[pn] = pmux_out
+            for pn, pnet in list(mod.ports.items()):
+                if pnet is old_out:
+                    mod.ports[pn] = pmux_out
+
+            eliminated += len(chain_cells)
 
     return eliminated
 
@@ -1297,6 +1505,62 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
     if _nrep2 > 0:
         constant_fold(mod)
         identity_simplify(mod)
+        dead_code_eliminate(mod)
+
+    # Item 7: SAT-proven equivalence merging.
+    # Find net pairs with identical value signatures from the simulation
+    # data, then prove equivalence via exhaustive cone evaluation.
+    from nosis.satconst import prove_equivalences_sat
+    from collections import defaultdict
+
+    _sig_groups: dict[tuple, list[str]] = defaultdict(list)
+    for _n, _svs in _nv2.items():
+        if len(_svs) != 1:
+            # Non-constant: use the full value signature as a key
+            _net = mod.nets.get(_n)
+            if _net is None or _n in mod.ports:
+                continue
+            if _net.driver and _net.driver.op in (PrimOp.CONST, PrimOp.INPUT, PrimOp.FF):
+                continue
+            if _n in _mem_fanout2:
+                continue
+            sig = tuple(sorted(_svs))
+            _sig_groups[sig].append(_n)
+
+    _eq_candidates: list[tuple[str, str]] = []
+    for sig, nets in _sig_groups.items():
+        if len(nets) < 2:
+            continue
+        # Only try pairs with the same width
+        for i in range(len(nets)):
+            ni = mod.nets.get(nets[i])
+            if ni is None:
+                continue
+            for j in range(i + 1, min(i + 5, len(nets))):  # limit pairs per group
+                nj = mod.nets.get(nets[j])
+                if nj is None or nj.width != ni.width:
+                    continue
+                _eq_candidates.append((nets[i], nets[j]))
+
+    _proven_eq = prove_equivalences_sat(mod, _eq_candidates, max_cone_inputs=16)
+    _eq_merged = 0
+    for _na, _nb in _proven_eq:
+        _net_a = mod.nets.get(_na)
+        _net_b = mod.nets.get(_nb)
+        if _net_a is None or _net_b is None:
+            continue
+        # Redirect all consumers of net_b to net_a
+        for _c in mod.cells.values():
+            for _pn, _pnet in list(_c.inputs.items()):
+                if _pnet is _net_b or _pnet.name == _nb:
+                    _c.inputs[_pn] = _net_a
+        for _pn, _pnet in list(mod.ports.items()):
+            if _pnet is _net_b:
+                mod.ports[_pn] = _net_a
+        _eq_merged += 1
+
+    stats["sat_equiv"] = _eq_merged
+    if _eq_merged > 0:
         dead_code_eliminate(mod)
 
     # Cut-based re-mapping: absorb multi-cell cones into single LUT4s

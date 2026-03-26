@@ -949,6 +949,51 @@ class _ECP5Mapper:
                 lut.ports["D"] = ["0"]
                 lut.ports["Z"] = [out_bits[0] if out_bits else self.nl.alloc_bit()]
                 return
+        # Wide-output per-bit LUT4: if selector ≤ 4 bits and all case values
+        # are constants, compute one LUT4 truth table per output bit.
+        if s_net.width <= 4 and count >= 2:
+            all_const = True
+            default_driver = a_net.driver
+            default_val = 0
+            if default_driver and default_driver.op == PrimOp.CONST:
+                default_val = int(default_driver.params.get("value", 0))
+            else:
+                all_const = False
+
+            case_values: list[int] = []
+            for i in range(count):
+                ci = cell.inputs.get(f"I{i}")
+                if ci and ci.driver and ci.driver.op == PrimOp.CONST:
+                    case_values.append(int(ci.driver.params.get("value", 0)))
+                else:
+                    all_const = False
+                    break
+
+            if all_const:
+                out_bits = self._get_bits(out_net)
+                s_bits = self._get_bits(s_net)
+                for bit_idx in range(width):
+                    init = 0
+                    for sel_val in range(16):
+                        sv = sel_val & ((1 << s_net.width) - 1)
+                        result = (default_val >> bit_idx) & 1
+                        for ci in range(count):
+                            if (sv >> ci) & 1 and ci < len(case_values):
+                                result = (case_values[ci] >> bit_idx) & 1
+                                break
+                        if result:
+                            init |= (1 << sel_val)
+                    lut = self.nl.add_cell(self._fresh_name("pmux_wlut"), "LUT4")
+                    if cell.src:
+                        lut.attributes["src"] = cell.src
+                    lut.parameters["INIT"] = format(init, "016b")
+                    lut.ports["A"] = [s_bits[0] if len(s_bits) > 0 else "0"]
+                    lut.ports["B"] = [s_bits[1] if len(s_bits) > 1 else "0"]
+                    lut.ports["C"] = [s_bits[2] if len(s_bits) > 2 else "0"]
+                    lut.ports["D"] = [s_bits[3] if len(s_bits) > 3 else "0"]
+                    lut.ports["Z"] = [out_bits[bit_idx] if bit_idx < len(out_bits) else self.nl.alloc_bit()]
+                return
+
         width = out_net.width
         count = int(cell.params.get("count", 0))
         if count == 0:

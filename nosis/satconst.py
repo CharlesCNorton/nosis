@@ -234,3 +234,106 @@ def prove_constants_sat(
             proven[net_name] = expected_val
 
     return proven
+
+
+def prove_equivalences_sat(
+    mod: Module,
+    candidates: list[tuple[str, str]],
+    *,
+    max_cone_inputs: int = 16,
+) -> list[tuple[str, str]]:
+    """Prove which candidate net pairs are provably equivalent.
+
+    *candidates*: list of ``(net_a_name, net_b_name)`` pairs observed as
+    equivalent during simulation.
+
+    Returns the subset of pairs proven equivalent via exhaustive evaluation
+    of the combined logic cones. Pairs that fail the proof (a distinguishing
+    input exists) are excluded. Pairs where either net has an FF boundary
+    in its cone are excluded (sequential feedback makes combinational proof
+    unsound).
+    """
+    from nosis.eval import eval_cell
+
+    proven: list[tuple[str, str]] = []
+
+    for net_a_name, net_b_name in candidates:
+        net_a = mod.nets.get(net_a_name)
+        net_b = mod.nets.get(net_b_name)
+        if net_a is None or net_b is None:
+            continue
+        if net_a.width != net_b.width:
+            continue
+
+        cone_a, boundary_a, has_ff_a = _collect_cone(mod, net_a)
+        cone_b, boundary_b, has_ff_b = _collect_cone(mod, net_b)
+        if has_ff_a or has_ff_b:
+            continue
+
+        # Combined boundary: union of both cones' inputs
+        boundary = boundary_a | boundary_b
+        if len(boundary) > max_cone_inputs:
+            continue
+
+        # Combined cells: deduplicate by name
+        seen: set[str] = set()
+        combined: list[Cell] = []
+        for c in cone_a + cone_b:
+            if c.name not in seen:
+                seen.add(c.name)
+                combined.append(c)
+
+        n_inputs = len(boundary)
+        if n_inputs == 0:
+            # No inputs — evaluate once
+            net_values: dict[str, int] = {}
+            for c in mod.cells.values():
+                if c.op == PrimOp.CONST:
+                    for out in c.outputs.values():
+                        net_values[out.name] = int(c.params.get("value", 0))
+            for c in combined:
+                results = eval_cell(c, net_values)
+                for pname, val in results.items():
+                    out = c.outputs.get(pname)
+                    if out:
+                        net_values[out.name] = val
+            mask = (1 << net_a.width) - 1
+            va = net_values.get(net_a_name, 0) & mask
+            vb = net_values.get(net_b_name, 0) & mask
+            if va == vb:
+                proven.append((net_a_name, net_b_name))
+            continue
+
+        # Exhaustive: enumerate all 2^n input combinations
+        boundary_list = sorted(boundary)
+        is_equiv = True
+        mask = (1 << net_a.width) - 1
+        for i in range(1 << n_inputs):
+            net_values = {}
+            for idx, bname in enumerate(boundary_list):
+                bnet = mod.nets.get(bname)
+                if bnet:
+                    net_values[bname] = (i >> idx) & ((1 << bnet.width) - 1)
+
+            for c in mod.cells.values():
+                if c.op == PrimOp.CONST:
+                    for out in c.outputs.values():
+                        net_values[out.name] = int(c.params.get("value", 0))
+
+            for c in combined:
+                results = eval_cell(c, net_values)
+                for pname, val in results.items():
+                    out = c.outputs.get(pname)
+                    if out:
+                        net_values[out.name] = val
+
+            va = net_values.get(net_a_name, 0) & mask
+            vb = net_values.get(net_b_name, 0) & mask
+            if va != vb:
+                is_equiv = False
+                break
+
+        if is_equiv:
+            proven.append((net_a_name, net_b_name))
+
+    return proven

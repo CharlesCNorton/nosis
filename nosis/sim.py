@@ -310,6 +310,7 @@ class FastSimulator:
         visited: set[str] = set()
 
         def visit(cell: Cell) -> None:
+            """Visit a single node during traversal."""
             if cell.name in visited:
                 return
             visited.add(cell.name)

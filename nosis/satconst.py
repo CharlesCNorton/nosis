@@ -31,6 +31,7 @@ def _collect_cone(mod: Module, target_net: Net) -> tuple[list[Cell], set[str], b
     has_ff = False
 
     def walk(net: Net) -> None:
+        """Walk the data structure, calling the visitor function."""
         nonlocal has_ff
         if net.driver is None:
             boundary.add(net.name)

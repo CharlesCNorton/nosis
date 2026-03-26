@@ -30,6 +30,7 @@ class NetlistDiff:
 
     @property
     def identical(self) -> bool:
+        """Return True if the two objects are structurally identical."""
         return (
             not self.cells_added
             and not self.cells_removed
@@ -40,6 +41,7 @@ class NetlistDiff:
         )
 
     def summary_lines(self) -> list[str]:
+        """Return human-readable summary lines."""
         if self.identical:
             return ["Netlists are identical."]
         lines = ["--- Netlist Diff ---"]

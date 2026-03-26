@@ -1126,3 +1126,30 @@ def test_retime_backward_basic():
     ops = {c.op for c in mod.cells.values()}
     assert PrimOp.FF in ops
 
+
+
+# --- Equivalence verification ---
+
+def test_verify_mode_passes_on_simple_design():
+    """verify=True should not raise on a simple correct optimization."""
+    mod = Module(name="t")
+    a = mod.add_net("a", 1)
+    y = mod.add_net("y", 1)
+    ac = mod.add_cell("ap", PrimOp.INPUT, port_name="a")
+    mod.connect(ac, "Y", a, direction="output")
+    mod.ports["a"] = a
+    oc = mod.add_cell("yp", PrimOp.OUTPUT, port_name="y")
+    mod.connect(oc, "A", y)
+    mod.ports["y"] = y
+    # a & 1 = a (identity)
+    ones = mod.add_net("ones", 1)
+    cc = mod.add_cell("cc", PrimOp.CONST, value=1, width=1)
+    mod.connect(cc, "Y", ones, direction="output")
+    gc = mod.add_cell("g", PrimOp.AND)
+    mod.connect(gc, "A", a)
+    mod.connect(gc, "B", ones)
+    mod.connect(gc, "Y", y, direction="output")
+
+    stats = run_default_passes(mod, verify=True)
+    # Should complete without raising
+    assert stats is not None

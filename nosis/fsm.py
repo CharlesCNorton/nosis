@@ -197,6 +197,7 @@ def _collect_mux_tree(mod: Module, root_net: Net, state_net_name: str) -> tuple[
     max_depth = 0
 
     def walk(net: Net, depth: int) -> None:
+        """Walk the data structure, calling the visitor function."""
         nonlocal max_depth
         max_depth = max(max_depth, depth)
 

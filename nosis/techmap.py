@@ -58,25 +58,30 @@ class ECP5Netlist:
     _bit_counter: int = 2  # 0 and 1 are reserved for constant 0/1
 
     def alloc_bit(self) -> int:
+        """Allocate a fresh signal bit index. Bits 0/1 are reserved for constants."""
         bit = self._bit_counter
         self._bit_counter += 1
         return bit
 
     def alloc_bits(self, count: int) -> list[int]:
+        """Allocate *count* consecutive signal bit indices."""
         return [self.alloc_bit() for _ in range(count)]
 
     def add_net(self, name: str, width: int) -> ECP5Net:
+        """Create a named net with *width* freshly allocated bits."""
         bits = self.alloc_bits(width)
         net = ECP5Net(name=name, bits=bits)
         self.nets[name] = net
         return net
 
     def add_cell(self, name: str, cell_type: str) -> ECP5Cell:
+        """Create a named cell of the given ECP5 primitive type."""
         cell = ECP5Cell(name=name, cell_type=cell_type)
         self.cells[name] = cell
         return cell
 
     def stats(self) -> dict[str, int]:
+        """Return cell type counts: ``{cell_type: count}``."""
         from collections import Counter
         type_counts = Counter(c.cell_type for c in self.cells.values())
         return {
@@ -579,11 +584,38 @@ class _ECP5Mapper:
                 dsp.ports["SIGNEDB"] = ["1" if cell.params.get("dsp_signed_b") else "0"]
                 return
         if cell.op in (PrimOp.DIV, PrimOp.MOD):
+            # Check if divisor B is a constant
+            b_net = cell.inputs.get("B")
+            b_const = None
+            if b_net and b_net.driver and b_net.driver.op == PrimOp.CONST:
+                b_const = int(b_net.driver.params.get("value", 0))
+
+            if b_const is not None and b_const > 0:
+                # Power-of-2: DIV = SHR, MOD = AND with mask
+                if (b_const & (b_const - 1)) == 0:
+                    a_net = cell.inputs.get("A")
+                    out_nets = list(cell.outputs.values())
+                    if a_net and out_nets:
+                        out_net = out_nets[0]
+                        a_bits = self._get_bits(a_net)
+                        out_ecp5 = self._get_net(out_net)
+                        shift = b_const.bit_length() - 1
+                        if cell.op == PrimOp.DIV:
+                            # a / 2^n = a >> n (wiring only)
+                            for i in range(out_net.width):
+                                src = i + shift
+                                out_ecp5.bits[i] = a_bits[src] if src < len(a_bits) else "0"
+                        else:
+                            # a % 2^n = a & (2^n - 1) (keep lower n bits)
+                            for i in range(out_net.width):
+                                out_ecp5.bits[i] = a_bits[i] if i < shift and i < len(a_bits) else "0"
+                    return
+
+            # Non-power-of-2 or variable divisor: cannot implement in LUTs
             import warnings
             warnings.warn(
-                f"DIV/MOD operation '{cell.name}' cannot be implemented in LUTs "
-                f"and is mapped to constant 0. Use DSP inference or avoid '/' and "
-                f"'%' in synthesizable RTL for correct results.",
+                f"DIV/MOD operation '{cell.name}' with non-power-of-2 divisor "
+                f"mapped to constant 0. Use power-of-2 divisors or DSP inference.",
                 UserWarning,
                 stacklevel=2,
             )

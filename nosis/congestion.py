@@ -51,6 +51,7 @@ class CongestionReport:
     density_score: float        # 0-100, higher = more congested
 
     def summary_lines(self) -> list[str]:
+        """Return human-readable summary lines."""
         lines = [
             "--- Congestion Analysis ---",
             f"Total nets: {self.total_nets}",

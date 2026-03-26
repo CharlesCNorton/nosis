@@ -1,7 +1,6 @@
-# Nosis — Open Items
+# TODO
 
-No critical items remain. The following are enhancement opportunities:
-
-1. Push SoC LUT count toward sub-1000 (currently ~5,000 optimized LUT4 cells; nextpnr packs to ~2,500 slices)
-2. BRAM initialization flow: $readmemh path tracking works but no test exercises it end-to-end with a hex file
-3. Post-synthesis simulation accuracy: cell models are simplified behavioral, not cycle-accurate with ECP5 timing
+4. Run iverilog gate-level simulation in CI against RTL for bundled designs
+7. Complete incremental compilation — full edit-detect-remap-verify cycle with test
+11. Make mypy failures break CI (42 type errors to fix first)
+12. Add end-to-end nextpnr route + ecppack bitstream test for uart_tx

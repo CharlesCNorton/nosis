@@ -36,6 +36,7 @@ class BMCResult:
     method: str
 
     def summary(self) -> str:
+        """Return a human-readable summary string."""
         if self.holds:
             return f"{self.property_name}: HOLDS for {self.bound} cycles [{self.method}]"
         return f"{self.property_name}: VIOLATED at cycle {self.counterexample_cycle} [{self.method}]"

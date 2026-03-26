@@ -93,6 +93,7 @@ def _topological_order(mod: Module) -> list[Cell]:
     visited: set[str] = set()
 
     def visit(cell: Cell) -> None:
+        """Visit a single node during traversal."""
         if cell.name in visited:
             return
         visited.add(cell.name)
@@ -203,6 +204,7 @@ def _try_sat_equivalence(
     var_counter = [1]  # CNF variables start at 1
 
     def new_var() -> int:
+        """Allocate a fresh SAT variable."""
         v = var_counter[0]
         var_counter[0] += 1
         return v

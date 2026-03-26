@@ -56,6 +56,7 @@ class LpfConstraints:
     raw_lines: int = 0
 
     def port_names(self) -> set[str]:
+        """Return the list of port names."""
         names: set[str] = set()
         for p in self.pins:
             names.add(p.comp)
@@ -72,6 +73,7 @@ class LpfConstraints:
         return warnings
 
     def summary_lines(self) -> list[str]:
+        """Return human-readable summary lines."""
         lines = [
             "--- LPF Constraints ---",
             f"Pin assignments: {len(self.pins)}",

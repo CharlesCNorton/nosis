@@ -33,6 +33,7 @@ class RoutingEstimate:
     logic_delay_ns: float
 
     def summary_lines(self) -> list[str]:
+        """Return human-readable summary lines."""
         return [
             "--- Routing Delay Estimate ---",
             f"Avg routing delay: {self.avg_routing_delay_ns:.2f} ns",

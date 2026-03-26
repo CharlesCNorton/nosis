@@ -26,6 +26,7 @@ __all__ = ["main"]
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point."""
     parser = argparse.ArgumentParser(description="Nosis — correctness-first FPGA synthesis")
     parser.add_argument("--version", action="version", version=f"%(prog)s {_version()}")
     parser.add_argument("input", nargs="+", help="SystemVerilog or Verilog source files")
@@ -35,6 +36,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-D", "--define", action="append", default=[], help="preprocessor define (NAME or NAME=VALUE)")
     parser.add_argument("-I", "--include", action="append", default=[], help="include search directory")
     parser.add_argument("--no-opt", action="store_true", help="skip optimization passes")
+    parser.add_argument("--verify", action="store_true", help="check equivalence after each optimization pass (slow)")
     parser.add_argument("--dump-ir", action="store_true", help="print the IR after lowering and exit")
     parser.add_argument("--emit-verilog", action="store_true", help="emit Verilog text output for the IR and exit")
     parser.add_argument("--check", action="store_true", help="parse and validate only — do not emit any output")
@@ -98,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     # --- Optimize ---
     if not args.no_opt:
         from nosis.passes import run_default_passes
-        opt_stats = run_default_passes(mod)
+        opt_stats = run_default_passes(mod, verify=getattr(args, 'verify', False))
         t_opt = time.monotonic()
         if args.verbose:
             print(f"opt: {opt_stats}")

@@ -61,9 +61,11 @@ class IRDelta:
 
     @property
     def changed_count(self) -> int:
+        """Return the number of changed entries."""
         return len(self.cells_added) + len(self.cells_removed) + len(self.cells_modified)
 
     def summary_lines(self) -> list[str]:
+        """Return human-readable summary lines."""
         if self.is_empty:
             return ["No changes detected — synthesis output is unchanged."]
         lines = [
@@ -211,18 +213,22 @@ class CellMappingCache:
         self._entries: dict[str, list[str]] = {}
 
     def store(self, ir_hash: str, ecp5_names: list[str]) -> None:
+        """Store a value in the cache."""
         self._entries[ir_hash] = list(ecp5_names)
 
     def lookup(self, ir_hash: str) -> list[str] | None:
+        """Look up a cached value by key."""
         return self._entries.get(ir_hash)
 
     def remove(self, ir_hash: str) -> None:
+        """Remove an entry from the cache."""
         self._entries.pop(ir_hash, None)
 
     def __len__(self) -> int:
         return len(self._entries)
 
     def clear(self) -> None:
+        """Clear all cached entries."""
         self._entries.clear()
 
 

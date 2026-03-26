@@ -36,6 +36,7 @@ def _collect_cone_inputs(mod: Module, target_cell: Cell, max_depth: int = 3) -> 
     visited_cells: set[str] = set()
 
     def walk(cell: Cell, depth: int) -> bool:
+        """Walk the data structure, calling the visitor function."""
         if cell.name in visited_cells:
             return True
         visited_cells.add(cell.name)

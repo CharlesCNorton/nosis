@@ -142,6 +142,7 @@ class Module:
     ports: dict[str, Net] = field(default_factory=dict)
 
     def add_net(self, name: str, width: int) -> Net:
+        """Add a named net with the given width."""
         if name in self.nets:
             raise ValueError(f"duplicate net: {name}")
         net = Net(name=name, width=width)
@@ -149,6 +150,7 @@ class Module:
         return net
 
     def add_cell(self, name: str, op: PrimOp, src: str = "", **params: Any) -> Cell:
+        """Add a named cell with the given operation."""
         if name in self.cells:
             raise ValueError(f"duplicate cell: {name}")
         cell = Cell(name=name, op=op, params=params, src=src)
@@ -156,6 +158,7 @@ class Module:
         return cell
 
     def connect(self, cell: Cell, port: str, net: Net, *, direction: str = "input") -> None:
+        """Connect a cell port to a net."""
         if direction == "input":
             cell.inputs[port] = net
         elif direction == "output":
@@ -165,6 +168,7 @@ class Module:
             raise ValueError(f"direction must be 'input' or 'output', got {direction!r}")
 
     def stats(self) -> dict[str, int]:
+        """Return statistics as a dict."""
         from collections import Counter
         op_counts = Counter(cell.op for cell in self.cells.values())
         return {
@@ -183,6 +187,7 @@ class Design:
     synthesis_warnings: list = field(default_factory=list)  # SynthesisWarning instances
 
     def add_module(self, name: str) -> Module:
+        """Add a module to the design."""
         if name in self.modules:
             raise ValueError(f"duplicate module: {name}")
         module = Module(name=name)
@@ -190,6 +195,7 @@ class Design:
         return module
 
     def top_module(self) -> Module:
+        """Return the top-level module."""
         if self.top and self.top in self.modules:
             return self.modules[self.top]
         if len(self.modules) == 1:

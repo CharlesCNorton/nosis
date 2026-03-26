@@ -36,6 +36,8 @@ endmodule
 module TRELLIS_FF_SIM #(
     parameter GSR = "DISABLED",
     parameter CEMUX = "CE",
+    parameter GSR = "DISABLED",
+    parameter CEMUX = "CE",
     parameter CLKMUX = "CLK",
     parameter LSRMUX = "LSR",
     parameter REGSET = "RESET",
@@ -45,13 +47,24 @@ module TRELLIS_FF_SIM #(
     input CLK, DI, LSR, CE,
     output reg Q
 );
+    wire rst_val = (REGSET == "SET") ? 1'b1 : 1'b0;
+    wire lsr_active = (LSRMUX == "LSR") ? LSR : ~LSR;
+    wire ce_active = (CEMUX == "CE") ? CE : ~CE;
+
     initial Q = INIT;
-    always @(posedge CLK) begin
-        if (LSR && LSRMUX == "LSR")
-            Q <= (REGSET == "SET") ? 1'b1 : 1'b0;
-        else if (CE)
+
+    // Async reset (SRMODE == "ASYNC")
+    always @(posedge CLK or posedge lsr_active) begin
+        if (lsr_active && SRMODE == "ASYNC")
+            Q <= rst_val;
+        else if (SRMODE == "LSR_OVER_CE" && lsr_active)
+            Q <= rst_val;
+        else if (ce_active)
             Q <= DI;
     end
+
+    // GSR: global set/reset at power-up
+    // In simulation, INIT handles this via the initial block.
 endmodule
 
 module CCU2C_SIM #(

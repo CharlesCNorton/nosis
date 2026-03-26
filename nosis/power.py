@@ -61,6 +61,7 @@ class PowerReport:
     breakdown: dict[str, tuple[float, float]]  # cell_type -> (static_mw, dynamic_mw)
 
     def summary_lines(self) -> list[str]:
+        """Return human-readable summary lines."""
         lines = [
             "--- Power Analysis (estimated, 12.5% toggle, 1.1V) ---",
             f"Frequency:     {self.frequency_mhz:.1f} MHz",

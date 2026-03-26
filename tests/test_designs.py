@@ -394,3 +394,27 @@ def test_cli_lpf():
         Path(lpf).write_text("LOCATE COMP \"clk\" SITE \"P3\";\n")
         rc = main(["-o", out, "--lpf", lpf, "--top", "uart_tx", RIME_UART_TX])
         assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# Yosys comparison — verify nosis produces fewer or comparable LUTs
+# ---------------------------------------------------------------------------
+
+def test_uart_tx_lut_count_competitive():
+    """Optimized uart_tx LUT count must be competitive with yosys synth_ecp5."""
+    from nosis.slicepack import pack_slices
+    d = get_design("uart_tx")
+    mod = d.mod
+    run_default_passes(mod)
+    from nosis.techmap import map_to_ecp5
+    from nosis.frontend import parse_files as pf, lower_to_ir as lir
+    r = pf([RIME_UART_TX], top="uart_tx")
+    design = lir(r, top="uart_tx")
+    m = design.top_module()
+    run_default_passes(m)
+    nl = map_to_ecp5(design)
+    pack_slices(nl)
+    nosis_luts = nl.stats().get("LUT4", 0)
+    # yosys synth_ecp5 produces ~15-20 LUT4 for uart_tx
+    # nosis should be within 2x of yosys
+    assert nosis_luts < 40, f"nosis uart_tx LUT count ({nosis_luts}) is not competitive"

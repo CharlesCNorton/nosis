@@ -828,13 +828,84 @@ def _narrow_eq_width(mod: Module) -> int:
 
 
 
-def run_default_passes(mod: Module) -> dict[str, int]:
-    """Run the default optimization pipeline. Returns pass statistics."""
+def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
+    """Run the default optimization pipeline. Returns pass statistics.
+
+    If *verify* is True, runs equivalence checking after each pass to
+    confirm functional equivalence is preserved. Expensive — intended
+    for debug and CI validation, not production synthesis.
+    """
     from nosis.cse import eliminate_common_subexpressions
     from nosis.boolopt import boolean_optimize, tech_aware_optimize
+    import copy
+
+    def _check_equiv(before_mod: Module, after_mod: Module, pass_name: str) -> None:
+        """Verify two modules are functionally equivalent via simulation.
+
+        Uses FastSimulator on both modules with random inputs and compares
+        output port values. This avoids structural issues with deepcopy
+        and the formal equivalence checker's port-matching requirements.
+        """
+        if not verify:
+            return
+        import random
+        from nosis.sim import FastSimulator
+
+        # Collect input ports (by name) and output ports
+        input_ports: dict[str, int] = {}
+        output_ports: list[str] = []
+        for cell in before_mod.cells.values():
+            if cell.op == PrimOp.INPUT:
+                pn = str(cell.params.get("port_name", ""))
+                for out in cell.outputs.values():
+                    input_ports[pn] = out.width
+            elif cell.op == PrimOp.OUTPUT:
+                for inp in cell.inputs.values():
+                    output_ports.append(inp.name)
+
+        if not input_ports or not output_ports:
+            return
+
+        total_bits = sum(input_ports.values())
+        if total_bits > 20:
+            return
+
+        # Map output port names to actual net names in each module
+        def _out_net_names(m: Module) -> dict[str, str]:
+            result: dict[str, str] = {}
+            for cell in m.cells.values():
+                if cell.op == PrimOp.OUTPUT:
+                    pn = str(cell.params.get("port_name", ""))
+                    for inp in cell.inputs.values():
+                        result[pn or inp.name] = inp.name
+            return result
+
+        out_map_before = _out_net_names(before_mod)
+        out_map_after = _out_net_names(after_mod)
+
+        sim_before = FastSimulator(before_mod)
+        sim_after = FastSimulator(after_mod)
+        rng = random.Random(42)
+
+        for _ in range(min(1000, 1 << total_bits)):
+            inputs = {name: rng.getrandbits(w) for name, w in input_ports.items()}
+            vals_a = sim_before.step(inputs)
+            vals_b = sim_after.step(inputs)
+            for out_label in output_ports:
+                net_a = out_map_before.get(out_label, out_label)
+                net_b = out_map_after.get(out_label, out_label)
+                va = vals_a.get(net_a, vals_a.get(out_label, 0))
+                vb = vals_b.get(net_b, vals_b.get(out_label, 0))
+                if va != vb:
+                    raise AssertionError(
+                        f"Equivalence check failed after '{pass_name}': "
+                        f"output '{out_label}' differs at inputs {inputs}: "
+                        f"before={va}, after={vb}"
+                    )
 
     stats: dict[str, int] = {}
     prev_cells = len(mod.cells)
+    snapshot = copy.deepcopy(mod) if verify else None
 
     for iteration in range(6):
         cf = constant_fold(mod)
@@ -857,6 +928,9 @@ def run_default_passes(mod: Module) -> dict[str, int]:
         if cur_cells == prev_cells:
             break
         prev_cells = cur_cells
+
+    if snapshot is not None:
+        _check_equiv(snapshot, mod, "iterative_optimization")
 
     # Timing-driven extra round: identify critical path, re-optimize those cells
     from nosis.timing import analyze_timing

@@ -97,6 +97,7 @@ class AreaCalculation:
     binding_resource: str    # "lut", "ff", "carry", or "none"
 
     def summary_lines(self) -> list[str]:
+        """Return human-readable summary lines."""
         lines = [
             "--- Area Calculation ---",
             f"LUT cells:     {self.lut_cells:>6}  ({self.slices_for_luts} slices)",
@@ -121,46 +122,57 @@ class ResourceReport:
 
     @property
     def slice_pct(self) -> float:
+        """Return slice utilization as a percentage."""
         return 100.0 * self.area.slices_total / self.device.slices if self.device.slices else 0
 
     @property
     def lut_pct(self) -> float:
+        """Return LUT utilization as a percentage."""
         return 100.0 * self.area.lut_cells / self.device.luts if self.device.luts else 0
 
     @property
     def ff_pct(self) -> float:
+        """Return FF utilization as a percentage."""
         return 100.0 * self.area.ff_cells / self.device.ffs if self.device.ffs else 0
 
     @property
     def bram_pct(self) -> float:
+        """Return BRAM utilization as a percentage."""
         return 100.0 * self.area.bram_tiles / self.device.brams if self.device.brams else 0
 
     @property
     def dsp_pct(self) -> float:
+        """Return DSP utilization as a percentage."""
         return 100.0 * self.area.dsp_tiles / self.device.dsp_tiles if self.device.dsp_tiles else 0
 
     # Keep backward-compatible properties
     @property
     def luts_used(self) -> int:
+        """Return the number of LUTs used."""
         return self.area.lut_cells
 
     @property
     def ffs_used(self) -> int:
+        """Return the number of FFs used."""
         return self.area.ff_cells
 
     @property
     def brams_used(self) -> int:
+        """Return the number of BRAMs used."""
         return self.area.bram_cells
 
     @property
     def dsps_used(self) -> int:
+        """Return the number of DSPs used."""
         return self.area.dsp_cells
 
     @property
     def carry_used(self) -> int:
+        """Return the number of carry chains used."""
         return self.area.ccu2c_cells
 
     def summary_lines(self) -> list[str]:
+        """Return human-readable summary lines."""
         lines = [
             f"Device: {self.device.name}",
             f"Slices: {self.area.slices_total:>6} / {self.device.slices:<6} ({self.slice_pct:5.1f}%)",

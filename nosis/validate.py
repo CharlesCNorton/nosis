@@ -52,6 +52,7 @@ class ValidationResult:
     error: str | None = None
 
     def summary(self) -> str:
+        """Return a human-readable summary string."""
         status = "PASS" if self.passed else "FAIL"
         extra = ""
         if self.mismatches:

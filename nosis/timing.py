@@ -117,6 +117,7 @@ class TimingReport:
     cell_delay_breakdown: dict[str, float]  # {cell_type: total_delay}
 
     def summary_lines(self) -> list[str]:
+        """Return human-readable summary lines."""
         lines = [
             "--- Timing Analysis (logic-only, no routing) ---",
             f"Critical path delay: {self.max_delay_ns:.2f} ns",

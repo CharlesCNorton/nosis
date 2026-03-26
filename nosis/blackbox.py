@@ -50,14 +50,17 @@ class BlackBoxDef:
 
     @property
     def port_names(self) -> list[str]:
+        """Return the list of port names."""
         return [p.name for p in self.ports]
 
     @property
     def input_ports(self) -> list[BlackBoxPort]:
+        """Return input port names."""
         return [p for p in self.ports if p.direction == "input"]
 
     @property
     def output_ports(self) -> list[BlackBoxPort]:
+        """Return output port names."""
         return [p for p in self.ports if p.direction == "output"]
 
 
@@ -73,15 +76,19 @@ class BlackBoxRegistry:
         self._defs: dict[str, BlackBoxDef] = {}
 
     def register(self, defn: BlackBoxDef) -> None:
+        """Register an entry in the collection."""
         self._defs[defn.name] = defn
 
     def is_blackbox(self, name: str) -> bool:
+        """Check if the given name is a registered black box."""
         return name in self._defs
 
     def get(self, name: str) -> BlackBoxDef | None:
+        """Look up an entry by name."""
         return self._defs.get(name)
 
     def all_names(self) -> list[str]:
+        """Return all registered names."""
         return sorted(self._defs.keys())
 
     def __len__(self) -> int:
@@ -99,6 +106,7 @@ class BlackBoxRegistry:
         self.register(BlackBoxDef(name=name, ports=port_list, **kwargs))
 
     def summary(self) -> list[str]:
+        """Return a human-readable summary string."""
         lines = [f"Black box registry: {len(self._defs)} modules"]
         for name in sorted(self._defs):
             defn = self._defs[name]

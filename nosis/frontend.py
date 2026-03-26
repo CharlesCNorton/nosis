@@ -1102,6 +1102,7 @@ class _Lowerer:
 
         # Walk all members
         def walk_member(node: Any) -> None:
+            """Process a single member during AST walk."""
             kind = str(node.kind)
 
             if kind == "SymbolKind.Variable":
@@ -1271,6 +1272,7 @@ class _Lowerer:
             elif kind == "SymbolKind.InterfaceInstance":
                 if hasattr(node, "body"):
                     def walk_interface(inode: Any) -> None:
+                        """Walk an interface instance."""
                         ikind = str(inode.kind)
                         if ikind == "SymbolKind.Variable":
                             iw = self._bit_width(inode)
@@ -1320,6 +1322,7 @@ class _Lowerer:
         # Lower the sub-instance body (variables, parameters, procedural blocks)
         # but NOT ports — we wire those manually below
         def walk_sub(node):
+            """Walk a sub-module instance."""
             kind = str(node.kind)
             if kind == "SymbolKind.Variable":
                 w = sub._bit_width(node)

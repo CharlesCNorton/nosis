@@ -1433,3 +1433,71 @@ def test_compare_signed_produces_extra_luts():
     luts = nl.stats().get("LUT4", 0)
     # 8 chain LUTs + 2 MSB inversion LUTs = 10
     assert luts >= 10, f"signed 8-bit LT should need >= 10 LUT4, got {luts}"
+
+
+# --- DIV/MOD power-of-2 mapping ---
+
+def test_div_power_of_2_is_wiring():
+    """DIV by power of 2 should be pure wiring (shift), no LUT4 cells."""
+    from nosis.ir import Design
+    from nosis.techmap import map_to_ecp5
+
+    design = Design()
+    mod = design.add_module("divtest")
+    design.top = "divtest"
+
+    a = mod.add_net("a", 8)
+    y = mod.add_net("y", 8)
+    ac = mod.add_cell("ap", PrimOp.INPUT, port_name="a")
+    mod.connect(ac, "Y", a, direction="output")
+    mod.ports["a"] = a
+
+    # Constant divisor = 4 (power of 2)
+    c4 = mod.add_net("c4", 8)
+    cc = mod.add_cell("c4", PrimOp.CONST, value=4, width=8)
+    mod.connect(cc, "Y", c4, direction="output")
+
+    div = mod.add_cell("div0", PrimOp.DIV)
+    mod.connect(div, "A", a)
+    mod.connect(div, "B", c4)
+    mod.connect(div, "Y", y, direction="output")
+
+    oc = mod.add_cell("yp", PrimOp.OUTPUT, port_name="y")
+    mod.connect(oc, "A", y)
+    mod.ports["y"] = y
+
+    nl = map_to_ecp5(design)
+    # Power-of-2 div is pure wiring — should produce zero LUT4 cells
+    assert nl.stats().get("LUT4", 0) == 0, f"expected 0 LUT4 for div-by-4, got {nl.stats().get('LUT4', 0)}"
+
+
+def test_mod_power_of_2_is_masking():
+    """MOD by power of 2 should be pure wiring (bit mask), no LUT4 cells."""
+    from nosis.ir import Design
+    from nosis.techmap import map_to_ecp5
+
+    design = Design()
+    mod = design.add_module("modtest")
+    design.top = "modtest"
+
+    a = mod.add_net("a", 8)
+    y = mod.add_net("y", 8)
+    ac = mod.add_cell("ap", PrimOp.INPUT, port_name="a")
+    mod.connect(ac, "Y", a, direction="output")
+    mod.ports["a"] = a
+
+    c8 = mod.add_net("c8", 8)
+    cc = mod.add_cell("c8", PrimOp.CONST, value=8, width=8)
+    mod.connect(cc, "Y", c8, direction="output")
+
+    m = mod.add_cell("mod0", PrimOp.MOD)
+    mod.connect(m, "A", a)
+    mod.connect(m, "B", c8)
+    mod.connect(m, "Y", y, direction="output")
+
+    oc = mod.add_cell("yp", PrimOp.OUTPUT, port_name="y")
+    mod.connect(oc, "A", y)
+    mod.ports["y"] = y
+
+    nl = map_to_ecp5(design)
+    assert nl.stats().get("LUT4", 0) == 0, f"expected 0 LUT4 for mod-by-8, got {nl.stats().get('LUT4', 0)}"

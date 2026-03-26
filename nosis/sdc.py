@@ -35,6 +35,7 @@ class SdcClock:
 
     @property
     def frequency_mhz(self) -> float:
+        """Return the clock frequency in MHz."""
         return 1000.0 / self.period_ns if self.period_ns > 0 else 0.0
 
 
@@ -62,6 +63,7 @@ class SdcConstraints:
     raw_lines: int = 0
 
     def summary_lines(self) -> list[str]:
+        """Return human-readable summary lines."""
         lines = [
             "--- SDC Constraints ---",
             f"Clocks: {len(self.clocks)}",

@@ -579,8 +579,11 @@ class _Lowerer:
         if len(operands) == 1:
             return operands[0]
         out = self._fresh_net("concat", w)
-        cell = self._fresh_cell("concat", PrimOp.CONCAT, count=len(operands))
-        for i, op_net in enumerate(operands):
+        # Verilog {A, B} = A is MSB, B is LSB.
+        # CONCAT I0 is LSB, so reverse the operand order.
+        reversed_ops = list(reversed(operands))
+        cell = self._fresh_cell("concat", PrimOp.CONCAT, count=len(reversed_ops))
+        for i, op_net in enumerate(reversed_ops):
             self.mod.connect(cell, f"I{i}", op_net)
         self.mod.connect(cell, "Y", out, direction="output")
         return out
@@ -685,12 +688,21 @@ class _Lowerer:
 
         # Not a memory — bitvector element select (SLICE)
         src = self.lower_expr(expr.value)
+
+        # Check for constant index first
+        sel_const = getattr(selector, "constant", None) if selector else None
+        if sel_const is not None:
+            offset = int(str(sel_const))
+            out = self._fresh_net("esel", w)
+            cell = self._fresh_cell("esel", PrimOp.SLICE, offset=offset, width=w)
+            self.mod.connect(cell, "A", src)
+            self.mod.connect(cell, "Y", out, direction="output")
+            return out
+
         if selector is not None:
             # Variable index: build a MUX tree to select the element
             idx_net = self.lower_expr(selector)
             out = self._fresh_net("esel", w)
-            # Use PMUX for variable-indexed select
-            # For now, use SLICE at offset 0 as before (known limitation)
             cell = self._fresh_cell("esel", PrimOp.SLICE, offset=0, width=w)
             self.mod.connect(cell, "A", src)
             self.mod.connect(cell, "Y", out, direction="output")
@@ -742,10 +754,16 @@ class _Lowerer:
             # Non-blocking: FF creation happens at the procedural block level.
             pass
         else:
-            # Blocking / continuous: direct wire. The LHS net should be
-            # driven by whatever drives the RHS.
-            if lhs.driver is None and rhs.driver is not None:
-                lhs.driver = rhs.driver
+            # Blocking / continuous: direct wire.
+            if not getattr(self, '_in_comb_case', False):
+                if lhs.driver is None and rhs.driver is not None:
+                    lhs.driver = rhs.driver
+                    # Also set the driver cell's output to lhs so the
+                    # simulator writes to the correct net.
+                    for pname, pnet in list(rhs.driver.outputs.items()):
+                        if pnet is rhs:
+                            rhs.driver.outputs[pname] = lhs
+                            break
         return lhs
 
     # --- Statement lowering ---
@@ -810,6 +828,14 @@ class _Lowerer:
                 deduped[lhs_net.name] = (lhs_net, rhs_net, rst_net, rst_val_net)
 
             for lhs_net, rhs_net, rst_net, rst_val_net in deduped.values():
+                # If the target already has a combinational driver (from
+                # always_comb or continuous assign), don't create an FF.
+                # The combinational decode is the primary value; the NB
+                # override only applies conditionally and is already
+                # captured in the guarded MUX chain.
+                if lhs_net.driver is not None and lhs_net.driver.op not in (PrimOp.FF, PrimOp.CONST):
+                    continue
+
                 ff_rst = rst_net if not async_reset else reset_net
                 ff = self._fresh_cell(
                     f"ff_{lhs_net.name}", PrimOp.FF,
@@ -1180,18 +1206,105 @@ class _Lowerer:
 
         elif kind == "StatementKind.Conditional":
             conds = list(stmt.conditions)
-            if conds:
-                self.lower_expr(conds[0].expr)
-            self._lower_statement(stmt.ifTrue)
-            if stmt.ifFalse is not None:
-                self._lower_statement(stmt.ifFalse)
+            if not conds:
+                return
+            cond_net = self.lower_expr(conds[0].expr)
+
+            true_map = self._collect_blocking_assignments(stmt.ifTrue)
+            false_map = self._collect_blocking_assignments(stmt.ifFalse) if stmt.ifFalse else {}
+
+            all_targets = set(true_map) | set(false_map)
+            for tgt_name in all_targets:
+                tgt_net = self.mod.nets.get(tgt_name)
+                if tgt_net is None:
+                    continue
+                t_val = true_map.get(tgt_name)
+                f_val = false_map.get(tgt_name)
+                if t_val and f_val:
+                    mux_out = self._fresh_net("comb_if", tgt_net.width)
+                    mux = self._fresh_cell("comb_if", PrimOp.MUX)
+                    self.mod.connect(mux, "S", cond_net)
+                    self.mod.connect(mux, "A", f_val)
+                    self.mod.connect(mux, "B", t_val)
+                    self.mod.connect(mux, "Y", mux_out, direction="output")
+                    tgt_net.driver = mux
+                    mux.outputs["Y"] = tgt_net
+                elif t_val:
+                    mux_out = self._fresh_net("comb_if", tgt_net.width)
+                    mux = self._fresh_cell("comb_if", PrimOp.MUX)
+                    self.mod.connect(mux, "S", cond_net)
+                    self.mod.connect(mux, "A", tgt_net)
+                    self.mod.connect(mux, "B", t_val)
+                    self.mod.connect(mux, "Y", mux_out, direction="output")
+                    tgt_net.driver = mux
+                    mux.outputs["Y"] = tgt_net
+                elif f_val:
+                    mux_out = self._fresh_net("comb_if", tgt_net.width)
+                    mux = self._fresh_cell("comb_if", PrimOp.MUX)
+                    self.mod.connect(mux, "S", cond_net)
+                    self.mod.connect(mux, "A", f_val)
+                    self.mod.connect(mux, "B", tgt_net)
+                    self.mod.connect(mux, "Y", mux_out, direction="output")
+                    tgt_net.driver = mux
+                    mux.outputs["Y"] = tgt_net
 
         elif kind == "StatementKind.Case":
-            self.lower_expr(stmt.expr)
-            for item in stmt.items:
-                self._lower_statement(item.stmt)
+            # Build MUX chains for combinational case statements.
+            self._in_comb_case = True
+            # Each case item produces a MUX that selects the case value
+            # when the selector matches, otherwise holds the previous value.
+            sel = self.lower_expr(stmt.expr)
+
+            # Collect default assignments
+            default_map: dict[str, Net] = {}
             if stmt.defaultCase is not None:
-                self._lower_statement(stmt.defaultCase)
+                default_map = self._collect_blocking_assignments(stmt.defaultCase)
+
+            # Build running value per target
+            running: dict[str, Net] = {}
+            for tgt_name, default_net in default_map.items():
+                running[tgt_name] = default_net
+
+            for item in stmt.items:
+                item_map = self._collect_blocking_assignments(item.stmt)
+                for case_expr in item.expressions:
+                    case_val = self.lower_expr(case_expr)
+                    eq_net = self._fresh_net("comb_eq", 1)
+                    eq_cell = self._fresh_cell("comb_eq", PrimOp.EQ)
+                    self.mod.connect(eq_cell, "A", sel)
+                    self.mod.connect(eq_cell, "B", case_val)
+                    self.mod.connect(eq_cell, "Y", eq_net, direction="output")
+
+                    for tgt_name, rhs_net in item_map.items():
+                        tgt_net = self.mod.nets.get(tgt_name)
+                        if tgt_net is None:
+                            continue
+                        # Use existing running value, or a zero constant as default
+                        # (NOT the target net itself, which creates a circular reference)
+                        if tgt_name not in running:
+                            zero = self._fresh_net(f"comb_dflt_{tgt_name}", tgt_net.width)
+                            zc = self._fresh_cell(f"comb_dflt_{tgt_name}", PrimOp.CONST, value=0, width=tgt_net.width)
+                            self.mod.connect(zc, "Y", zero, direction="output")
+                            running[tgt_name] = zero
+                        prev = running[tgt_name]
+                        mux_out = self._fresh_net("comb_mux", tgt_net.width)
+                        mux = self._fresh_cell("comb_mux", PrimOp.MUX)
+                        self.mod.connect(mux, "S", eq_net)
+                        self.mod.connect(mux, "A", prev)
+                        self.mod.connect(mux, "B", rhs_net)
+                        self.mod.connect(mux, "Y", mux_out, direction="output")
+                        running[tgt_name] = mux_out
+
+            # Defer consumer redirect to after all procedural blocks
+            # are processed. The always_ff MUX chains that read these
+            # combinational signals don't exist yet.
+            if not hasattr(self, '_deferred_comb_redirects'):
+                self._deferred_comb_redirects: list[tuple[str, "Net"]] = []
+            for tgt_name, final_net in running.items():
+                tgt_net = self.mod.nets.get(tgt_name)
+                if tgt_net is not None and final_net is not tgt_net:
+                    self._deferred_comb_redirects.append((tgt_name, final_net))
+            self._in_comb_case = False
 
         elif kind == "StatementKind.Block":
             if stmt.body is not None:
@@ -1440,6 +1553,41 @@ class _Lowerer:
         # Process deferred continuous assigns now that all FFs exist
         for assign_expr in getattr(self, '_deferred_assigns', []):
             self.lower_expr(assign_expr)
+
+        # Deduplicate cell outputs: if two cells output to the same net
+        # object, the FIRST one keeps it (it's the one in the comb MUX chain).
+        # Later duplicates (from blocking assignment rewiring) get fresh nets.
+        seen_outputs: dict[int, str] = {}  # net id -> first cell name
+        for cell in list(self.mod.cells.values()):
+            for pn, pnet in list(cell.outputs.items()):
+                net_id = id(pnet)
+                if net_id in seen_outputs and seen_outputs[net_id] != cell.name:
+                    # This cell is a later duplicate — give it a fresh net
+                    fresh = self._fresh_net(f"dedup_{cell.name}", pnet.width)
+                    cell.outputs[pn] = fresh
+                else:
+                    seen_outputs[net_id] = cell.name
+
+        # Process deferred combinational case redirects now that
+        # always_ff MUX chains exist and reference the target nets.
+        comb_chain_cells = set()
+        for cell in self.mod.cells.values():
+            if 'comb_mux' in cell.name or 'comb_eq' in cell.name or 'comb_dflt' in cell.name:
+                comb_chain_cells.add(cell.name)
+
+        for tgt_name, final_net in getattr(self, '_deferred_comb_redirects', []):
+            tgt_net = self.mod.nets.get(tgt_name)
+            if tgt_net is None:
+                continue
+            for cell in list(self.mod.cells.values()):
+                if cell.name in comb_chain_cells:
+                    continue
+                for pn, pnet in list(cell.inputs.items()):
+                    if pnet is tgt_net:
+                        cell.inputs[pn] = final_net
+            for pn, pnet in list(self.mod.ports.items()):
+                if pnet is tgt_net:
+                    self.mod.ports[pn] = final_net
 
     def _lower_sub_instance(self, inst: Any) -> None:
         """Lower a sub-module instance by recursively lowering its body

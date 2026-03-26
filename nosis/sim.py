@@ -187,10 +187,9 @@ class FastSimulator:
     """
 
     __slots__ = (
-        "_instructions", "_net_index", "_n_nets",
+        "_all_instructions", "_net_index", "_n_nets",
         "_input_cells", "_const_instructions",
         "_ff_d_idx", "_ff_q_idx",
-        "_concat_instrs", "_repeat_instrs", "_pmux_instrs",
         "_memories",
     )
 
@@ -256,11 +255,8 @@ class FastSimulator:
         # Topological sort — done once
         order = self._topo_sort(mod)
 
-        # Compile instructions
-        self._instructions: list[_Instruction] = []
-        self._concat_instrs: list[tuple[int, list[tuple[int, int]]]] = []
-        self._repeat_instrs: list[tuple[int, int, int, int]] = []
-        self._pmux_instrs: list[tuple[int, int, int, list[int]]] = []
+        # Compile ALL instructions in topo order into a single list
+        self._all_instructions: list[tuple] = []
 
         for cell in order:
             if cell.op in (PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.FF, PrimOp.LATCH, PrimOp.MEMORY):
@@ -284,7 +280,7 @@ class FastSimulator:
                         parts.append((net_index.get(inp.name, -1), inp.width))
                     else:
                         parts.append((-1, 1))
-                self._concat_instrs.append((out_idx, parts))
+                self._all_instructions.append(('concat', out_idx, parts))
                 continue
 
             # REPEAT — special
@@ -293,7 +289,7 @@ class FastSimulator:
                 a_idx = net_index.get(a_net.name, -1) if a_net else -1
                 n = int(cell.params.get("count", 1))
                 a_w = int(cell.params.get("a_width", 1))
-                self._repeat_instrs.append((out_idx, a_idx, n, a_w))
+                self._all_instructions.append(('repeat', out_idx, a_idx, n, a_w))
                 continue
 
             # PMUX — special: variable select + cases
@@ -307,7 +303,7 @@ class FastSimulator:
                 for i in range(count):
                     inp = cell.inputs.get(f"I{i}")
                     case_indices.append(net_index.get(inp.name, -1) if inp else -1)
-                self._pmux_instrs.append((out_idx, a_idx, s_idx, case_indices))
+                self._all_instructions.append(('pmux', out_idx, a_idx, s_idx, case_indices))
                 continue
 
             func = _DISPATCH.get(cell.op)
@@ -333,7 +329,7 @@ class FastSimulator:
                     params = dict(params)
                     params["_cmp_width"] = cmp_w
 
-            self._instructions.append((func, a_idx, b_idx, s_idx, out_idx, mask, params))
+            self._all_instructions.append(('op', func, a_idx, b_idx, s_idx, out_idx, mask, params))
 
     @staticmethod
     def _topo_sort(mod: Module) -> list[Cell]:
@@ -372,41 +368,43 @@ class FastSimulator:
             if idx is not None:
                 vals[idx] = val
 
-        # Execute compiled instructions
-        for func, a_idx, b_idx, s_idx, out_idx, mask, params in self._instructions:
-            a = vals[a_idx] if a_idx >= 0 else 0
-            b = vals[b_idx] if b_idx >= 0 else 0
-            s = vals[s_idx] if s_idx >= 0 else 0
-            vals[out_idx] = func(a, b, s, mask, params)
-
-        # Execute CONCAT instructions
-        for out_idx, parts in self._concat_instrs:
-            val = 0
-            shift = 0
-            for inp_idx, w in parts:
-                v = vals[inp_idx] if inp_idx >= 0 else 0
-                val |= (v & ((1 << w) - 1)) << shift
-                shift += w
-            vals[out_idx] = val
-
-        # Execute REPEAT instructions
-        for out_idx, a_idx, n, a_w in self._repeat_instrs:
-            a = vals[a_idx] if a_idx >= 0 else 0
-            val = 0
-            a_masked = a & ((1 << a_w) - 1)
-            for i in range(n):
-                val |= a_masked << (i * a_w)
-            vals[out_idx] = val
-
-        # Execute PMUX instructions
-        for out_idx, a_idx, s_idx, case_indices in self._pmux_instrs:
-            s = vals[s_idx] if s_idx >= 0 else 0
-            result = vals[a_idx] if a_idx >= 0 else 0
-            for i, ci in enumerate(case_indices):
-                if (s >> i) & 1:
-                    result = vals[ci] if ci >= 0 else 0
-                    break
-            vals[out_idx] = result
+        # Execute ALL instructions in topological order (unified list).
+        # Regular ops, CONCATs, REPEATs, and PMUXes are interleaved
+        # based on their position in the topo sort.
+        for instr in self._all_instructions:
+            kind = instr[0]
+            if kind == 'op':
+                _, func, a_idx, b_idx, s_idx, out_idx, mask, params = instr
+                a = vals[a_idx] if a_idx >= 0 else 0
+                b = vals[b_idx] if b_idx >= 0 else 0
+                s = vals[s_idx] if s_idx >= 0 else 0
+                vals[out_idx] = func(a, b, s, mask, params)
+            elif kind == 'concat':
+                _, out_idx, parts = instr
+                val = 0
+                shift = 0
+                for inp_idx, w in parts:
+                    v = vals[inp_idx] if inp_idx >= 0 else 0
+                    val |= (v & ((1 << w) - 1)) << shift
+                    shift += w
+                vals[out_idx] = val
+            elif kind == 'repeat':
+                _, out_idx, a_idx, n, a_w = instr
+                a = vals[a_idx] if a_idx >= 0 else 0
+                val = 0
+                a_masked = a & ((1 << a_w) - 1)
+                for i in range(n):
+                    val |= a_masked << (i * a_w)
+                vals[out_idx] = val
+            elif kind == 'pmux':
+                _, out_idx, a_idx, s_idx, case_indices = instr
+                s = vals[s_idx] if s_idx >= 0 else 0
+                result = vals[a_idx] if a_idx >= 0 else 0
+                for i, ci in enumerate(case_indices):
+                    if (s >> i) & 1:
+                        result = vals[ci] if ci >= 0 else 0
+                        break
+                vals[out_idx] = result
 
         # Execute MEMORY reads (combinational) and writes (clocked)
         for mem in self._memories:

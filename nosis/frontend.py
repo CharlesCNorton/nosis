@@ -823,11 +823,30 @@ class _Lowerer:
             if not getattr(self, '_in_comb_case', False):
                 if lhs.driver is None and rhs.driver is not None:
                     lhs.driver = rhs.driver
-                    # Also set the driver cell's output to lhs
+                    # Try to set the driver cell's output to lhs
+                    rewired = False
                     for pname, pnet in list(rhs.driver.outputs.items()):
                         if pnet is rhs:
                             rhs.driver.outputs[pname] = lhs
+                            rewired = True
                             break
+                    if not rewired:
+                        # The driver's output points to a different net (e.g.
+                        # after always_comb redirect). Redirect all consumers
+                        # of lhs to read from rhs instead, and ensure the
+                        # OUTPUT cell for lhs reads from the actual driven net.
+                        actual_out = None
+                        for pname, pnet in rhs.driver.outputs.items():
+                            actual_out = pnet
+                            break
+                        if actual_out is not None:
+                            for cell in self.mod.cells.values():
+                                for pn, pnet in list(cell.inputs.items()):
+                                    if pnet is lhs:
+                                        cell.inputs[pn] = actual_out
+                            for pn, pnet in list(self.mod.ports.items()):
+                                if pnet is lhs:
+                                    self.mod.ports[pn] = actual_out
                 elif lhs.driver is None and rhs.driver is None:
                     # RHS has no driver yet (e.g., alu_a = rs1_val where
                     # rs1_val is assigned in always_ff which hasn't run yet).
@@ -1840,6 +1859,9 @@ class _Lowerer:
                             ))
                             return  # skip this block entirely
                 self.lower_procedural_block(node)
+                # Apply deferred combinational redirects immediately after each
+                # always_comb block so that subsequent blocks see driven nets.
+                self._apply_comb_redirects()
 
             elif kind in ("SymbolKind.GenerateBlock", "SymbolKind.GenerateBlockArray"):
                 # generate-for/generate-if — slang fully unrolls generate blocks.
@@ -2002,6 +2024,15 @@ class _Lowerer:
 
         # Process deferred combinational case redirects now that
         # always_ff MUX chains exist and reference the target nets.
+        self._apply_comb_redirects()
+
+    def _apply_comb_redirects(self) -> None:
+        """Apply deferred combinational assignment redirects.
+
+        For each target net assigned in an always_comb block, redirect all
+        consumers to read the computed MUX chain output, and set the target
+        net's driver so subsequent always_comb blocks see the driven value.
+        """
         for tgt_name, final_net in getattr(self, '_deferred_comb_redirects', []):
             tgt_net = self.mod.nets.get(tgt_name)
             if tgt_net is None:
@@ -2031,6 +2062,19 @@ class _Lowerer:
             for pn, pnet in list(self.mod.ports.items()):
                 if pnet is tgt_net:
                     self.mod.ports[pn] = final_net
+            # Wire the final MUX cell's output directly to tgt_net so the
+            # simulator evaluates into the correct net. This replaces the
+            # internal comb net with the named target net.
+            if final_net.driver is not None:
+                tgt_net.driver = final_net.driver
+                # Change the driver cell's output port to point to tgt_net
+                for opn, onet in list(final_net.driver.outputs.items()):
+                    if onet is final_net:
+                        final_net.driver.outputs[opn] = tgt_net
+                        break
+        # Clear processed redirects to avoid double application
+        if hasattr(self, '_deferred_comb_redirects'):
+            self._deferred_comb_redirects.clear()
 
     def _lower_sub_instance(self, inst: Any) -> None:
         """Lower a sub-module instance by recursively lowering its body

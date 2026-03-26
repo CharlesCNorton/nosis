@@ -203,6 +203,13 @@ class FastSimulator:
         self._net_index = net_index
         self._n_nets = idx
 
+        # Add port aliases: if a port name differs from its net name,
+        # map the port name to the same index so sim output includes
+        # values under port names (e.g. 'y' -> index of '$comb_mux_21').
+        for port_name, port_net in mod.ports.items():
+            if port_name not in net_index and port_net.name in net_index:
+                net_index[port_name] = net_index[port_net.name]
+
         # Collect INPUT cells: (port_name, out_idx)
         self._input_cells: list[tuple[str, int]] = []
         for cell in mod.cells.values():

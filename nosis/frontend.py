@@ -809,11 +809,11 @@ class _Lowerer:
                 true_targets = self._collect_assignment_targets(stmt.ifTrue)
                 targets.extend(true_targets)
             else:
-                true_targets = set(self._collect_assignment_targets(stmt.ifTrue))
-                false_targets = set(self._collect_assignment_targets(stmt.ifFalse))
+                true_targets: set[str] = set(self._collect_assignment_targets(stmt.ifTrue))  # type: ignore[no-redef]
+                false_targets: set[str] = set(self._collect_assignment_targets(stmt.ifFalse))
                 # Signals assigned in one branch but not the other
-                targets.extend(sorted(true_targets - false_targets))
-                targets.extend(sorted(false_targets - true_targets))
+                targets.extend(sorted(true_targets - false_targets))  # type: ignore[operator]
+                targets.extend(sorted(false_targets - true_targets))  # type: ignore[operator]
 
         elif kind == "StatementKind.Case":
             if stmt.defaultCase is None:
@@ -1153,10 +1153,10 @@ class _Lowerer:
                     and hasattr(t, "fixedRange")
                     and hasattr(t, "elementType")
                 )
-                if is_array:
-                    elem_type = t.elementType
+                if is_array and t is not None:
+                    elem_type = t.elementType  # type: ignore[union-attr]
                     elem_w = getattr(elem_type, "bitWidth", 0)
-                    rng = t.fixedRange
+                    rng = t.fixedRange  # type: ignore[union-attr]
                     left = getattr(rng, "left", 0)
                     right = getattr(rng, "right", 0)
                     depth = abs(right - left) + 1
@@ -1333,10 +1333,10 @@ class _Lowerer:
                     and hasattr(t, "fixedRange")
                     and hasattr(t, "elementType")
                 )
-                if is_array:
-                    elem_type = t.elementType
+                if is_array and t is not None:
+                    elem_type = t.elementType  # type: ignore[union-attr]
                     elem_w = getattr(elem_type, "bitWidth", 0)
-                    rng = t.fixedRange
+                    rng = t.fixedRange  # type: ignore[union-attr]
                     left = getattr(rng, "left", 0)
                     right = getattr(rng, "right", 0)
                     depth = abs(right - left) + 1
@@ -1387,7 +1387,7 @@ class _Lowerer:
             # Recursively lower the nested instance with extended prefix
             self._lower_sub_instance(nested_inst)
 
-        sub._lower_sub_instance_nested = _lower_nested
+        sub._lower_sub_instance_nested = _lower_nested  # type: ignore[attr-defined]
 
         sub_body.visit(walk_sub)
 
@@ -1463,7 +1463,7 @@ class _PrefixedLowerer(_Lowerer):
         self._net_counter += 1
         return self.mod.add_net(name, width)
 
-    def _fresh_cell(self, name_prefix: str, op: PrimOp, src: str = "", **params: Any) -> Cell:
+    def _fresh_cell(self, name_prefix: str, op: PrimOp, src: str = "", **params: Any) -> Cell:  # type: ignore[override]
         name = f"${self._prefix}{name_prefix}_{self._cell_counter}"
         self._cell_counter += 1
         if self._module_ref:

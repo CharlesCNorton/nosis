@@ -418,3 +418,35 @@ def test_uart_tx_lut_count_competitive():
     # yosys synth_ecp5 produces ~15-20 LUT4 for uart_tx
     # nosis should be within 2x of yosys
     assert nosis_luts < 40, f"nosis uart_tx LUT count ({nosis_luts}) is not competitive"
+
+
+# ---------------------------------------------------------------------------
+# iverilog gate-level simulation
+# ---------------------------------------------------------------------------
+
+def test_iverilog_postsynth_uart_tx():
+    """Compile post-synthesis Verilog with iverilog to verify it parses."""
+    import shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+    from nosis.postsynth import generate_postsynth_verilog
+
+    iverilog = shutil.which("iverilog")
+    if not iverilog:
+        return  # skip if not installed
+
+    d = get_design("uart_tx")
+    sv_code = generate_postsynth_verilog(d.netlist)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        sv_path = Path(tmp) / "postsynth.sv"
+        sv_path.write_text(sv_code, encoding="utf-8")
+
+        # The postsynth output includes SIM model definitions — compile standalone
+        out_path = Path(tmp) / "out.vvp"
+        r = subprocess.run(
+            [iverilog, "-g2012", "-o", str(out_path), str(sv_path)],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert r.returncode == 0, f"iverilog failed:\n{r.stderr}"

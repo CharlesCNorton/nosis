@@ -36,8 +36,6 @@ endmodule
 module TRELLIS_FF_SIM #(
     parameter GSR = "DISABLED",
     parameter CEMUX = "CE",
-    parameter GSR = "DISABLED",
-    parameter CEMUX = "CE",
     parameter CLKMUX = "CLK",
     parameter LSRMUX = "LSR",
     parameter REGSET = "RESET",
@@ -161,6 +159,9 @@ def generate_postsynth_verilog(netlist: ECP5Netlist) -> str:
     """
     lines: list[str] = []
     lines.append("`timescale 1ns/1ps")
+    # Emit behavioral cell models first so iverilog can resolve them
+    lines.append(_CELL_MODELS)
+    lines.append("")
     lines.append(f"module {netlist.top}_postsynth (")
 
     # Ports

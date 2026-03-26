@@ -97,7 +97,7 @@ def prove_constants_sat(
                         net_values[out.name] = int(c.params.get("value", 0))
                 results = eval_cell(c, net_values)
                 for pname, val in results.items():
-                    out = c.outputs.get(pname)
+                    out = c.outputs.get(pname)  # type: ignore[assignment]
                     if out:
                         net_values[out.name] = val
             actual = net_values.get(net_name, 0) & 1
@@ -221,7 +221,7 @@ def prove_constants_sat(
             for c in cone_cells:
                 results = eval_cell(c, net_values)
                 for pname, val in results.items():
-                    out = c.outputs.get(pname)
+                    out = c.outputs.get(pname)  # type: ignore[assignment]
                     if out:
                         net_values[out.name] = val
 

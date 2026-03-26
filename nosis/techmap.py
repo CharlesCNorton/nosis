@@ -69,7 +69,7 @@ class ECP5Netlist:
 
     def add_net(self, name: str, width: int) -> ECP5Net:
         """Create a named net with *width* freshly allocated bits."""
-        bits = self.alloc_bits(width)
+        bits: list[int | str] = list(self.alloc_bits(width))
         net = ECP5Net(name=name, bits=bits)
         self.nets[name] = net
         return net
@@ -427,7 +427,7 @@ class _ECP5Mapper:
 
         lut_init = format(base_init, "016b")
 
-        prev_cout = "1" if is_sub else "0"  # carry-in
+        prev_cout: int | str = "1" if is_sub else "0"  # carry-in
 
         for i in range(0, width, 2):
             ccu2c = self.nl.add_cell(self._fresh_name("ccu2c"), "CCU2C")
@@ -762,7 +762,7 @@ class _ECP5Mapper:
         init_hex = f"{init:04X}"
 
         # Initial borrow = 0
-        borrow = "0"
+        borrow: int | str = "0"
 
         for i in range(width):
             ab = a_bits[i] if i < len(a_bits) else "0"
@@ -788,7 +788,7 @@ class _ECP5Mapper:
         # For LE/GE: result = strict_less OR all_equal
         if cell.op in (PrimOp.LE, PrimOp.GE):
             # Build equality chain: all bits must be equal
-            eq_result = "1"  # start true
+            eq_result: int | str = "1"  # start true
             for i in range(width):
                 ab = a_bits[i] if i < len(a_bits) else "0"
                 bb = b_bits[i] if i < len(b_bits) else "0"

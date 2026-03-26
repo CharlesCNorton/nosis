@@ -181,7 +181,7 @@ def cut_map_luts(mod: Module) -> int:
             for c in eval_order:
                 results = eval_cell(c, net_values)
                 for port_name, val in results.items():
-                    out_net = c.outputs.get(port_name)
+                    out_net = c.outputs.get(port_name)  # type: ignore[assignment]
                     if out_net:
                         net_values[out_net.name] = val
 
@@ -206,7 +206,7 @@ def cut_map_luts(mod: Module) -> int:
         cell.inputs.clear()
         for idx, name in enumerate(input_list):
             port_name = ["A", "B", "C", "D"][idx]
-            net = mod.nets.get(name)
+            net = mod.nets.get(name)  # type: ignore[assignment]
             if net:
                 cell.inputs[port_name] = net
 

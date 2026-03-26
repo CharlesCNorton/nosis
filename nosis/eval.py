@@ -39,6 +39,12 @@ class UnsupportedOpError(ValueError):
         super().__init__(f"cannot evaluate PrimOp.{op.name}")
 
 
+def _pi(params: dict[str, object], key: str, default: int = 0) -> int:
+    """Extract an int parameter, casting from object."""
+    v = params.get(key, default)
+    return int(v) if v is not None else default  # type: ignore[call-overload]
+
+
 def eval_const_op(
     op: PrimOp,
     inputs: dict[str, int],
@@ -56,7 +62,7 @@ def eval_const_op(
     b = inputs.get("B", 0)
 
     if op == PrimOp.CONST:
-        return int(params.get("value", 0)) & mask
+        return _pi(params, "value", 0) & mask
 
     # --- Unary ---
     if op == PrimOp.NOT:
@@ -70,7 +76,7 @@ def eval_const_op(
     if op == PrimOp.ZEXT:
         return a & mask
     if op == PrimOp.SEXT:
-        from_w = int(params.get("from_width", width))
+        from_w = _pi(params, "from_width", width)
         if from_w > 0 and (a & (1 << (from_w - 1))):
             return (a | (~((1 << from_w) - 1))) & mask
         return a & mask
@@ -159,7 +165,7 @@ def eval_const_op(
         # Parallel MUX: A=default, S=select bits, I0..IN=case values
         # First active select bit wins (priority from I0)
         s = inputs.get("S", 0)
-        count = int(params.get("count", 0))
+        count = _pi(params, "count", 0)
         for i in range(count):
             if (s >> i) & 1:
                 return inputs.get(f"I{i}", 0) & mask
@@ -167,25 +173,25 @@ def eval_const_op(
 
     # --- Bit manipulation ---
     if op == PrimOp.SLICE:
-        offset = int(params.get("offset", 0))
-        w = int(params.get("width", width))
+        offset = _pi(params, "offset", 0)
+        w = _pi(params, "width", width)
         return (a >> offset) & ((1 << w) - 1)
 
     if op == PrimOp.CONCAT:
         val = 0
         shift = 0
-        count = int(params.get("count", 0))
+        count = _pi(params, "count", 0)
         for i in range(count):
             key = f"I{i}"
             v = inputs.get(key, 0)
-            w = int(params.get(f"I{i}_width", 1))
+            w = _pi(params, f"I{i}_width", 1)
             val |= (v & ((1 << w) - 1)) << shift
             shift += w
         return val & mask
 
     if op == PrimOp.REPEAT:
-        n = int(params.get("count", 1))
-        a_w = int(params.get("a_width", 1))
+        n = _pi(params, "count", 1)
+        a_w = _pi(params, "a_width", 1)
         val = 0
         for i in range(n):
             val |= (a & ((1 << a_w) - 1)) << (i * a_w)
@@ -224,7 +230,7 @@ def eval_cell(
     params = cell.params
     if cell.op == PrimOp.CONCAT:
         params = dict(cell.params)
-        count = int(params.get("count", 0))
+        count = _pi(params, "count", 0)
         for i in range(count):
             inp = cell.inputs.get(f"I{i}")
             if inp:

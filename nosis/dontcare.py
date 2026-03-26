@@ -115,6 +115,8 @@ def propagate_dont_cares(mod: Module) -> int:
             # Check if the mask is NOT(mux_s) — same selector
             for and_cell, mask_net in masks:
                 not_cell = mask_net.driver
+                if not_cell is None:
+                    continue
                 not_input = not_cell.inputs.get("A")
                 if not_input is mux_s:
                     # The MUX selector matches the AND mask selector.

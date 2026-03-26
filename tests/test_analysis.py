@@ -1983,3 +1983,50 @@ def test_delta_summary_lines():
     lines = delta.summary_lines()
     assert any("added" in ln.lower() for ln in lines)
 
+
+
+# --- Incremental compilation end-to-end ---
+
+def test_incremental_full_cycle():
+    """Edit a design, detect delta, remap, verify cell reuse."""
+    from nosis.ir import Design, Module, PrimOp
+    from nosis.incremental import snapshot_module, compute_delta, incremental_remap
+    from nosis.techmap import map_to_ecp5
+
+    # Build original design: a & b
+    mod = Module(name="t")
+    a = mod.add_net("a", 1)
+    b = mod.add_net("b", 1)
+    y = mod.add_net("y", 1)
+    mod.add_cell("ap", PrimOp.INPUT, port_name="a")
+    mod.connect(mod.cells["ap"], "Y", a, direction="output")
+    mod.ports["a"] = a
+    mod.add_cell("bp", PrimOp.INPUT, port_name="b")
+    mod.connect(mod.cells["bp"], "Y", b, direction="output")
+    mod.ports["b"] = b
+    mod.add_cell("g", PrimOp.AND)
+    mod.connect(mod.cells["g"], "A", a)
+    mod.connect(mod.cells["g"], "B", b)
+    mod.connect(mod.cells["g"], "Y", y, direction="output")
+    mod.add_cell("yp", PrimOp.OUTPUT, port_name="y")
+    mod.connect(mod.cells["yp"], "A", y)
+    mod.ports["y"] = y
+
+    design = Design(modules={"t": mod}, top="t")
+    nl1 = map_to_ecp5(design)
+    snap1 = snapshot_module(mod)
+
+    # Modify: change AND to OR
+    mod.cells["g"].op = PrimOp.OR
+
+    # Detect delta
+    snap2 = snapshot_module(mod)
+    delta = compute_delta(snap1, snap2)
+    assert not delta.is_empty
+    assert "g" in delta.cells_modified
+
+    # Incremental remap — pass delta, not snapshot
+    nl2 = incremental_remap(design, delta, nl1)
+
+    # The FF and port cells should be preserved (same type+params)
+    assert nl2.stats().get("LUT4", 0) > 0

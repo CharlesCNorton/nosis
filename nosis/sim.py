@@ -236,9 +236,10 @@ class FastSimulator:
             if cell.op in (PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.FF, PrimOp.LATCH, PrimOp.MEMORY):
                 continue
 
-            out_net = next(iter(cell.outputs.values()), None) if cell.outputs else None
-            if out_net is None:
+            out_net_opt = next(iter(cell.outputs.values()), None) if cell.outputs else None
+            if out_net_opt is None:
                 continue
+            out_net = out_net_opt
             out_idx = net_index.get(out_net.name, -1)
             width = out_net.width
             mask = (1 << width) - 1 if width > 0 else 0

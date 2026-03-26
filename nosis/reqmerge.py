@@ -207,7 +207,7 @@ def merge_reachable_equivalent(
     # SAFETY: never merge a net in the output-reachable set unless its
     # canonical representative is also output-reachable with the same driver.
     merged = 0
-    for sig, net_names in sig_groups.items():
+    for sig, net_names in sig_groups.items():  # type: ignore[assignment]
         if len(net_names) < 2:
             continue
 

@@ -246,7 +246,7 @@ def _find_live_nets(mod: Module) -> set[str]:
     # Backward reachability
     while worklist:
         net_name = worklist.pop()
-        net = mod.nets.get(net_name)
+        net = mod.nets.get(net_name)  # type: ignore[assignment]
         if net is None or net.driver is None:
             continue
         driver = net.driver

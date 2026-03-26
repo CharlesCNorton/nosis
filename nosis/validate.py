@@ -411,7 +411,7 @@ def validate_design(
     from nosis.json_backend import emit_json
 
     try:
-        parse_result = parse_files(source_paths, top=top)
+        parse_result = parse_files(source_paths, top=top)  # type: ignore[arg-type]
     except FrontendError as exc:
         return ValidationResult(design=design_name, passed=False, cycles=0, error=str(exc))
 

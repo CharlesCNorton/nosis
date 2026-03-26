@@ -16,7 +16,7 @@ jobs:
           python-version: "3.13"
       - run: pip install ruff mypy "pyslang>=7"
       - run: ruff check .
-      - run: mypy nosis/ --ignore-missing-imports --no-error-summary || true
+      - run: mypy nosis/ --ignore-missing-imports --no-error-summary
 
   unit-tests:
     runs-on: ubuntu-latest
@@ -30,3 +30,25 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install pytest hypothesis "pyslang>=7"
       - run: pytest tests/ -v --ignore=tests/test_soc.py
+
+  gate-level-sim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: sudo apt-get update && sudo apt-get install -y iverilog
+      - run: pip install pytest "pyslang>=7"
+      - run: pytest tests/test_designs.py -v -k "iverilog" --timeout=120
+
+  nextpnr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: sudo apt-get update && sudo apt-get install -y nextpnr-ecp5 fpga-icestorm
+      - run: pip install pytest "pyslang>=7"
+      - run: pytest tests/test_designs.py -v -k "nextpnr" --timeout=120

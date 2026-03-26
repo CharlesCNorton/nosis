@@ -317,10 +317,10 @@ def merge_lut_chains(netlist: ECP5Netlist) -> int:
                         if sn != name and bit_fanout.get(bit, 0) <= 3:
                             sc = netlist.cells.get(sn)
                             if sc:
-                                fv = sum(1 for p in ("A", "B", "C", "D")
+                                fv = sum(1 for p in ("A", "B", "C", "D")  # type: ignore[misc]
                                          if sc.ports.get(p, ["0"])[0] not in ("0", "1", "x")
                                          and isinstance(sc.ports.get(p, ["0"])[0], int)
-                                         and sc.ports.get(p, ["0"])[0] >= 2)
+                                         and sc.ports.get(p, ["0"])[0] >= 2)  # type: ignore[operator]
                                 if fv <= 2:
                                     feeder_pin = pin
                                     feeder_bit = bit
@@ -329,7 +329,7 @@ def merge_lut_chains(netlist: ECP5Netlist) -> int:
         if feeder_pin is None:
             continue
 
-        src_name = bit_to_lut[feeder_bit]
+        src_name = bit_to_lut[feeder_bit]  # type: ignore[index]
         src_cell = netlist.cells.get(src_name)
         if src_cell is None:
             continue
@@ -398,15 +398,15 @@ def merge_lut_chains(netlist: ECP5Netlist) -> int:
         new_pins = {"A": "0", "B": "0", "C": "0", "D": "0"}
         for bit, idx in bit_to_idx.items():
             pin_name = ["A", "B", "C", "D"][idx]
-            new_pins[pin_name] = bit
+            new_pins[pin_name] = bit  # type: ignore[assignment]
         for pin, val in new_pins.items():
             cell.ports[pin] = [val]
 
-        absorbed_bits.add(feeder_bit)
+        absorbed_bits.add(feeder_bit)  # type: ignore[arg-type]
         merged += 1
 
-        remaining_fanout = bit_fanout.get(feeder_bit, 1) - 1
-        bit_fanout[feeder_bit] = remaining_fanout
+        remaining_fanout = bit_fanout.get(feeder_bit, 1) - 1  # type: ignore[arg-type]
+        bit_fanout[feeder_bit] = remaining_fanout  # type: ignore[index]
         if remaining_fanout <= 0:
             if src_name in netlist.cells:
                 del netlist.cells[src_name]

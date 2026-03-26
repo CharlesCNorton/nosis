@@ -1318,7 +1318,18 @@ class _Lowerer:
         elif kind == "StatementKind.List":
             for child in stmt.list:
                 child_map = self._collect_blocking_with_muxes(child, allow_nb=allow_nb)
-                results.update(child_map)
+                for tgt_name, rhs_net in child_map.items():
+                    if tgt_name in results:
+                        # Target already assigned by an earlier child.
+                        # The new rhs_net's MUX hold input should use the
+                        # earlier result instead of the raw target net.
+                        prev = results[tgt_name]
+                        if rhs_net.driver and rhs_net.driver.op == PrimOp.MUX:
+                            a_inp = rhs_net.driver.inputs.get("A")
+                            tgt_net = self.mod.nets.get(tgt_name)
+                            if a_inp and tgt_net and (a_inp is tgt_net or a_inp.name == tgt_name):
+                                rhs_net.driver.inputs["A"] = prev
+                    results[tgt_name] = rhs_net
 
         return results
 

@@ -315,7 +315,7 @@ def main(argv: list[str] | None = None) -> int:
         # Use simulation-based toggle rates for more accurate power
         toggle_rates = estimate_toggle_rates(mod, num_vectors=200, seed=42)
         avg_toggle = sum(toggle_rates.values()) / max(len(toggle_rates), 1) if toggle_rates else 0.125
-        power = estimate_power(netlist, frequency_mhz=freq)
+        power = estimate_power(netlist, frequency_mhz=freq, toggle_rate=avg_toggle)
         for line in power.summary_lines():
             print(line)
         if toggle_rates:

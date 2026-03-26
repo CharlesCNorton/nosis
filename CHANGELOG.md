@@ -53,7 +53,7 @@ First public release. Full synthesis pipeline from SystemVerilog to ECP5 bitstre
 - BB bidirectional buffers for inout ports
 
 ### Verification
-- 609 tests: unit, integration, property-based (Hypothesis), regression, structural
+- 609 tests at initial release (see v0.2.0 for current numbers)
 - Exhaustive truth table verification for small cones
 - SAT-based equivalence checking (AND/OR/XOR/NOT/MUX/EQ/NE/ADD/SUB, wiring ops)
 - Post-synthesis Verilog generation with behavioral cell models
@@ -61,7 +61,7 @@ First public release. Full synthesis pipeline from SystemVerilog to ECP5 bitstre
 
 ### Hardware
 - End-to-end verified: nosis -> nextpnr -> ecppack -> IcePi Zero flash install
-- uart_tx: 379 MHz Fmax on ECP5-25F (16 LUT4, 46 FF, 32 CCU2C)
+- uart_tx: 379 MHz Fmax on ECP5-25F (46 FF, 32 CCU2C, LUT count varies by version)
 
 ### CLI
 - `--stats`, `--benchmark`, `--json-stats` output modes

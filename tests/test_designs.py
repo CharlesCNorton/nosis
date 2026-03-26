@@ -368,3 +368,29 @@ class TestJSONInvariants:
     def test_uart_tx(self): self._check("uart_tx")
     def test_uart_rx(self): self._check("uart_rx")
     def test_sdram_bridge(self): self._check("sdram_bridge")
+
+
+# ---------------------------------------------------------------------------
+# Additional CLI tests
+# ---------------------------------------------------------------------------
+
+def test_cli_stats():
+    import tempfile
+    from pathlib import Path
+    from nosis.cli import main
+    with tempfile.TemporaryDirectory() as tmp:
+        out = str(Path(tmp) / "out.json")
+        rc = main(["--stats", "-o", out, "--top", "uart_tx", RIME_UART_TX])
+        assert rc == 0
+
+def test_cli_lpf():
+    """The --lpf flag should be accepted without error."""
+    import tempfile
+    from pathlib import Path
+    from nosis.cli import main
+    with tempfile.TemporaryDirectory() as tmp:
+        out = str(Path(tmp) / "out.json")
+        lpf = str(Path(tmp) / "test.lpf")
+        Path(lpf).write_text("LOCATE COMP \"clk\" SITE \"P3\";\n")
+        rc = main(["-o", out, "--lpf", lpf, "--top", "uart_tx", RIME_UART_TX])
+        assert rc == 0

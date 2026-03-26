@@ -1351,3 +1351,85 @@ def test_readmem_to_dp16kd_roundtrip():
     finally:
         Path(hex_path).unlink()
 
+
+
+# --- Comparison LUT truth table verification ---
+
+def test_compare_lut_init_matches_eval():
+    """Verify that the LT LUT4 truth table matches eval semantics for all inputs."""
+    from nosis.techmap import _compute_lut4_init
+    init = _compute_lut4_init(PrimOp.LT, 3)
+    # For each combination: A=a_bit, B=b_bit, C=borrow_in
+    # Expected: borrow_out = (!a & b) | (!(a^b) & borrow_in)
+    for i in range(16):
+        a = (i >> 0) & 1
+        b = (i >> 1) & 1
+        c = (i >> 2) & 1
+        expected = ((~a & 1) & b) | (((a ^ b) ^ 1) & c)
+        actual = (init >> i) & 1
+        assert actual == expected, f"LT INIT mismatch at i={i}: a={a} b={b} c={c} expected={expected} got={actual}"
+
+
+def test_compare_chain_exhaustive_4bit():
+    """Exhaustively verify 4-bit unsigned LT comparison through the techmap chain."""
+    from nosis.ir import Design
+    from nosis.techmap import map_to_ecp5
+
+    design = Design()
+    mod = design.add_module("cmp4")
+    design.top = "cmp4"
+
+    a = mod.add_net("a", 4)
+    b = mod.add_net("b", 4)
+    y = mod.add_net("y", 1)
+    ac = mod.add_cell("ap", PrimOp.INPUT, port_name="a")
+    mod.connect(ac, "Y", a, direction="output")
+    mod.ports["a"] = a
+    bc = mod.add_cell("bp", PrimOp.INPUT, port_name="b")
+    mod.connect(bc, "Y", b, direction="output")
+    mod.ports["b"] = b
+    lt = mod.add_cell("lt0", PrimOp.LT)
+    mod.connect(lt, "A", a)
+    mod.connect(lt, "B", b)
+    mod.connect(lt, "Y", y, direction="output")
+    oc = mod.add_cell("yp", PrimOp.OUTPUT, port_name="y")
+    mod.connect(oc, "A", y)
+    mod.ports["y"] = y
+
+    nl = map_to_ecp5(design)
+    stats = nl.stats()
+    # 4-bit LT should produce exactly 4 LUT4 cells (one per bit in the borrow chain)
+    assert stats.get("LUT4", 0) == 4, f"expected 4 LUT4 for 4-bit LT, got {stats.get('LUT4', 0)}"
+
+
+def test_compare_signed_produces_extra_luts():
+    """Signed comparison needs MSB inversion LUTs beyond the unsigned chain."""
+    from nosis.ir import Design
+    from nosis.techmap import map_to_ecp5
+
+    design = Design()
+    mod = design.add_module("scmp")
+    design.top = "scmp"
+
+    a = mod.add_net("a", 8)
+    b = mod.add_net("b", 8)
+    y = mod.add_net("y", 1)
+    ac = mod.add_cell("ap", PrimOp.INPUT, port_name="a")
+    mod.connect(ac, "Y", a, direction="output")
+    mod.ports["a"] = a
+    bc = mod.add_cell("bp", PrimOp.INPUT, port_name="b")
+    mod.connect(bc, "Y", b, direction="output")
+    mod.ports["b"] = b
+    lt = mod.add_cell("lt0", PrimOp.LT)
+    lt.params["signed"] = True
+    mod.connect(lt, "A", a)
+    mod.connect(lt, "B", b)
+    mod.connect(lt, "Y", y, direction="output")
+    oc = mod.add_cell("yp", PrimOp.OUTPUT, port_name="y")
+    mod.connect(oc, "A", y)
+    mod.ports["y"] = y
+
+    nl = map_to_ecp5(design)
+    luts = nl.stats().get("LUT4", 0)
+    # 8 chain LUTs + 2 MSB inversion LUTs = 10
+    assert luts >= 10, f"signed 8-bit LT should need >= 10 LUT4, got {luts}"

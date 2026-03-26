@@ -973,4 +973,24 @@ def run_default_passes(mod: Module) -> dict[str, int]:
     stats["bram_infer"] = infer_brams(mod)
     stats["dsp_infer"] = infer_dsps(mod)
 
+    # Post-optimization integrity check: no internal net should be undriven
+    # (ports are exempt — they're driven externally)
+    undriven = []
+    for name, net in mod.nets.items():
+        if name in mod.ports:
+            continue
+        # Check if any INPUT cell drives this net (it's a port net)
+        is_port_net = any(
+            c.op == PrimOp.INPUT and any(o.name == name for o in c.outputs.values())
+            for c in mod.cells.values()
+        )
+        if is_port_net:
+            continue
+        if net.driver is None:
+            # Check if any cell reads this net — if not, it's truly dead
+            used = any(name in [i.name for i in c.inputs.values()] for c in mod.cells.values())
+            if used:
+                undriven.append(name)
+    stats["undriven_internal_nets"] = len(undriven)
+
     return stats

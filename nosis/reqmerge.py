@@ -27,53 +27,49 @@ __all__ = [
 def _ff_chain_depth(mod: Module) -> int:
     """Compute the longest FF-to-FF combinational path depth.
 
-    This approximates the maximum number of cycles a state change takes
-    to propagate through the sequential feedback network. Used to set a
-    floor on simulation cycles for equivalence checking.
+    Single-pass: build a net-to-consumers index, then BFS from each FF Q
+    output through combinational logic until hitting another FF D input.
+    Count the max number of FF boundaries crossed.
     """
-    # Build FF output -> FF input distance via BFS through combinational logic
-    ff_outputs: set[str] = set()
+    # Build net -> consumer cells index (O(cells) once)
+    consumers: dict[str, list] = {}
+    for cell in mod.cells.values():
+        for inp in cell.inputs.values():
+            consumers.setdefault(inp.name, []).append(cell)
+
+    # Collect FF Q outputs
+    ff_outputs: list[str] = []
     for cell in mod.cells.values():
         if cell.op == PrimOp.FF:
             for out in cell.outputs.values():
-                ff_outputs.add(out.name)
+                ff_outputs.append(out.name)
 
     if not ff_outputs:
         return 0
 
-    # Count FFs in feedback chains by tracing from each FF output
+    # BFS from each FF output, count FF boundaries crossed
     max_depth = 0
     for start in ff_outputs:
         visited: set[str] = set()
         depth = 0
         frontier = {start}
-        while frontier:
+        while frontier and depth <= 20:
             next_frontier: set[str] = set()
             for net_name in frontier:
                 if net_name in visited:
                     continue
                 visited.add(net_name)
-                net = mod.nets.get(net_name)
-                if net is None:
-                    continue
-                # Find cells that consume this net
-                for cell in mod.cells.values():
-                    for inp in cell.inputs.values():
-                        if inp.name == net_name:
-                            if cell.op == PrimOp.FF:
-                                # Reached another FF — count it
-                                depth += 1
-                                # Continue through the FF's output
-                                for out in cell.outputs.values():
-                                    if out.name not in visited:
-                                        next_frontier.add(out.name)
-                            else:
-                                for out in cell.outputs.values():
-                                    if out.name not in visited:
-                                        next_frontier.add(out.name)
+                for cell in consumers.get(net_name, []):
+                    if cell.op == PrimOp.FF:
+                        depth += 1
+                        for out in cell.outputs.values():
+                            if out.name not in visited:
+                                next_frontier.add(out.name)
+                    else:
+                        for out in cell.outputs.values():
+                            if out.name not in visited:
+                                next_frontier.add(out.name)
             frontier = next_frontier
-            if depth > 20:
-                break  # cap traversal
         max_depth = max(max_depth, depth)
     return max_depth
 

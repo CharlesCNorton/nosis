@@ -44,11 +44,27 @@ def _op_sub(a, b, _s, mask, _p):
 def _op_mul(a, b, _s, mask, _p):
     return (a * b) & mask
 
-def _op_div(a, b, _s, mask, _p):
-    return (a // b if b != 0 else 0) & mask
+def _op_div(a, b, _s, mask, params):
+    if b == 0:
+        return 0
+    if params.get("signed"):
+        w = params.get("_cmp_width", 0)
+        if w > 0:
+            sa = a if not (a & (1 << (w - 1))) else a - (1 << w)
+            sb = b if not (b & (1 << (w - 1))) else b - (1 << w)
+            return (int(sa / sb) if sb != 0 else 0) & mask
+    return (a // b) & mask
 
-def _op_mod(a, b, _s, mask, _p):
-    return (a % b if b != 0 else 0) & mask
+def _op_mod(a, b, _s, mask, params):
+    if b == 0:
+        return 0
+    if params.get("signed"):
+        w = params.get("_cmp_width", 0)
+        if w > 0:
+            sa = a if not (a & (1 << (w - 1))) else a - (1 << w)
+            sb = b if not (b & (1 << (w - 1))) else b - (1 << w)
+            return (int(sa - int(sa / sb) * sb) if sb != 0 else 0) & mask
+    return (a % b) & mask
 
 def _op_shl(a, b, _s, mask, _p):
     return (a << (b & 0x3F)) & mask

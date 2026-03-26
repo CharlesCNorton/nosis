@@ -74,19 +74,32 @@ class PowerReport:
         return lines
 
 
-def estimate_power(netlist: ECP5Netlist, frequency_mhz: float = 25.0) -> PowerReport:
-    """Estimate power consumption from cell counts and assumed toggle rates."""
+def estimate_power(
+    netlist: ECP5Netlist,
+    frequency_mhz: float = 25.0,
+    toggle_rate: float = 0.125,
+) -> PowerReport:
+    """Estimate power consumption from cell counts and toggle rates.
+
+    The default toggle rate of 12.5% is a blanket assumption. Pass a
+    measured rate from ``estimate_toggle_rates`` for more accuracy.
+    Dynamic power scales linearly with toggle rate.
+    """
     stats = netlist.stats()
     total_static = 0.0
     total_dynamic = 0.0
     breakdown: dict[str, tuple[float, float]] = {}
+
+    # The _CELL_POWER dynamic values assume 12.5% toggle rate.
+    # Scale by the actual rate.
+    rate_scale = toggle_rate / 0.125
 
     for cell_type, (static_uw, dynamic_uw_per_mhz) in _CELL_POWER.items():
         count = stats.get(cell_type, 0)
         if count == 0:
             continue
         static_mw = count * static_uw / 1000.0
-        dynamic_mw = count * dynamic_uw_per_mhz * frequency_mhz / 1000.0
+        dynamic_mw = count * dynamic_uw_per_mhz * frequency_mhz * rate_scale / 1000.0
         total_static += static_mw
         total_dynamic += dynamic_mw
         breakdown[cell_type] = (static_mw, dynamic_mw)

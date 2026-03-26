@@ -2028,5 +2028,8 @@ def test_incremental_full_cycle():
     # Incremental remap — pass delta, not snapshot
     nl2 = incremental_remap(design, delta, nl1)
 
-    # The FF and port cells should be preserved (same type+params)
+    # Netlist must have cells and the original cells' attributes should be preserved
     assert nl2.stats().get("LUT4", 0) > 0
+    # Verify the remap produced a valid netlist with the same cell types
+    for cell in nl2.cells.values():
+        assert cell.cell_type in ("LUT4", "TRELLIS_FF", "CCU2C", "BB")

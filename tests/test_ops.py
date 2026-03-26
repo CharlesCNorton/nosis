@@ -1525,3 +1525,37 @@ def test_fast_sim_signed_lt():
     assert sim.step({"a": 0x01, "b": 0xFF})["y"] == 0
     # equal
     assert sim.step({"a": 0x80, "b": 0x80})["y"] == 0
+
+
+# --- Fuzz: random IR module construction + FastSimulator ---
+
+@given(
+    op=st.sampled_from([PrimOp.AND, PrimOp.OR, PrimOp.XOR, PrimOp.ADD, PrimOp.SUB]),
+    a_val=st.integers(min_value=0, max_value=0xFF),
+    b_val=st.integers(min_value=0, max_value=0xFF),
+)
+@settings(max_examples=100)
+def test_fuzz_fast_sim_matches_eval(op, a_val, b_val):
+    """FastSimulator must agree with eval_const_op for random inputs."""
+    from nosis.sim import FastSimulator
+    from nosis.eval import eval_const_op
+
+    mod = Module(name="fuzz")
+    a = mod.add_net("a", 8)
+    b = mod.add_net("b", 8)
+    y = mod.add_net("y", 8)
+    mod.add_cell("ap", PrimOp.INPUT, port_name="a")
+    mod.connect(mod.cells["ap"], "Y", a, direction="output")
+    mod.ports["a"] = a
+    mod.add_cell("bp", PrimOp.INPUT, port_name="b")
+    mod.connect(mod.cells["bp"], "Y", b, direction="output")
+    mod.ports["b"] = b
+    gc = mod.add_cell("g", op)
+    mod.connect(gc, "A", a)
+    mod.connect(gc, "B", b)
+    mod.connect(gc, "Y", y, direction="output")
+
+    sim = FastSimulator(mod)
+    sim_result = sim.step({"a": a_val, "b": b_val}).get("y", 0)
+    eval_result = eval_const_op(op, {"A": a_val, "B": b_val}, {}, 8)
+    assert sim_result == eval_result, f"{op}: sim={sim_result} eval={eval_result} a={a_val} b={b_val}"

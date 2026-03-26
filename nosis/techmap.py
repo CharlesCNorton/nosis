@@ -737,31 +737,17 @@ class _ECP5Mapper:
         if cell.op in (PrimOp.GT, PrimOp.GE):
             a_bits, b_bits = b_bits, a_bits
 
-        # For signed comparison, invert the MSB of both operands.
-        # This converts signed magnitude to unsigned ordering:
-        # -128..127 maps to 0..255 with the MSB flipped.
-        if cell.params.get("signed") and width > 0:
-            not_init = f"{_compute_lut4_init(PrimOp.NOT, 1):04X}"
-            for bits_list in (a_bits, b_bits):
-                if len(bits_list) >= width:
-                    msb = bits_list[width - 1]
-                    inv_msb = self.nl.alloc_bit()
-                    inv_lut = self.nl.add_cell(self._fresh_name("cmp_sinv"), "LUT4")
-                    inv_lut.parameters["INIT"] = not_init
-                    inv_lut.ports["A"] = [msb]
-                    inv_lut.ports["B"] = ["0"]
-                    inv_lut.ports["C"] = ["0"]
-                    inv_lut.ports["D"] = ["0"]
-                    inv_lut.ports["Z"] = [inv_msb]
-                    bits_list[width - 1] = inv_msb
+        is_signed = bool(cell.params.get("signed")) and width > 0
 
         # Build per-bit borrow chain from LSB to MSB
         # LUT: A=a_bit, B=b_bit, C=borrow_in
         # borrow_out = (!a & b) | (!(a^b) & borrow_in)
-        init = _compute_lut4_init(PrimOp.LT, 3)
-        init_hex = f"{init:04X}"
+        init_lt = _compute_lut4_init(PrimOp.LT, 3)
+        # For signed: at the MSB, swap the comparison sense.
+        # Inverting both MSBs is equivalent to using GT init at the MSB stage.
+        # GT: borrow_out = (a & !b) | (!(a^b) & borrow_in)
+        init_gt = _compute_lut4_init(PrimOp.GT, 3)
 
-        # Initial borrow = 0
         borrow: int | str = "0"
 
         for i in range(width):
@@ -777,7 +763,11 @@ class _ECP5Mapper:
             lut = self.nl.add_cell(self._fresh_name("cmp"), "LUT4")
             if cell.src:
                 lut.attributes["src"] = cell.src
-            lut.parameters["INIT"] = init_hex
+            # At MSB for signed comparison, swap LT/GT sense (equivalent to inverting both MSBs)
+            if is_signed and i == width - 1:
+                lut.parameters["INIT"] = f"{init_gt:04X}"
+            else:
+                lut.parameters["INIT"] = f"{init_lt:04X}"
             lut.ports["A"] = [ab]
             lut.ports["B"] = [bb]
             lut.ports["C"] = [borrow]

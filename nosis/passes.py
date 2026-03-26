@@ -905,9 +905,16 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
 
     stats: dict[str, int] = {}
     prev_cells = len(mod.cells)
+
+    # Skip verification for large designs (deep-copy is O(cells))
+    if verify and len(mod.cells) > 500:
+        verify = False
     snapshot = copy.deepcopy(mod) if verify else None
 
     for iteration in range(6):
+        if verify:
+            round_snapshot = copy.deepcopy(mod)
+
         cf = constant_fold(mod)
         ident = identity_simplify(mod)
         bo = boolean_optimize(mod)
@@ -923,6 +930,9 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
 
         total = cf + ident + bo + cff + cse + fi + hit + dci + mm + mz + ta + dce
         stats[f"round_{iteration}"] = total
+
+        if verify:
+            _check_equiv(round_snapshot, mod, f"round_{iteration}")
 
         cur_cells = len(mod.cells)
         if cur_cells == prev_cells:

@@ -450,3 +450,10 @@ def test_iverilog_postsynth_uart_tx():
             capture_output=True, text=True, timeout=30,
         )
         assert r.returncode == 0, f"iverilog failed:\n{r.stderr}"
+
+
+def test_cli_verify():
+    """The --verify flag should run equivalence checks without error on uart_tx."""
+    from nosis.cli import main
+    rc = main(["--check", "--verify", "--top", "uart_tx", RIME_UART_TX])
+    assert rc == 0

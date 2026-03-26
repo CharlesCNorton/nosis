@@ -1431,8 +1431,8 @@ def test_compare_signed_produces_extra_luts():
 
     nl = map_to_ecp5(design)
     luts = nl.stats().get("LUT4", 0)
-    # 8 chain LUTs + 2 MSB inversion LUTs = 10
-    assert luts >= 10, f"signed 8-bit LT should need >= 10 LUT4, got {luts}"
+    # 8 chain LUTs (MSB inversion folded into last stage's truth table)
+    assert luts >= 8, f"signed 8-bit LT should need >= 8 LUT4, got {luts}"
 
 
 # --- DIV/MOD power-of-2 mapping ---

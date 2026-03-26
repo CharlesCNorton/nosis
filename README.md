@@ -4,7 +4,7 @@ Correctness-first open-source FPGA synthesis targeting Lattice ECP5.
 
 Nosis synthesizes SystemVerilog and Verilog into technology-mapped netlists for the ECP5 FPGA family. It produces smaller netlists than yosys on real RISC-V SoC designs while maintaining provable functional equivalence at every optimization step.
 
-On a 13-file PicoRV32 SoC (PicoRV32 + UART + SPI flash + SD + SDRAM + CRC32), nosis produces 3,202 LUT slices after optimization. Yosys `synth_ecp5` on the same design produces approximately 4,700. Both target ECP5-25F.
+On a 13-file PicoRV32 SoC (PicoRV32 + UART + SPI flash + SD + SDRAM + CRC32), nosis produces 3,510 LUT slices after optimization. Yosys `synth_ecp5` on the same design produces approximately 4,700. Both target ECP5-25F.
 
 ## Architecture
 
@@ -38,12 +38,12 @@ Validated against real hardware designs from the [RIME](https://github.com/Charl
 
 | Design | Source | LUT slices | FFs | CCU2C | Notes |
 |--------|--------|-----------|-----|-------|-------|
-| uart_tx | 1 file, 76 lines | 9 | 46 | 32 | 4-state FSM, baud rate counter |
-| uart_rx | 1 file, 79 lines | 16 | 47 | 32 | Mid-bit sampling, baud counter |
-| sdram_bridge | 1 file, 130 lines | 14 | 220 | 14 | 128-bit burst aggregator |
-| sdram_controller | 1 file, 350 lines | 64 | 180 | 18 | W9825G6KH 32 MB SDR controller |
-| rime_pcpi_crc32 | 1 file, 50 lines | 0 | 32 | 0 | PicoRV32 PCPI CRC32 coprocessor |
-| PicoRV32 SoC | 13 files | 3,202 | 891 | ~600 | RV32IMC + UART + SPI + SD + SDRAM |
+| uart_tx | 1 file | 11 | 46 | 32 | 4-state FSM, baud rate counter |
+| uart_rx | 1 file | 11 | 47 | 32 | Mid-bit sampling, baud counter |
+| sdram_bridge | 1 file | 7 | 220 | 14 | 128-bit burst aggregator |
+| sdram_controller | 1 file | 64 | 180 | 18 | W9825G6KH 32 MB SDR controller |
+| rime_pcpi_crc32 | 1 file | 0 | 32 | 0 | PicoRV32 PCPI CRC32 coprocessor |
+| PicoRV32 SoC | 13 files | 3,510 | 891 | ~600 | RV32IMC + UART + SPI + SD + SDRAM |
 
 The SoC design includes PicoRV32 (RV32IMC), UART TX/RX with FIFOs, SPI flash engine, SD SPI engine, 32 MB SDRAM controller and bridge, CRC32 coprocessor, hardware watchdog, IRQ controller, boot ROM, and GPIO. All output ports are driven. Zero undriven nets after optimization.
 
@@ -243,7 +243,7 @@ All 30+ vendor primitives have stub declarations in `ecp5_prims.sv` for slang el
 
 ## Repository
 
-45 source modules, 12 test suites, 585 tests, 21,000 lines of Python.
+42 source modules, 12 test suites, 605 tests.
 
 | Module | Role |
 |--------|------|

@@ -45,24 +45,19 @@ module TRELLIS_FF_SIM #(
     input CLK, DI, LSR, CE,
     output reg Q
 );
-    wire rst_val = (REGSET == "SET") ? 1'b1 : 1'b0;
-    wire lsr_active = (LSRMUX == "LSR") ? LSR : ~LSR;
-    wire ce_active = (CEMUX == "CE") ? CE : ~CE;
-
     initial Q = INIT;
 
-    // Async reset (SRMODE == "ASYNC")
-    always @(posedge CLK or posedge lsr_active) begin
-        if (lsr_active && SRMODE == "ASYNC")
-            Q <= rst_val;
-        else if (SRMODE == "LSR_OVER_CE" && lsr_active)
-            Q <= rst_val;
-        else if (ce_active)
+    // Behavioral model — synchronous with priority reset.
+    // SRMODE=="ASYNC" would need `always @(posedge CLK or posedge LSR)`
+    // but that requires LSR directly in the sensitivity list, which only
+    // works when LSRMUX=="LSR". This model covers the common synchronous case.
+    always @(posedge CLK) begin
+        if ((LSRMUX == "LSR") ? LSR : ~LSR) begin
+            Q <= (REGSET == "SET") ? 1'b1 : 1'b0;
+        end else if ((CEMUX == "CE") ? CE : ~CE) begin
             Q <= DI;
+        end
     end
-
-    // GSR: global set/reset at power-up
-    // In simulation, INIT handles this via the initial block.
 endmodule
 
 module CCU2C_SIM #(
@@ -257,6 +252,22 @@ def generate_postsynth_verilog(netlist: ECP5Netlist) -> str:
             lines.append(f"    .CIN({cin}), .A0({a0}), .B0({b0}), .C0({c0}), .D0({d0}),")
             lines.append(f"    .A1({a1}), .B1({b1}), .C1({c1}), .D1({d1}),")
             lines.append(f"    .S0({s0}), .S1({s1}), .COUT({cout}));")
+
+        elif cell.cell_type == "DP16KD":
+            # Emit DP16KD_SIM with key parameters
+            safe = cell.name.replace("$", "_").replace(".", "_")
+            lines.append(f"  DP16KD_SIM {safe} (")
+            port_strs = []
+            for pname, pbits in sorted(cell.ports.items()):
+                port_strs.append(f"    .{pname}({_bit_ref(pbits)})")
+            lines.append(",\n".join(port_strs) + ");")
+        elif cell.cell_type == "MULT18X18D":
+            safe = cell.name.replace("$", "_").replace(".", "_")
+            lines.append(f"  MULT18X18D_SIM {safe} (")
+            port_strs = []
+            for pname, pbits in sorted(cell.ports.items()):
+                port_strs.append(f"    .{pname}({_bit_ref(pbits)})")
+            lines.append(",\n".join(port_strs) + ");")
 
     lines.append("")
     lines.append("endmodule")

@@ -1257,10 +1257,15 @@ class _Lowerer:
                         self.mod.connect(mux, "Y", mux_out, direction="output")
                         results[tgt_name] = mux_out
                     elif t_val:
-                        # Only true branch assigns — hold value when false
-                        hold_net = self._fresh_net("bmux_dflt", tgt_net.width)
-                        hold_cell = self._fresh_cell("bmux_dflt", PrimOp.CONST, value=0, width=tgt_net.width)
-                        self.mod.connect(hold_cell, "Y", hold_net, direction="output")
+                        # Only true branch assigns — hold value when false.
+                        # For always_ff (allow_nb), hold = target net (FF Q feedback).
+                        # For always_comb, hold = 0 (no feedback).
+                        if allow_nb:
+                            hold_net = tgt_net
+                        else:
+                            hold_net = self._fresh_net("bmux_dflt", tgt_net.width)
+                            hold_cell = self._fresh_cell("bmux_dflt", PrimOp.CONST, value=0, width=tgt_net.width)
+                            self.mod.connect(hold_cell, "Y", hold_net, direction="output")
                         mux_out = self._fresh_net("bmux", tgt_net.width)
                         mux = self._fresh_cell("bmux", PrimOp.MUX)
                         self.mod.connect(mux, "S", cond_net)
@@ -1289,10 +1294,13 @@ class _Lowerer:
                         if tnet is None:
                             continue
                         if tn not in inner_running:
-                            zn = self._fresh_net("bcase_dflt", tnet.width)
-                            zc = self._fresh_cell("bcase_dflt", PrimOp.CONST, value=0, width=tnet.width)
-                            self.mod.connect(zc, "Y", zn, direction="output")
-                            inner_running[tn] = zn
+                            if allow_nb:
+                                inner_running[tn] = tnet  # hold value = FF Q
+                            else:
+                                zn = self._fresh_net("bcase_dflt", tnet.width)
+                                zc = self._fresh_cell("bcase_dflt", PrimOp.CONST, value=0, width=tnet.width)
+                                self.mod.connect(zc, "Y", zn, direction="output")
+                                inner_running[tn] = zn
                         prev = inner_running[tn]
                         mo = self._fresh_net("bcase_mux", tnet.width)
                         mx = self._fresh_cell("bcase_mux", PrimOp.MUX)

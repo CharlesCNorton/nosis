@@ -1068,10 +1068,15 @@ class _Lowerer:
             if stmt.defaultCase is not None:
                 default_assigns = self._collect_nb_assignments(stmt.defaultCase)
 
-            # For each case item, collect assignments and build MUX chain
+            # For each case item, build a priority MUX chain.
+            # Each target gets a running "current value" that starts with
+            # the default and is updated by each matching case item.
+            running: dict[str, Net] = {}  # target_name -> current MUX output
+            for dl, dr, _, _ in default_assigns:
+                running[dl.name] = dr
+
             for item in items:
                 item_assigns = self._collect_nb_assignments(item.stmt)
-                # Each case item has expr list — build equality compare
                 for case_expr in item.expressions:
                     case_val = self.lower_expr(case_expr)
                     eq_net = self._fresh_net("case_eq", 1)
@@ -1081,22 +1086,22 @@ class _Lowerer:
                     self.mod.connect(eq_cell, "Y", eq_net, direction="output")
 
                     for lhs, rhs, _, _ in item_assigns:
-                        # Find the default for this target
-                        default_rhs = None
-                        for dl, dr, _, _ in default_assigns:
-                            if dl.name == lhs.name:
-                                default_rhs = dr
-                                break
-                        if default_rhs is None:
-                            default_rhs = lhs  # hold value
+                        # Get the running value for this target (default or previous MUX)
+                        prev = running.get(lhs.name, lhs)  # hold value if no default
 
                         mux_out = self._fresh_net("case_mux", lhs.width)
                         mux = self._fresh_cell("case_mux", PrimOp.MUX)
                         self.mod.connect(mux, "S", eq_net)
-                        self.mod.connect(mux, "A", default_rhs)
+                        self.mod.connect(mux, "A", prev)
                         self.mod.connect(mux, "B", rhs)
                         self.mod.connect(mux, "Y", mux_out, direction="output")
-                        results.append((lhs, mux_out, None, None))
+                        running[lhs.name] = mux_out
+
+            # Emit the final MUX outputs for all targets
+            for target_name, final_net in running.items():
+                target_net = self.mod.nets.get(target_name)
+                if target_net is not None:
+                    results.append((target_net, final_net, None, None))
 
         elif kind == "StatementKind.Block":
             inner = stmt.body
@@ -1301,13 +1306,14 @@ class _Lowerer:
                         self.mod.connect(cell, "Y", net, direction="output")
 
             elif kind == "SymbolKind.ContinuousAssign":
+                # Defer continuous assigns until after procedural blocks
+                # so that FF Q outputs are available for wiring.
+                if not hasattr(self, '_deferred_assigns'):
+                    self._deferred_assigns: list = []
                 assign_expr = node.body if hasattr(node, "body") else None
                 if assign_expr is None:
                     assign_expr = node.assignment if hasattr(node, "assignment") else None
                 if assign_expr is not None:
-                    # Strip delay from continuous assignments (not synthesizable)
-                    # Delays (#N) are simulation-only; slang preserves them
-                    # but they have no synthesis meaning.
                     delay = getattr(assign_expr, "timingControl", None)
                     if delay is not None:
                         src = self._src_from_node(node)
@@ -1316,7 +1322,7 @@ class _Lowerer:
                             "delay stripped from continuous assignment (not synthesizable)",
                             src=src,
                         ))
-                    self.lower_expr(assign_expr)
+                    self._deferred_assigns.append(assign_expr)
 
             elif kind == "SymbolKind.Defparam":
                 # defparam — slang resolves at elaboration time.
@@ -1395,6 +1401,10 @@ class _Lowerer:
                 ))
 
         body.visit(walk_member)
+
+        # Process deferred continuous assigns now that all FFs exist
+        for assign_expr in getattr(self, '_deferred_assigns', []):
+            self.lower_expr(assign_expr)
 
     def _lower_sub_instance(self, inst: Any) -> None:
         """Lower a sub-module instance by recursively lowering its body

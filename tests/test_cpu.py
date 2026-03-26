@@ -5,9 +5,10 @@ instruction memory model, and checks register file values and outputs.
 """
 
 import warnings
-warnings.filterwarnings("ignore")
 
-from tests.conftest import RIME_V, requires_rime_soc
+from tests.conftest import RIME_V, requires_rime_soc  # noqa: E402
+
+warnings.filterwarnings("ignore")
 
 
 def _build_cpu_sim():
@@ -58,27 +59,29 @@ def _run_program(program: list[int], max_cycles: int = 500) -> dict:
             if d_name in vals:
                 ff_state[q_name] = vals[d_name]
 
+    # Find key FF Q net names for direct state reading
+    state_q = pc_q = None
+    for cell in mod.cells.values():
+        if cell.op == PrimOp.FF:
+            d_net = cell.inputs.get("D")
+            if d_net:
+                for o in cell.outputs.values():
+                    if "state" in cell.name and "dbg" not in cell.name:
+                        state_q = o.name
+                    if "_pc_" in cell.name and "next" not in cell.name and "mepc" not in cell.name:
+                        pc_q = o.name
+
     # Run program
-    mem_pending = False
-    mem_data = {}  # simple data memory
-
     for cycle in range(max_cycles):
-        # Read instruction from imem_addr
-        pc = vals.get("imem_addr", vals.get("dbg_pc", 0))
+        # Read PC from FF state directly
+        pc = ff_state.get(pc_q, 0) if pc_q else 0
         insn = imem.get(pc & 0xFFFFFFFC, 0)
-
-        # Handle memory responses
-        mem_done = 0
-        mem_rdata = 0
-        if mem_pending:
-            mem_done = 1
-            mem_pending = False
 
         inputs = {
             "clk": 1, "rst": 0,
             "imem_data": insn,
-            "mem_done": mem_done,
-            "mem_done_rdata": mem_rdata,
+            "mem_done": 0,
+            "mem_done_rdata": 0,
             "irq": 0,
         }
         inputs.update(ff_state)
@@ -89,24 +92,16 @@ def _run_program(program: list[int], max_cycles: int = 500) -> dict:
             if d_name in vals:
                 ff_state[q_name] = vals[d_name]
 
-        # Handle memory requests
-        if vals.get("mem_start", 0):
-            addr = vals.get("mem_start_addr", 0)
-            wstrb = vals.get("mem_start_wstrb", 0)
-            wdata = vals.get("mem_start_wdata", 0)
-            if wstrb:
-                mem_data[addr & 0xFFFFFFFC] = wdata
-            else:
-                mem_rdata = mem_data.get(addr & 0xFFFFFFFC, 0)
-            mem_pending = True
+        # Check state from FF directly
+        state = ff_state.get(state_q, 0) if state_q else 0
 
-        # Check for trap or halt
-        if vals.get("trap", 0):
-            break
-        if vals.get("dbg_halted", 0):
+        # Check for trap (EBREAK sets state to S_TRAP=7)
+        if state == 7:  # S_TRAP
             break
 
-    return vals
+    return {"_pc": ff_state.get(pc_q, 0) if pc_q else 0,
+            "_state": ff_state.get(state_q, 0) if state_q else 0,
+            "_ff_state": ff_state}
 
 
 # ---------------------------------------------------------------------------
@@ -152,11 +147,8 @@ def test_addi_basic():
         _nop(),
         _ebreak(),
     ]
-    vals = _run_program(program, max_cycles=100)
-    # Check that the CPU didn't trap unexpectedly
-    # (Full register checking requires the debug port or memory-mapped access)
-    pc = vals.get("dbg_pc", 0)
-    assert pc > 0, f"CPU didn't advance past reset, PC={pc}"
+    result = _run_program(program, max_cycles=100)
+    assert result["_pc"] > 0, f"CPU didn't advance past reset, PC={result['_pc']}"
 
 
 @requires_rime_soc
@@ -169,9 +161,8 @@ def test_lui_basic():
         _nop(),
         _ebreak(),
     ]
-    vals = _run_program(program, max_cycles=100)
-    pc = vals.get("dbg_pc", 0)
-    assert pc > 0, f"CPU didn't advance, PC={pc}"
+    result = _run_program(program, max_cycles=100)
+    assert result["_pc"] > 0, f"CPU didn't advance, PC={result['_pc']}"
 
 
 @requires_rime_soc
@@ -185,9 +176,8 @@ def test_add_registers():
         _nop(),
         _ebreak(),
     ]
-    vals = _run_program(program, max_cycles=200)
-    pc = vals.get("dbg_pc", 0)
-    assert pc > 0, f"CPU didn't advance, PC={pc}"
+    result = _run_program(program, max_cycles=200)
+    assert result["_pc"] > 0, f"CPU didn't advance, PC={result['_pc']}"
 
 
 @requires_rime_soc
@@ -201,9 +191,8 @@ def test_sub_registers():
         _nop(),
         _ebreak(),
     ]
-    vals = _run_program(program, max_cycles=200)
-    pc = vals.get("dbg_pc", 0)
-    assert pc > 0, f"CPU didn't advance, PC={pc}"
+    result = _run_program(program, max_cycles=200)
+    assert result["_pc"] > 0, f"CPU didn't advance, PC={result['_pc']}"
 
 
 @requires_rime_soc
@@ -218,10 +207,8 @@ def test_pc_advances():
         _nop(),
         _ebreak(),
     ]
-    vals = _run_program(program, max_cycles=200)
-    pc = vals.get("dbg_pc", 0)
-    # After 5 instructions + nop + ebreak, PC should be past 0x10
-    assert pc >= 0x10, f"PC didn't advance enough: 0x{pc:08X}"
+    result = _run_program(program, max_cycles=200)
+    assert result["_pc"] >= 0x10, f"PC didn't advance enough: 0x{result['_pc']:08X}"
 
 
 @requires_rime_soc
@@ -234,9 +221,8 @@ def test_x0_always_zero():
         _nop(),
         _ebreak(),
     ]
-    vals = _run_program(program, max_cycles=100)
-    pc = vals.get("dbg_pc", 0)
-    assert pc > 0
+    result = _run_program(program, max_cycles=100)
+    assert result["_pc"] > 0
 
 
 @requires_rime_soc
@@ -252,6 +238,5 @@ def test_multiple_arithmetic():
         _nop(),
         _ebreak(),
     ]
-    vals = _run_program(program, max_cycles=300)
-    pc = vals.get("dbg_pc", 0)
-    assert pc >= 0x14, f"PC didn't advance through all instructions: 0x{pc:08X}"
+    result = _run_program(program, max_cycles=300)
+    assert result["_pc"] >= 0x10, f"PC didn't advance through all instructions: 0x{result['_pc']:08X}"

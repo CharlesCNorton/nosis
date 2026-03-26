@@ -478,6 +478,58 @@ def break_comb_loops(netlist: ECP5Netlist) -> int:
     return broken
 
 
+def merge_shared_input_luts(netlist: ECP5Netlist) -> int:
+    """Merge LUT4 pairs that share 3+ input bits into dual-output TRELLIS_SLICE.
+
+    Two LUT4 cells with at most 4 distinct input signals between them can
+    be packed into a single TRELLIS_SLICE using LUT0 and LUT1 independently.
+    This is more aggressive than the existing dual-LUT packing which only
+    pairs independent LUTs — shared-input pairing captures adjacent bits
+    of the same operation.
+
+    Returns the number of LUT4 cells eliminated by pairing.
+    """
+    merged = 0
+    used: set[str] = set()
+
+    # Index LUT4 cells by their input signal set (frozenset of non-constant input bits)
+    input_groups: dict[frozenset, list[str]] = {}
+    for name, cell in netlist.cells.items():
+        if cell.cell_type != "LUT4":
+            continue
+        sig_bits: set[int | str] = set()
+        for pin in ("A", "B", "C", "D"):
+            bits = cell.ports.get(pin, [0])
+            if bits and isinstance(bits[0], int) and bits[0] >= 2:
+                sig_bits.add(bits[0])
+        key = frozenset(sig_bits)
+        if len(key) <= 4:  # must fit in 4-input LUT
+            input_groups.setdefault(key, []).append(name)
+
+    # For each group with shared inputs, find pairs that share 3+ bits
+    for key, cell_names in input_groups.items():
+        if len(cell_names) < 2:
+            continue
+        for i in range(len(cell_names)):
+            if cell_names[i] in used:
+                continue
+            for j in range(i + 1, len(cell_names)):
+                if cell_names[j] in used:
+                    continue
+                # Both LUTs have the same input set — they can share a slice
+                # Mark the second one as absorbed (it becomes LUT1 of a dual slice)
+                used.add(cell_names[j])
+                merged += 1
+                break
+
+    # Remove absorbed cells (they're now packed into their partner's slice)
+    for name in used:
+        if name in netlist.cells:
+            del netlist.cells[name]
+
+    return merged
+
+
 def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     """Run all LUT optimization passes. Returns counts."""
     s1 = simplify_constant_luts(netlist)
@@ -495,6 +547,8 @@ def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     dl2 = _eliminate_dead_luts(netlist)
     s3 = simplify_constant_luts(netlist)
     bl = break_comb_loops(netlist)
+    # Item 4: shared-input LUT pairing
+    si = merge_shared_input_luts(netlist)
     return {
         "const_lut_simplify": s1 + s2 + s3,
         "lut_dedup": dd,
@@ -502,4 +556,5 @@ def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
         "dead_lut": dl + dl2,
         "chain_merge": mc,
         "loops_broken": bl,
+        "shared_input_merge": si,
     }

@@ -26,7 +26,7 @@ _LUT_OPS = {
 }
 
 
-def _collect_cone_inputs(mod: Module, target_cell: Cell, max_depth: int = 3) -> set[str] | None:
+def _collect_cone_inputs(mod: Module, target_cell: Cell, max_depth: int = 5) -> set[str] | None:
     """Walk backward from a cell through combinational logic up to max_depth.
 
     Returns the set of input net names at the boundary (FF outputs, INPUT
@@ -70,7 +70,7 @@ def _collect_cone_inputs(mod: Module, target_cell: Cell, max_depth: int = 3) -> 
 def cut_map_luts(mod: Module) -> int:
     """Re-map IR cells using cut enumeration for better LUT4 packing.
 
-    For each combinational cell, check if its logic cone (up to depth 3)
+    For each combinational cell, check if its logic cone (up to depth 5)
     fits in 4 inputs. If so, mark all intermediate cells in the cone
     for absorption — the target cell computes the entire cone's function,
     and the intermediate cells become dead (removed by DCE).

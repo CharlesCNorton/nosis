@@ -6,17 +6,14 @@
 2. Multi-dimensional array writes — `array[i][j] <= val` not handled
 3. `$clog2`, `$bits` at non-constant contexts — parametric designs may not resolve at elaboration
 4. Interfaces and modports — members extracted but modport direction constraints not enforced
-5. `real` and `shortreal` types — need clean rejection with error message
-6. Multi-clock domain synthesis — single-clock works, multi-clock needs domain tracking through pipeline
-7. Latch synthesis — warn but also produce TRELLIS_FF in latch mode (LSRMUX/SRMODE)
-8. UDP (User-Defined Primitives) — rare but legal, need clean rejection or basic support
-9. Memory inference for large arrays — arrays > 32 elements should use DP16KD, not individual FFs
+5. Multi-clock domain synthesis — single-clock works, multi-clock needs domain tracking through pipeline
+6. Latch synthesis — warn but also produce TRELLIS_FF in latch mode (LSRMUX/SRMODE)
+7. Memory inference for large arrays — arrays > 32 elements should use DP16KD, not individual FFs
 
 ## Optimization — reduce LUT inflation from correct MUX lowering
 
-10. Mutual exclusion detection — if-else branches that are provably exclusive should share one MUX, not chain
-11. Redundant MUX hold elimination — MUX(cond, x, x) = x regardless of cond
-12. Conditional guard folding — MUX(cond, hold, val) where hold is never selected can drop the guard
+8. Mutual exclusion detection — if-else branches that are provably exclusive should share one MUX, not chain
+9. Conditional guard folding — MUX(cond, hold, val) where hold is never selected can drop the guard
 
 ## Hardware targets — OS and system support
 

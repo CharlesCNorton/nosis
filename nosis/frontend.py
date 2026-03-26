@@ -1424,6 +1424,17 @@ class _Lowerer:
             kind = str(node.kind)
 
             if kind == "SymbolKind.Variable":
+                # Reject real/shortreal types
+                t = node.type if hasattr(node, "type") else None
+                type_str = str(getattr(t, "kind", "")) if t else ""
+                if "Real" in type_str or "ShortReal" in type_str:
+                    src = self._src_from_node(node)
+                    self.warnings.append(SynthesisWarning(
+                        "unsupported_type",
+                        f"variable '{node.name}' has type {type_str} which is not synthesizable",
+                        src=src,
+                    ))
+                    return
                 w = self._bit_width(node)
                 # Check for unpacked arrays (memories)
                 t = node.type if hasattr(node, "type") else None
@@ -1680,6 +1691,15 @@ class _Lowerer:
                 self.warnings.append(SynthesisWarning(
                     "unsupported_construct",
                     f"{kind} is resolved by the frontend and does not affect synthesis",
+                    src=src,
+                ))
+
+            # UDP (User-Defined Primitives) — reject with warning (#8)
+            elif kind == "SymbolKind.PrimitivePort":
+                src = self._src_from_node(node)
+                self.warnings.append(SynthesisWarning(
+                    "unsupported_construct",
+                    "UDP (User-Defined Primitive) not supported for synthesis",
                     src=src,
                 ))
 

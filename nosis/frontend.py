@@ -636,7 +636,7 @@ class _Lowerer:
         arr_depth = arr_info[0] if arr_info else 0
         arr_elem_w = arr_info[1] if arr_info else 0
 
-        if arr_depth > 0 and arr_elem_w > 0 and selector is not None:
+        if arr_depth > 0 and arr_elem_w > 0 and selector is not None and src_net is not None:
             sel_const = getattr(selector, "constant", None)
             if sel_const is not None:
                 # Constant index: SLICE at fixed offset

@@ -394,9 +394,15 @@ class _Lowerer:
                 cell = self._fresh_cell("stripped_sim", PrimOp.CONST, value=0, width=w)
                 self.mod.connect(cell, "Y", net, direction="output")
                 return net
+            # $signed/$unsigned and other type casts are pass-throughs.
+            # pyslang may represent them as unnamed 1-arg calls.
+            if call_name in ("$signed", "$unsigned", ""):
+                args_list = list(getattr(expr, "arguments", []))
+                if len(args_list) == 1:
+                    return self.lower_expr(args_list[0])
+
             # System function calls ($clog2, $bits, etc.) are typically
-            # resolved to constants by slang during elaboration. If we
-            # reach here, treat as constant 0.
+            # resolved to constants by slang during elaboration.
             w = self._bit_width(expr)
             const = getattr(expr, "constant", None)
             if const is not None:
@@ -405,9 +411,17 @@ class _Lowerer:
                 cell = self._fresh_cell("call_const", PrimOp.CONST, value=int_val, width=w)
                 self.mod.connect(cell, "Y", net, direction="output")
                 return net
+            # Unknown call — default to CONST(0) with warning
+            w = self._bit_width(expr) or 1
             net = self._fresh_net("call", w)
             cell = self._fresh_cell("call", PrimOp.CONST, value=0, width=w)
             self.mod.connect(cell, "Y", net, direction="output")
+            src = self._src_from_node(expr)
+            self.warnings.append(SynthesisWarning(
+                "unsupported_call",
+                f"unrecognized system function '{call_name}' replaced with constant 0",
+                src=src,
+            ))
             return net
         elif kind in ("ExpressionKind.EmptyArgument", "ExpressionKind.StringLiteral"):
             w = self._bit_width(expr) or 1

@@ -834,7 +834,7 @@ class _Lowerer:
                     if other_cell is ff:
                         continue
                     for pname, pnet in list(other_cell.inputs.items()):
-                        if pnet is lhs_net:
+                        if pnet is lhs_net or pnet.name == lhs_net.name:
                             other_cell.inputs[pname] = q_net
                 # Update port references
                 for pname, pnet in list(self.mod.ports.items()):

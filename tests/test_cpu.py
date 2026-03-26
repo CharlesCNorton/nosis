@@ -99,8 +99,20 @@ def _run_program(program: list[int], max_cycles: int = 500) -> dict:
         if state == 7:  # S_TRAP
             break
 
+    # Extract register file values from FF state
+    import re
+    regs = {0: 0}  # x0 is always 0
+    for cell in mod.cells.values():
+        if cell.op == PrimOp.FF:
+            m = re.search(r"regs_(\d+)", cell.name)
+            if m:
+                idx = int(m.group(1))
+                for o in cell.outputs.values():
+                    regs[idx] = ff_state.get(o.name, 0)
+
     return {"_pc": ff_state.get(pc_q, 0) if pc_q else 0,
             "_state": ff_state.get(state_q, 0) if state_q else 0,
+            "_regs": regs,
             "_ff_state": ff_state}
 
 

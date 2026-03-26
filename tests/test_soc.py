@@ -160,6 +160,50 @@ class TestThaw:
 
 
 # ---------------------------------------------------------------------------
+# Frost — BRAM-backed configurable grid
+# ---------------------------------------------------------------------------
+
+@requires_rime_soc
+class TestFrost:
+
+    def _d(self):
+        return get_design("frost")
+
+    def test_parse_zero_errors(self):
+        assert len(self._d().parsed.errors) == 0
+
+    def test_ir_cell_count(self):
+        assert self._d().mod.stats()["cells"] >= 500
+
+    def test_techmap(self):
+        s = self._d().netlist.stats()
+        assert s.get("LUT4", 0) >= 1000
+        assert s.get("TRELLIS_FF", 0) >= 500
+
+
+# ---------------------------------------------------------------------------
+# Slush — register-backed configurable grid
+# ---------------------------------------------------------------------------
+
+@requires_rime_soc
+class TestSlush:
+
+    def _d(self):
+        return get_design("slush")
+
+    def test_parse_zero_errors(self):
+        assert len(self._d().parsed.errors) == 0
+
+    def test_ir_cell_count(self):
+        assert self._d().mod.stats()["cells"] >= 500
+
+    def test_techmap(self):
+        s = self._d().netlist.stats()
+        assert s.get("LUT4", 0) >= 1000
+        assert s.get("TRELLIS_FF", 0) >= 500
+
+
+# ---------------------------------------------------------------------------
 # PicoRV32 SoC — full board image
 # ---------------------------------------------------------------------------
 

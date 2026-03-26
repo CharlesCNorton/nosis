@@ -218,6 +218,7 @@ def parse_files(
     _SUPPRESS_CODES = {
         "DiagCode(MissingTimeScale)",
         "DiagCode(MultipleAlwaysAssigns)",  # common in synthesizable RTL with multi-block assigns
+        "DiagCode(UsedBeforeDeclared)",     # multi-file synthesis — module instantiation order varies
     }
 
     diagnostics: list[str] = []

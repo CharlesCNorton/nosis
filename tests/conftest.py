@@ -51,6 +51,32 @@ RIME_THAW_SOURCES = [
     os.path.join(RIME_FW, "core/service/sdram_bridge.sv"),
 ]
 
+RIME_FROST_SOURCES = [
+    os.path.join(RIME_FW, "images/frost/top.sv"),
+    os.path.join(RIME_FW, "images/frost/frost_controller.sv"),
+    os.path.join(RIME_FW, "images/frost/frost_grid.sv"),
+    os.path.join(RIME_FW, "images/frost/frost_readback.sv"),
+    RIME_UART_RX,
+    RIME_UART_TX,
+    os.path.join(RIME_FW, "core/service/flash_spi_master.sv"),
+    os.path.join(RIME_FW, "core/service/sd_spi_master.sv"),
+    os.path.join(RIME_FW, "core/service/sdram_controller.sv"),
+    os.path.join(RIME_FW, "core/service/sdram_bridge.sv"),
+]
+
+RIME_SLUSH_SOURCES = [
+    os.path.join(RIME_FW, "images/slush/top.sv"),
+    os.path.join(RIME_FW, "images/slush/slush_controller.sv"),
+    os.path.join(RIME_FW, "images/slush/slush_grid.sv"),
+    os.path.join(RIME_FW, "images/slush/slush_readback.sv"),
+    RIME_UART_RX,
+    RIME_UART_TX,
+    os.path.join(RIME_FW, "core/service/flash_spi_master.sv"),
+    os.path.join(RIME_FW, "core/service/sd_spi_master.sv"),
+    os.path.join(RIME_FW, "core/service/sdram_controller.sv"),
+    os.path.join(RIME_FW, "core/service/sdram_bridge.sv"),
+]
+
 RIME_SOC_SOURCES = [
     os.path.join(RIME_FW, "images/picorv32/top.sv"),
     RIME_PICORV32,
@@ -170,6 +196,10 @@ def get_design(name: str) -> _DesignCache:
             _caches[name] = _DesignCache([RIME_V], "rime_v")
         elif name == "thaw":
             _caches[name] = _DesignCache(RIME_THAW_SOURCES, "top")
+        elif name == "frost":
+            _caches[name] = _DesignCache(RIME_FROST_SOURCES, "top")
+        elif name == "slush":
+            _caches[name] = _DesignCache(RIME_SLUSH_SOURCES, "top")
         elif name == "soc":
             _caches[name] = _DesignCache(RIME_SOC_SOURCES, "top")
         elif name == "picorv32":

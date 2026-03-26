@@ -907,6 +907,28 @@ class _Lowerer:
                 # sub-instance outputs to parent nets.
                 lhs_net.driver = ff
 
+            # Final sweep: replace any remaining reference to a target
+            # net with its FF Q net. Uses both identity and name matching.
+            ff_q_map: dict[str, "Net"] = {}
+            tgt_nets: dict[str, "Net"] = {}
+            for cell in self.mod.cells.values():
+                if cell.op == PrimOp.FF:
+                    target = cell.params.get("ff_target", "")
+                    tnet = self.mod.nets.get(target)
+                    if tnet:
+                        for o in cell.outputs.values():
+                            ff_q_map[target] = o
+                            tgt_nets[target] = tnet
+
+            for tgt_name, q_net in ff_q_map.items():
+                tnet = tgt_nets[tgt_name]
+                for cell in self.mod.cells.values():
+                    if cell.op == PrimOp.FF:
+                        continue
+                    for pn, pnet in list(cell.inputs.items()):
+                        if pnet is tnet or (pnet.name == tgt_name and pnet.width == q_net.width):
+                            cell.inputs[pn] = q_net
+
     def _lower_initial_block(self, stmt: Any) -> None:
         """Extract blocking assignments from an initial block as net attributes.
 
@@ -1258,8 +1280,8 @@ class _Lowerer:
                         results[tgt_name] = mux_out
                     elif t_val:
                         # Only true branch assigns — hold value when false.
-                        # For always_ff (allow_nb), hold = target net (FF Q feedback).
-                        # For always_comb, hold = 0 (no feedback).
+                        # For always_ff: use target net (FF Q will replace it).
+                        # For always_comb: use CONST(0).
                         if allow_nb:
                             hold_net = tgt_net
                         else:
@@ -1295,7 +1317,7 @@ class _Lowerer:
                             continue
                         if tn not in inner_running:
                             if allow_nb:
-                                inner_running[tn] = tnet  # hold value = FF Q
+                                inner_running[tn] = tnet
                             else:
                                 zn = self._fresh_net("bcase_dflt", tnet.width)
                                 zc = self._fresh_cell("bcase_dflt", PrimOp.CONST, value=0, width=tnet.width)
@@ -1321,14 +1343,21 @@ class _Lowerer:
                 for tgt_name, rhs_net in child_map.items():
                     if tgt_name in results:
                         # Target already assigned by an earlier child.
-                        # The new rhs_net's MUX hold input should use the
-                        # earlier result instead of the raw target net.
+                        # Walk the new rhs_net's MUX A-chain to find
+                        # where the hold value (tgt_net) appears, and
+                        # replace it with the earlier result.
                         prev = results[tgt_name]
-                        if rhs_net.driver and rhs_net.driver.op == PrimOp.MUX:
-                            a_inp = rhs_net.driver.inputs.get("A")
-                            tgt_net = self.mod.nets.get(tgt_name)
-                            if a_inp and tgt_net and (a_inp is tgt_net or a_inp.name == tgt_name):
-                                rhs_net.driver.inputs["A"] = prev
+                        tgt_net = self.mod.nets.get(tgt_name)
+                        if tgt_net:
+                            cur = rhs_net
+                            for _ in range(20):  # depth limit
+                                if not cur.driver or cur.driver.op != PrimOp.MUX:
+                                    break
+                                a = cur.driver.inputs.get("A")
+                                if a and (a is tgt_net or a.name == tgt_name):
+                                    cur.driver.inputs["A"] = prev
+                                    break
+                                cur = a
                     results[tgt_name] = rhs_net
 
         return results
@@ -1744,16 +1773,16 @@ class _Lowerer:
             elif rhs.driver is not None:
                 lhs.driver = rhs.driver
 
-        # Deduplicate cell outputs: if two cells output to the same net
-        # object, the FIRST one keeps it (it's the one in the comb MUX chain).
-        # Later duplicates (from blocking assignment rewiring) get fresh nets.
-        seen_outputs: dict[int, str] = {}  # net id -> first cell name
-        for cell in list(self.mod.cells.values()):
-            for pn, pnet in list(cell.outputs.items()):
-                net_id = id(pnet)
-                if net_id in seen_outputs and seen_outputs[net_id] != cell.name:
-                    # This cell is a later duplicate — give it a fresh net
-                    fresh = self._fresh_net(f"dedup_{cell.name}", pnet.width)
+        # Deduplicate cell outputs: disabled — the blocking assignment
+        # rewiring in _lower_assignment_expr was simplified to avoid
+        # creating duplicates. Re-enable if simulator shows dual-write issues.
+        if False:  # noqa: SIM108
+            seen_outputs: dict[int, str] = {}
+            for cell in list(self.mod.cells.values()):
+                for pn, pnet in list(cell.outputs.items()):
+                    net_id = id(pnet)
+                    if net_id in seen_outputs and seen_outputs[net_id] != cell.name:
+                        fresh = self._fresh_net(f"dedup_{cell.name}", pnet.width)
                     cell.outputs[pn] = fresh
                 else:
                     seen_outputs[net_id] = cell.name

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -153,6 +153,7 @@ class ParseResult:
     diagnostics: list[str]
     errors: list[str]
     top_instances: list[Any]  # list of pyslang InstanceSymbol
+    readmem_associations: dict[str, tuple[str, str]] = field(default_factory=dict)  # mem_name -> (file, format)
 
 
 # ---------------------------------------------------------------------------
@@ -244,12 +245,29 @@ def parse_files(
     if not top_instances:
         raise FrontendError("no top-level instances found after elaboration")
 
+    # Pre-scan source files for $readmemh/$readmemb calls.
+    # pyslang may resolve these during elaboration and remove them
+    # from the AST, so we extract them from the source text directly.
+    readmem_associations: dict[str, tuple[str, str]] = {}  # mem_name -> (file, format)
+    _readmem_re = _re.compile(
+        r'\$readmem([hb])\s*\(\s*"([^"]+)"\s*,\s*(\w+)',
+    )
+    for path in paths:
+        try:
+            text = Path(path).read_text(encoding="utf-8", errors="ignore")
+            for m in _readmem_re.finditer(text):
+                fmt = "hex" if m.group(1) == "h" else "bin"
+                readmem_associations[m.group(3)] = (m.group(2), fmt)
+        except (OSError, IOError):
+            pass
+
     return ParseResult(
         compilation=comp,
         driver=drv,
         diagnostics=diagnostics,
         errors=errors,
         top_instances=top_instances,
+        readmem_associations=readmem_associations,
     )
 
 
@@ -974,10 +992,38 @@ class _Lowerer:
 
         Records the initial value on each target net so the FF mapper
         can set the ECP5 REGSET parameter (power-on reset state).
+        Also intercepts $readmemh/$readmemb calls to record init files
+        on MEMORY cells.
         """
         kind = str(stmt.kind)
         if kind == "StatementKind.ExpressionStatement":
             expr = stmt.expr
+            # Handle $readmemh/$readmemb as standalone calls in initial blocks
+            if str(expr.kind) == "ExpressionKind.Call":
+                sub = getattr(expr, "subroutine", None)
+                call_name = getattr(sub, "name", "") if sub else ""
+                if call_name in ("$readmemh", "$readmemb"):
+                    args_list = list(getattr(expr, "arguments", []))
+                    if len(args_list) >= 2:
+                        file_arg = args_list[0]
+                        mem_arg = args_list[1]
+                        file_str = ""
+                        if hasattr(file_arg, "constant") and file_arg.constant is not None:
+                            file_str = str(file_arg.constant).strip('"').strip("'")
+                        elif hasattr(file_arg, "value"):
+                            file_str = str(file_arg.value).strip('"').strip("'")
+                        mem_name = getattr(getattr(mem_arg, "symbol", None), "name", "")
+                        if file_str and mem_name:
+                            # Find MEMORY cell by exact or suffix match
+                            for mc in self.mod.cells.values():
+                                if mc.op != PrimOp.MEMORY:
+                                    continue
+                                cm = mc.params.get("mem_name", "")
+                                if cm == mem_name or cm.endswith(f".{mem_name}"):
+                                    mc.params["init_file"] = file_str
+                                    mc.params["init_format"] = "hex" if call_name == "$readmemh" else "bin"
+                                    break
+                    return
             if str(expr.kind) == "ExpressionKind.Assignment" and not expr.isNonBlocking:
                 lhs = self.lower_expr(expr.left)
                 rhs = self.lower_expr(expr.right)
@@ -2204,5 +2250,19 @@ def lower_to_ir(result: ParseResult, *, top: str | None = None) -> Design:
 
     # Attach warnings to design for inspection
     design.synthesis_warnings = all_warnings
+
+    # Apply $readmemh/$readmemb associations from source-text scanning
+    readmem = getattr(result, "readmem_associations", {})
+    if readmem:
+        for mod in design.modules.values():
+            for cell in mod.cells.values():
+                if cell.op != PrimOp.MEMORY:
+                    continue
+                mem_name = cell.params.get("mem_name", "")
+                base = mem_name.rsplit(".", 1)[-1] if "." in mem_name else mem_name
+                if base in readmem and "init_file" not in cell.params:
+                    file_str, fmt = readmem[base]
+                    cell.params["init_file"] = file_str
+                    cell.params["init_format"] = fmt
 
     return design

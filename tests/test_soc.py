@@ -341,6 +341,21 @@ class TestSoC:
                 assert port["bits"] == mod["netnames"][pname]["bits"], \
                     f"port/netname mismatch for {pname}"
 
+    def test_readmemh_init_files_detected(self):
+        """$readmemh associations must be detected and applied to MEMORY cells."""
+        from nosis.frontend import parse_files, lower_to_ir
+        r = parse_files(RIME_SOC_SOURCES, top="top")
+        assert "progmem" in r.readmem_associations
+        assert r.readmem_associations["progmem"] == ("firmware.hex", "hex")
+        d = lower_to_ir(r, top="top")
+        mod = d.top_module()
+        init_cells = [c for c in mod.cells.values()
+                      if c.op == PrimOp.MEMORY and c.params.get("init_file")]
+        assert len(init_cells) >= 2
+        names = {c.params.get("mem_name", "").rsplit(".", 1)[-1] for c in init_cells}
+        assert "progmem" in names
+        assert "bootrom" in names
+
     def test_optimized_soc_lut_count(self):
         """Optimized SoC LUT count must stay under 15000 after slicepack."""
         from nosis.frontend import parse_files, lower_to_ir

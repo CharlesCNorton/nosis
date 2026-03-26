@@ -1393,15 +1393,28 @@ class _Lowerer:
                         prev = results[tgt_name]
                         tgt_net = self.mod.nets.get(tgt_name)
                         if tgt_net:
-                            cur = rhs_net
-                            for _ in range(20):  # depth limit
-                                if not cur.driver or cur.driver.op != PrimOp.MUX:
-                                    break
-                                a = cur.driver.inputs.get("A")
-                                if a and (a is tgt_net or a.name == tgt_name):
-                                    cur.driver.inputs["A"] = prev
-                                    break
-                                cur = a
+                            # Walk the entire cone of rhs_net and replace
+                            # every reference to tgt_net with prev. This
+                            # handles chained assignments from unrolled for
+                            # loops where each iteration reads the variable
+                            # it's about to write (e.g. CLZ/CPOP patterns).
+                            visited: set[str] = set()
+                            work = [rhs_net]
+                            while work:
+                                net = work.pop()
+                                if net.name in visited:
+                                    continue
+                                visited.add(net.name)
+                                if net.driver is None:
+                                    continue
+                                d = net.driver
+                                for pn, pnet in list(d.inputs.items()):
+                                    if pnet is tgt_net or pnet.name == tgt_name:
+                                        d.inputs[pn] = prev
+                                    elif pnet.name not in visited:
+                                        work.append(pnet)
+                                if len(visited) > 500:
+                                    break  # safety limit
                     results[tgt_name] = rhs_net
 
         return results

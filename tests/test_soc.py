@@ -46,7 +46,7 @@ class TestRimeV:
 
     def test_locked_counts(self):
         s = self._d().netlist.stats()
-        assert 5853 <= s["LUT4"] <= 6341, f"LUT: {s['LUT4']}"
+        assert 7800 <= s["LUT4"] <= 8500, f"LUT: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 1727, f"FF: {s['TRELLIS_FF']}"
         assert 269 <= s["CCU2C"] <= 300, f"CCU2C: {s['CCU2C']}"
 
@@ -126,7 +126,7 @@ class TestThaw:
 
     def test_locked_counts(self):
         s = self._d().netlist.stats()
-        assert 16982 <= s["LUT4"] <= 18398, f"LUT: {s['LUT4']}"
+        assert 18000 <= s["LUT4"] <= 19600, f"LUT: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 6143, f"FF: {s['TRELLIS_FF']}"
         assert 1023 <= s["CCU2C"] <= 1064, f"CCU2C: {s['CCU2C']}"
 

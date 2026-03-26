@@ -191,6 +191,7 @@ class FastSimulator:
         "_input_cells", "_const_instructions",
         "_ff_d_idx", "_ff_q_idx",
         "_concat_instrs", "_repeat_instrs", "_pmux_instrs",
+        "_memories",
     )
 
     def __init__(self, mod: Module) -> None:
@@ -222,6 +223,35 @@ class FastSimulator:
                     q_idx = net_index.get(out.name, -1)
                     self._ff_d_idx.append(d_idx)
                     self._ff_q_idx.append(q_idx)
+
+        # Collect MEMORY cells: (depth, width, addr_indices[], rdata_indices[], waddr_idx, wdata_idx, we_idx)
+        self._memories: list[dict] = []
+        for cell in mod.cells.values():
+            if cell.op == PrimOp.MEMORY:
+                depth = int(cell.params.get("depth", 0))
+                width = int(cell.params.get("width", 0))
+                mem: dict = {"depth": depth, "width": width, "storage": [0] * depth,
+                             "reads": [], "waddr_idx": -1, "wdata_idx": -1, "we_idx": -1}
+                # Collect read ports
+                for pname, pnet in cell.outputs.items():
+                    if pname.startswith("RDATA"):
+                        port_num = pname[5:] or "0"
+                        addr_name = f"RADDR{port_num}" if port_num != "0" else "RADDR"
+                        addr_net = cell.inputs.get(addr_name)
+                        addr_idx = net_index.get(addr_net.name, -1) if addr_net else -1
+                        rdata_idx = net_index.get(pnet.name, -1)
+                        mem["reads"].append((addr_idx, rdata_idx))
+                # Collect write port
+                waddr = cell.inputs.get("WADDR")
+                wdata = cell.inputs.get("WDATA")
+                we = cell.inputs.get("WE")
+                if waddr:
+                    mem["waddr_idx"] = net_index.get(waddr.name, -1)
+                if wdata:
+                    mem["wdata_idx"] = net_index.get(wdata.name, -1)
+                if we:
+                    mem["we_idx"] = net_index.get(we.name, -1)
+                self._memories.append(mem)
 
         # Topological sort — done once
         order = self._topo_sort(mod)
@@ -377,6 +407,23 @@ class FastSimulator:
                     result = vals[ci] if ci >= 0 else 0
                     break
             vals[out_idx] = result
+
+        # Execute MEMORY reads (combinational) and writes (clocked)
+        for mem in self._memories:
+            storage = mem["storage"]
+            depth = mem["depth"]
+            mask = (1 << mem["width"]) - 1 if mem["width"] > 0 else 0
+            # Read ports: address -> data (combinational)
+            for addr_idx, rdata_idx in mem["reads"]:
+                if addr_idx >= 0 and rdata_idx >= 0:
+                    addr = vals[addr_idx] % depth if depth > 0 else 0
+                    vals[rdata_idx] = storage[addr] & mask
+            # Write port: clocked (apply at end of cycle)
+            if mem["we_idx"] >= 0 and mem["waddr_idx"] >= 0 and mem["wdata_idx"] >= 0:
+                we = vals[mem["we_idx"]]
+                if we:
+                    waddr = vals[mem["waddr_idx"]] % depth if depth > 0 else 0
+                    storage[waddr] = vals[mem["wdata_idx"]] & mask
 
         # Build output dict
         return {name: vals[idx] for name, idx in ni.items()}

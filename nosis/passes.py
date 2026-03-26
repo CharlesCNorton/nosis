@@ -38,25 +38,8 @@ def constant_fold(mod: Module) -> int:
 
     Returns the number of cells folded.
     """
-    # Protect nets in the transitive fanout of MEMORY read ports.
-    # Memory reads are data-dependent — their output is not constant
-    # even though simulation may see only the reset-state value.
-    _mem_fanout: set[str] = set()
-    _mem_wl: list[str] = []
-    for cell in mod.cells.values():
-        if cell.op == PrimOp.MEMORY:
-            for net in cell.outputs.values():
-                _mem_fanout.add(net.name)
-                _mem_wl.append(net.name)
-    while _mem_wl:
-        _n = _mem_wl.pop()
-        for cell in mod.cells.values():
-            for inp in cell.inputs.values():
-                if inp.name == _n:
-                    for out in cell.outputs.values():
-                        if out.name not in _mem_fanout:
-                            _mem_fanout.add(out.name)
-                            _mem_wl.append(out.name)
+    # Use the global memory protection set from run_default_passes.
+    _mem_fanout = _active_mem_protect
 
     folded = 0
     changed = True
@@ -949,13 +932,20 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
     stats: dict[str, int] = {}
     prev_cells = len(mod.cells)
 
-    # Build MEMORY fanout set once — all nets transitively driven by
-    # MEMORY read outputs. These must be protected from simulation-based
-    # optimization because the simulator cannot model stateful memory reads.
+    # Build MEMORY fanout set — all nets transitively driven by MEMORY
+    # read outputs or by flattened array PMUX reads.
+    # Simulation can model memory reads now, but the register file pattern
+    # (per-element FF writes + PMUX variable-index reads) creates a disconnect
+    # that simulation-based optimization exploits incorrectly.
     _mem_protect: set[str] = set()
     _mpwl: list[str] = []
     for _c in mod.cells.values():
         if _c.op == PrimOp.MEMORY:
+            for _o in _c.outputs.values():
+                _mem_protect.add(_o.name)
+                _mpwl.append(_o.name)
+        # Also protect PMUX outputs that read from flattened arrays
+        if _c.op == PrimOp.PMUX:
             for _o in _c.outputs.values():
                 _mem_protect.add(_o.name)
                 _mpwl.append(_o.name)
@@ -968,7 +958,6 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
                         if _o.name not in _mem_protect:
                             _mem_protect.add(_o.name)
                             _mpwl.append(_o.name)
-    # Store as module-level variable for passes to check
     global _active_mem_protect
     _active_mem_protect = _mem_protect
 
@@ -1070,24 +1059,8 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
             if _dn in _vs2:
                 _ff2[_qn] = _vs2[_dn]
 
-    # Build MEMORY fanout set — these nets must not be proven constant
-    # because simulation cannot model stateful memory reads.
-    _mem_fanout2: set[str] = set()
-    _mwl2: list[str] = []
-    for _c in mod.cells.values():
-        if _c.op == PrimOp.MEMORY:
-            for _o in _c.outputs.values():
-                _mem_fanout2.add(_o.name)
-                _mwl2.append(_o.name)
-    while _mwl2:
-        _mn = _mwl2.pop()
-        for _c in mod.cells.values():
-            for _inp in _c.inputs.values():
-                if _inp.name == _mn:
-                    for _o in _c.outputs.values():
-                        if _o.name not in _mem_fanout2:
-                            _mem_fanout2.add(_o.name)
-                            _mwl2.append(_o.name)
+    # Use the global memory protection set.
+    _mem_fanout2 = _active_mem_protect
 
     _cands2 = {}
     for _n, _svs in _nv2.items():

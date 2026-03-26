@@ -120,10 +120,17 @@ def merge_reachable_equivalent(
     for cell in mod.cells.values():
         if cell.op == PrimOp.FF:
             for out in cell.outputs.values():
-                ff_state[out.name] = 0
+                # Seed FFs with random values so simulation explores
+                # register-file-dependent paths, not just the reset state.
+                ff_state[out.name] = rng.getrandbits(out.width)
 
     # Pre-compile the simulator once — avoids per-cycle topo sort and dispatch
     fast_sim = FastSimulator(mod)
+
+    # Seed MEMORY storage with random values
+    for mem in fast_sim._memories:
+        for i in range(mem["depth"]):
+            mem["storage"][i] = rng.getrandbits(mem["width"]) if mem["width"] > 0 else 0
 
     # Pre-collect FF (d_name, q_name) pairs for fast state update
     ff_pairs: list[tuple[str, str]] = []

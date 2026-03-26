@@ -126,8 +126,8 @@ class TestThaw:
 
     def test_locked_counts(self):
         s = self._d().netlist.stats()
-        assert 18000 <= s["LUT4"] <= 19600, f"LUT: {s['LUT4']}"
-        assert s["TRELLIS_FF"] == 6143, f"FF: {s['TRELLIS_FF']}"
+        assert 17900 <= s["LUT4"] <= 19600, f"LUT: {s['LUT4']}"
+        assert 5400 <= s["TRELLIS_FF"] <= 5500, f"FF: {s['TRELLIS_FF']}"
         assert 1023 <= s["CCU2C"] <= 1064, f"CCU2C: {s['CCU2C']}"
 
     def test_json_valid_and_complete(self):

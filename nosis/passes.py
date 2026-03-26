@@ -475,6 +475,9 @@ def _simplify_mux_with_zero(mod: Module) -> int:
     for cell in list(mod.cells.values()):
         if cell.op != PrimOp.MUX:
             continue
+        # Don't touch MUX cells in the memory/PMUX protection cone
+        if _active_mem_protect and any(n.name in _active_mem_protect for n in cell.inputs.values()):
+            continue
         a_net = cell.inputs.get("A")
         b_net = cell.inputs.get("B")
         s_net = cell.inputs.get("S")
@@ -932,26 +935,21 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
     stats: dict[str, int] = {}
     prev_cells = len(mod.cells)
 
-    # Build MEMORY fanout set — all nets transitively driven by MEMORY
-    # read outputs or by flattened array PMUX reads.
-    # Simulation can model memory reads now, but the register file pattern
-    # (per-element FF writes + PMUX variable-index reads) creates a disconnect
-    # that simulation-based optimization exploits incorrectly.
+    # Protect PMUX/MEMORY outputs and their full combinational fanout
+    # (stop at FF boundaries). This prevents the optimizer from collapsing
+    # register-file-dependent logic through cascading constant propagation.
     _mem_protect: set[str] = set()
     _mpwl: list[str] = []
     for _c in mod.cells.values():
-        if _c.op == PrimOp.MEMORY:
-            for _o in _c.outputs.values():
-                _mem_protect.add(_o.name)
-                _mpwl.append(_o.name)
-        # Also protect PMUX outputs that read from flattened arrays
-        if _c.op == PrimOp.PMUX:
+        if _c.op in (PrimOp.MEMORY, PrimOp.PMUX):
             for _o in _c.outputs.values():
                 _mem_protect.add(_o.name)
                 _mpwl.append(_o.name)
     while _mpwl:
         _mn = _mpwl.pop()
         for _c in mod.cells.values():
+            if _c.op == PrimOp.FF:
+                continue  # stop at FF boundaries
             for _inp in _c.inputs.values():
                 if _inp.name == _mn:
                     for _o in _c.outputs.values():
@@ -1042,12 +1040,16 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
     for _c in mod.cells.values():
         if _c.op == PrimOp.FF:
             for _o in _c.outputs.values():
-                _ff2[_o.name] = 0
+                _ff2[_o.name] = _rng2.getrandbits(_o.width)
             _d = _c.inputs.get("D")
             if _d:
                 for _o in _c.outputs.values():
                     _ff_pairs2.append((_d.name, _o.name))
     _fast2 = FastSimulator(mod)
+    # Seed memory storage with random values
+    for _mem in _fast2._memories:
+        for _mi in range(_mem["depth"]):
+            _mem["storage"][_mi] = _rng2.getrandbits(_mem["width"]) if _mem["width"] > 0 else 0
     _nv2: dict[str, set[int]] = {}
     for _ in range(200):
         _si2 = {n: _rng2.getrandbits(w) for n, w in _ip2.items()}

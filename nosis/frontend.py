@@ -631,42 +631,29 @@ class _Lowerer:
         # Check if the source is a flattened small array
         value_node = expr.value
         src_net_name = getattr(getattr(value_node, "symbol", None), "name", "")
-        src_net = self.mod.nets.get(src_net_name)
         arr_info = getattr(self, '_array_info', {}).get(src_net_name)
         arr_depth = arr_info[0] if arr_info else 0
         arr_elem_w = arr_info[1] if arr_info else 0
 
-        if arr_depth > 0 and arr_elem_w > 0 and selector is not None and src_net is not None:
+        if arr_depth > 0 and arr_elem_w > 0 and selector is not None:
             sel_const = getattr(selector, "constant", None)
             if sel_const is not None:
-                # Constant index: SLICE at fixed offset
+                # Constant index: return the individual element net directly
                 idx_val = int(str(sel_const))
-                out = self._fresh_net("esel", arr_elem_w)
-                cell = self._fresh_cell("esel", PrimOp.SLICE,
-                                        offset=idx_val * arr_elem_w, width=arr_elem_w)
-                self.mod.connect(cell, "A", src_net)
-                self.mod.connect(cell, "Y", out, direction="output")
-                return out
+                elem_name = f"{src_net_name}_{idx_val}"
+                return self._get_or_create_net(elem_name, arr_elem_w)
             else:
-                # Variable index: build PMUX selecting from each element
+                # Variable index: build PMUX selecting from individual element nets
                 idx_net = self.lower_expr(selector)
                 out = self._fresh_net("arrrd", arr_elem_w)
                 pmux = self._fresh_cell("arrrd_pmux", PrimOp.PMUX, count=arr_depth)
                 pmux.params["count"] = arr_depth
                 # Default: element 0
-                elem0 = self._fresh_net("arrrd_e0", arr_elem_w)
-                sl0 = self._fresh_cell("arrrd_sl0", PrimOp.SLICE,
-                                       offset=0, width=arr_elem_w)
-                self.mod.connect(sl0, "A", src_net)
-                self.mod.connect(sl0, "Y", elem0, direction="output")
+                elem0 = self._get_or_create_net(f"{src_net_name}_0", arr_elem_w)
                 self.mod.connect(pmux, "A", elem0)
                 self.mod.connect(pmux, "S", idx_net)
                 for i in range(arr_depth):
-                    ei = self._fresh_net(f"arrrd_e{i}", arr_elem_w)
-                    sli = self._fresh_cell(f"arrrd_sl{i}", PrimOp.SLICE,
-                                           offset=i * arr_elem_w, width=arr_elem_w)
-                    self.mod.connect(sli, "A", src_net)
-                    self.mod.connect(sli, "Y", ei, direction="output")
+                    ei = self._get_or_create_net(f"{src_net_name}_{i}", arr_elem_w)
                     self.mod.connect(pmux, f"I{i}", ei)
                 self.mod.connect(pmux, "Y", out, direction="output")
                 return out
@@ -1263,12 +1250,14 @@ class _Lowerer:
                     depth = abs(right - left) + 1
                     if depth > 0 and elem_w > 0:
                         if depth <= 32:
-                            # Small array: flatten to a wide bitvector.
-                            # Variable-indexed reads use MUL+SLICE in _lower_element_select.
-                            # Per-element writes naturally target bit ranges.
-                            flat_w = depth * elem_w
-                            self._get_or_create_net(node.name, flat_w)
-                            # Record array metadata for element select
+                            # Small array: create individual nets per element.
+                            # Variable-indexed reads build a PMUX from these.
+                            # Per-element writes (case statements) naturally
+                            # target individual element nets.
+                            for i in range(depth):
+                                self._get_or_create_net(f"{node.name}_{i}", elem_w)
+                            # Also create the array name net (for fallback)
+                            self._get_or_create_net(node.name, elem_w)
                             if not hasattr(self, '_array_info'):
                                 self._array_info: dict[str, tuple[int, int]] = {}
                             self._array_info[node.name] = (depth, elem_w)

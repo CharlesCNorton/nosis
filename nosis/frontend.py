@@ -1459,11 +1459,10 @@ class _Lowerer:
                         prev = results[tgt_name]
                         tgt_net = self.mod.nets.get(tgt_name)
                         if tgt_net:
-                            # Walk the entire cone of rhs_net and replace
-                            # every reference to tgt_net with prev. This
-                            # handles chained assignments from unrolled for
-                            # loops where each iteration reads the variable
-                            # it's about to write (e.g. CLZ/CPOP patterns).
+                            # Walk the cone of rhs_net and replace references
+                            # to tgt_net with prev. Stop at nets that were
+                            # driven by a different scope (always_comb redirect)
+                            # to avoid corrupting cross-block combinational logic.
                             visited: set[str] = set()
                             work = [rhs_net]
                             while work:
@@ -1474,6 +1473,9 @@ class _Lowerer:
                                 if net.driver is None:
                                     continue
                                 d = net.driver
+                                # Stop at cells from a different scope (always_comb)
+                                if 'comb_' in d.name and net is not rhs_net:
+                                    continue
                                 for pn, pnet in list(d.inputs.items()):
                                     if pnet is tgt_net or pnet.name == tgt_name:
                                         d.inputs[pn] = prev
@@ -1859,8 +1861,6 @@ class _Lowerer:
                             ))
                             return  # skip this block entirely
                 self.lower_procedural_block(node)
-                # Apply deferred combinational redirects immediately after each
-                # always_comb block so that subsequent blocks see driven nets.
                 self._apply_comb_redirects()
 
             elif kind in ("SymbolKind.GenerateBlock", "SymbolKind.GenerateBlockArray"):

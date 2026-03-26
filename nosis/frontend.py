@@ -1190,6 +1190,101 @@ class _Lowerer:
 
         return results
 
+    def _collect_blocking_with_muxes(self, stmt: Any) -> dict[str, "Net"]:
+        """Collect blocking assignments, building MUXes for nested conditionals.
+
+        Returns {target_name: value_net} where value_net includes conditional
+        MUX trees for if/else/case within the statement.
+        """
+        results: dict[str, Net] = {}
+        kind = str(stmt.kind)
+
+        if kind == "StatementKind.ExpressionStatement":
+            expr = stmt.expr
+            if str(expr.kind) == "ExpressionKind.Assignment" and not expr.isNonBlocking:
+                lhs = self.lower_expr(expr.left)
+                rhs = self.lower_expr(expr.right)
+                results[lhs.name] = rhs
+
+        elif kind == "StatementKind.Conditional":
+            conds = list(stmt.conditions)
+            if conds:
+                cond_net = self.lower_expr(conds[0].expr)
+                true_map = self._collect_blocking_with_muxes(stmt.ifTrue) if stmt.ifTrue else {}
+                false_map = self._collect_blocking_with_muxes(stmt.ifFalse) if stmt.ifFalse else {}
+                all_targets = set(true_map) | set(false_map)
+                for tgt_name in all_targets:
+                    tgt_net = self.mod.nets.get(tgt_name)
+                    if tgt_net is None:
+                        continue
+                    t_val = true_map.get(tgt_name)
+                    f_val = false_map.get(tgt_name)
+                    if t_val and f_val:
+                        mux_out = self._fresh_net("bmux", tgt_net.width)
+                        mux = self._fresh_cell("bmux", PrimOp.MUX)
+                        self.mod.connect(mux, "S", cond_net)
+                        self.mod.connect(mux, "A", f_val)
+                        self.mod.connect(mux, "B", t_val)
+                        self.mod.connect(mux, "Y", mux_out, direction="output")
+                        results[tgt_name] = mux_out
+                    elif t_val:
+                        # Only true branch assigns — hold value when false
+                        hold_net = self._fresh_net("bmux_dflt", tgt_net.width)
+                        hold_cell = self._fresh_cell("bmux_dflt", PrimOp.CONST, value=0, width=tgt_net.width)
+                        self.mod.connect(hold_cell, "Y", hold_net, direction="output")
+                        mux_out = self._fresh_net("bmux", tgt_net.width)
+                        mux = self._fresh_cell("bmux", PrimOp.MUX)
+                        self.mod.connect(mux, "S", cond_net)
+                        self.mod.connect(mux, "A", hold_net)
+                        self.mod.connect(mux, "B", t_val)
+                        self.mod.connect(mux, "Y", mux_out, direction="output")
+                        results[tgt_name] = mux_out
+                    elif f_val:
+                        results[tgt_name] = f_val
+
+        elif kind == "StatementKind.Case":
+            inner_sel = self.lower_expr(stmt.expr)
+            inner_default = self._collect_blocking_with_muxes(stmt.defaultCase) if stmt.defaultCase else {}
+            inner_running: dict[str, Net] = dict(inner_default)
+            for inner_item in stmt.items:
+                inner_map = self._collect_blocking_with_muxes(inner_item.stmt)
+                for inner_expr in inner_item.expressions:
+                    iv = self.lower_expr(inner_expr)
+                    ieq = self._fresh_net("bcase_eq", 1)
+                    ieqc = self._fresh_cell("bcase_eq", PrimOp.EQ)
+                    self.mod.connect(ieqc, "A", inner_sel)
+                    self.mod.connect(ieqc, "B", iv)
+                    self.mod.connect(ieqc, "Y", ieq, direction="output")
+                    for tn, rv in inner_map.items():
+                        tnet = self.mod.nets.get(tn)
+                        if tnet is None:
+                            continue
+                        if tn not in inner_running:
+                            zn = self._fresh_net("bcase_dflt", tnet.width)
+                            zc = self._fresh_cell("bcase_dflt", PrimOp.CONST, value=0, width=tnet.width)
+                            self.mod.connect(zc, "Y", zn, direction="output")
+                            inner_running[tn] = zn
+                        prev = inner_running[tn]
+                        mo = self._fresh_net("bcase_mux", tnet.width)
+                        mx = self._fresh_cell("bcase_mux", PrimOp.MUX)
+                        self.mod.connect(mx, "S", ieq)
+                        self.mod.connect(mx, "A", prev)
+                        self.mod.connect(mx, "B", rv)
+                        self.mod.connect(mx, "Y", mo, direction="output")
+                        inner_running[tn] = mo
+            results.update(inner_running)
+
+        elif kind == "StatementKind.Block":
+            if stmt.body is not None:
+                results.update(self._collect_blocking_with_muxes(stmt.body))
+
+        elif kind == "StatementKind.List":
+            for child in stmt.list:
+                child_map = self._collect_blocking_with_muxes(child)
+                results.update(child_map)
+
+        return results
+
     def _collect_blocking_assignments(self, stmt: Any) -> dict[str, Net]:
         """Collect blocking assignments as {target_name: value_net}."""
         results: dict[str, Net] = {}
@@ -1238,8 +1333,8 @@ class _Lowerer:
                 return
             cond_net = self.lower_expr(conds[0].expr)
 
-            true_map = self._collect_blocking_assignments(stmt.ifTrue)
-            false_map = self._collect_blocking_assignments(stmt.ifFalse) if stmt.ifFalse else {}
+            true_map = self._collect_blocking_with_muxes(stmt.ifTrue)
+            false_map = self._collect_blocking_with_muxes(stmt.ifFalse) if stmt.ifFalse else {}
 
             all_targets = set(true_map) | set(false_map)
             for tgt_name in all_targets:
@@ -1248,33 +1343,28 @@ class _Lowerer:
                     continue
                 t_val = true_map.get(tgt_name)
                 f_val = false_map.get(tgt_name)
+                def _build_comb_if_mux(s_net, a_net, b_net, w):
+                    mo = self._fresh_net("comb_if", w)
+                    mx = self._fresh_cell("comb_if", PrimOp.MUX)
+                    self.mod.connect(mx, "S", s_net)
+                    self.mod.connect(mx, "A", a_net)
+                    self.mod.connect(mx, "B", b_net)
+                    self.mod.connect(mx, "Y", mo, direction="output")
+                    return mo
+
                 if t_val and f_val:
-                    mux_out = self._fresh_net("comb_if", tgt_net.width)
-                    mux = self._fresh_cell("comb_if", PrimOp.MUX)
-                    self.mod.connect(mux, "S", cond_net)
-                    self.mod.connect(mux, "A", f_val)
-                    self.mod.connect(mux, "B", t_val)
-                    self.mod.connect(mux, "Y", mux_out, direction="output")
-                    tgt_net.driver = mux
-                    mux.outputs["Y"] = tgt_net
+                    mux_out = _build_comb_if_mux(cond_net, f_val, t_val, tgt_net.width)
                 elif t_val:
-                    mux_out = self._fresh_net("comb_if", tgt_net.width)
-                    mux = self._fresh_cell("comb_if", PrimOp.MUX)
-                    self.mod.connect(mux, "S", cond_net)
-                    self.mod.connect(mux, "A", tgt_net)
-                    self.mod.connect(mux, "B", t_val)
-                    self.mod.connect(mux, "Y", mux_out, direction="output")
-                    tgt_net.driver = mux
-                    mux.outputs["Y"] = tgt_net
+                    mux_out = _build_comb_if_mux(cond_net, tgt_net, t_val, tgt_net.width)
                 elif f_val:
-                    mux_out = self._fresh_net("comb_if", tgt_net.width)
-                    mux = self._fresh_cell("comb_if", PrimOp.MUX)
-                    self.mod.connect(mux, "S", cond_net)
-                    self.mod.connect(mux, "A", f_val)
-                    self.mod.connect(mux, "B", tgt_net)
-                    self.mod.connect(mux, "Y", mux_out, direction="output")
-                    tgt_net.driver = mux
-                    mux.outputs["Y"] = tgt_net
+                    mux_out = _build_comb_if_mux(cond_net, f_val, tgt_net, tgt_net.width)
+                else:
+                    continue
+
+                # Defer the redirect to after all blocks are processed
+                if not hasattr(self, '_deferred_comb_redirects'):
+                    self._deferred_comb_redirects = []
+                self._deferred_comb_redirects.append((tgt_name, mux_out))
 
         elif kind == "StatementKind.Case":
             # Build MUX chains for combinational case statements.
@@ -1286,7 +1376,7 @@ class _Lowerer:
             # Collect default assignments
             default_map: dict[str, Net] = {}
             if stmt.defaultCase is not None:
-                default_map = self._collect_blocking_assignments(stmt.defaultCase)
+                default_map = self._collect_blocking_with_muxes(stmt.defaultCase)
 
             # Build running value per target
             running: dict[str, Net] = {}
@@ -1294,7 +1384,8 @@ class _Lowerer:
                 running[tgt_name] = default_net
 
             for item in stmt.items:
-                item_map = self._collect_blocking_assignments(item.stmt)
+                item_map = self._collect_blocking_with_muxes(item.stmt)
+
                 for case_expr in item.expressions:
                     case_val = self.lower_expr(case_expr)
                     eq_net = self._fresh_net("comb_eq", 1)

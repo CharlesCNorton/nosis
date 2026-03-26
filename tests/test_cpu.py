@@ -151,16 +151,10 @@ def _ebreak():
 
 @requires_rime_soc
 def test_addi_basic():
-    """ADDI x1, x0, 42 — load immediate into register."""
-    program = [
-        _addi(1, 0, 42),   # x1 = 42
-        _nop(),
-        _nop(),
-        _nop(),
-        _ebreak(),
-    ]
-    result = _run_program(program, max_cycles=100)
-    assert result["_pc"] > 0, f"CPU didn't advance past reset, PC={result['_pc']}"
+    """ADDI x1, x0, 42 — load immediate and check value."""
+    program = [_addi(1, 0, 42), _nop(), _nop()]
+    result = _run_program(program, max_cycles=30)
+    assert result["_regs"].get(1) == 42, f"x1={result['_regs'].get(1)}, expected 42"
 
 
 @requires_rime_soc
@@ -179,32 +173,18 @@ def test_lui_basic():
 
 @requires_rime_soc
 def test_add_registers():
-    """ADDI x1, x0, 10; ADDI x2, x0, 20; ADD x3, x1, x2 — register arithmetic."""
-    program = [
-        _addi(1, 0, 10),    # x1 = 10
-        _addi(2, 0, 20),    # x2 = 20
-        _add(3, 1, 2),      # x3 = x1 + x2 = 30
-        _nop(),
-        _nop(),
-        _ebreak(),
-    ]
-    result = _run_program(program, max_cycles=200)
-    assert result["_pc"] > 0, f"CPU didn't advance, PC={result['_pc']}"
+    """ADD x3, x1, x2 — check result value."""
+    program = [_addi(1, 0, 10), _addi(2, 0, 20), _add(3, 1, 2), _nop()]
+    result = _run_program(program, max_cycles=40)
+    assert result["_regs"].get(3) == 30, f"x3={result['_regs'].get(3)}, expected 30"
 
 
 @requires_rime_soc
 def test_sub_registers():
-    """ADDI x1, x0, 50; ADDI x2, x0, 30; SUB x3, x1, x2 — subtraction."""
-    program = [
-        _addi(1, 0, 50),
-        _addi(2, 0, 30),
-        _sub(3, 1, 2),      # x3 = 50 - 30 = 20
-        _nop(),
-        _nop(),
-        _ebreak(),
-    ]
-    result = _run_program(program, max_cycles=200)
-    assert result["_pc"] > 0, f"CPU didn't advance, PC={result['_pc']}"
+    """SUB x3, x1, x2 — check subtraction result."""
+    program = [_addi(1, 0, 50), _addi(2, 0, 30), _sub(3, 1, 2), _nop()]
+    result = _run_program(program, max_cycles=40)
+    assert result["_regs"].get(3) == 20, f"x3={result['_regs'].get(3)}, expected 20"
 
 
 @requires_rime_soc
@@ -239,7 +219,7 @@ def test_x0_always_zero():
 
 @requires_rime_soc
 def test_multiple_arithmetic():
-    """Chain of arithmetic operations using register file."""
+    """Chain of arithmetic — verify all intermediate and final values."""
     program = [
         _addi(1, 0, 100),   # x1 = 100
         _addi(2, 0, 50),    # x2 = 50
@@ -247,11 +227,14 @@ def test_multiple_arithmetic():
         _sub(4, 1, 2),      # x4 = 50
         _add(5, 3, 4),      # x5 = 200
         _nop(),
-        _nop(),
-        _ebreak(),
     ]
-    result = _run_program(program, max_cycles=300)
-    assert result["_pc"] >= 0x10, f"PC didn't advance through all instructions: 0x{result['_pc']:08X}"
+    result = _run_program(program, max_cycles=50)
+    r = result["_regs"]
+    assert r.get(1) == 100, f"x1={r.get(1)}"
+    assert r.get(2) == 50, f"x2={r.get(2)}"
+    assert r.get(3) == 150, f"x3={r.get(3)}"
+    assert r.get(4) == 50, f"x4={r.get(4)}"
+    assert r.get(5) == 200, f"x5={r.get(5)}"
 
 
 # --- Branch instructions ---

@@ -61,12 +61,18 @@ def _cell_to_json(cell: ECP5Cell) -> dict[str, Any]:
         else:
             port_directions[port_name] = "input"
 
-        # Convert bits: strings stay as-is for constants, ints are signal indices
+        # Convert bits: constant "0"/"1" become integer 0/1 (reserved GND/VCC
+        # bit indices). nextpnr's ECP5 DPR packer requires integer bit indices
+        # for constant connections, not string constants.
         json_bits: list[int | str] = []
         for bit in bits:
             if isinstance(bit, str):
-                if bit in ("0", "1", "x"):
-                    json_bits.append(bit)  # constant as string
+                if bit == "0":
+                    json_bits.append(0)  # bit index 0 = GND
+                elif bit == "1":
+                    json_bits.append(1)  # bit index 1 = VCC
+                elif bit == "x":
+                    json_bits.append("x")
                 else:
                     json_bits.append(int(bit))
             else:
@@ -89,8 +95,10 @@ def _netname_to_json(net: ECP5Net) -> dict[str, Any]:
     json_bits: list[int | str] = []
     for bit in net.bits:
         if isinstance(bit, str):
-            if bit in ("0", "1"):
-                json_bits.append(bit)
+            if bit == "0":
+                json_bits.append(0)
+            elif bit == "1":
+                json_bits.append(1)
             else:
                 json_bits.append(int(bit))
         else:
@@ -133,6 +141,14 @@ def _netlist_to_json(netlist: ECP5Netlist) -> dict[str, Any]:
     netnames: dict[str, Any] = {}
     for name, net in netlist.nets.items():
         netnames[name] = _netname_to_json(net)
+
+    # Ensure port netname bits match port declaration bits.
+    # Techmap may overwrite net bits to constants (e.g. from _map_const)
+    # but the port declaration preserves the original signal bits.
+    # nextpnr requires these to agree.
+    for port_name, port_info in ports.items():
+        if port_name in netnames:
+            netnames[port_name]["bits"] = list(port_info["bits"])
 
     return {
         "creator": f"nosis {__version__}",

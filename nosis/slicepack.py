@@ -414,6 +414,48 @@ def merge_lut_chains(netlist: ECP5Netlist) -> int:
     return merged
 
 
+def break_comb_loops(netlist: ECP5Netlist) -> int:
+    """Break combinational self-loops in LUT4 cells.
+
+    Detects LUT4 cells where an input bit equals the output bit (the
+    output feeds back to the same cell's input). These are latches
+    inferred from incomplete case/if statements. Breaks the loop by
+    tying the self-referencing input to constant 0 and adjusting the
+    INIT truth table accordingly.
+
+    Returns the number of loops broken.
+    """
+    broken = 0
+    for cell in netlist.cells.values():
+        if cell.cell_type != "LUT4":
+            continue
+        z_bits = cell.ports.get("Z", [])
+        if not z_bits or not isinstance(z_bits[0], int):
+            continue
+        z_bit = z_bits[0]
+        for pin in ("A", "B", "C", "D"):
+            pin_bits = cell.ports.get(pin, [])
+            if pin_bits and isinstance(pin_bits[0], int) and pin_bits[0] == z_bit:
+                # Self-loop: input pin reads from the same bit as output Z.
+                # Break it by tying the input to 0 and reducing the truth table.
+                pin_idx = {"A": 0, "B": 1, "C": 2, "D": 3}[pin]
+                init = _get_init(cell)
+                if init is None:
+                    continue
+                # Reduce truth table: keep only rows where this pin = 0.
+                new_init = 0
+                for i in range(16):
+                    if (i >> pin_idx) & 1:
+                        continue  # skip rows where the self-input is 1
+                    if (init >> i) & 1:
+                        new_init |= (1 << i)
+                _set_init(cell, new_init)
+                cell.ports[pin] = [0]  # tie to GND
+                broken += 1
+                break  # only one self-loop per cell
+    return broken
+
+
 def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     """Run all LUT optimization passes. Returns counts."""
     s1 = simplify_constant_luts(netlist)
@@ -430,10 +472,12 @@ def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     s2 = simplify_constant_luts(netlist)
     dl2 = _eliminate_dead_luts(netlist)
     s3 = simplify_constant_luts(netlist)
+    bl = break_comb_loops(netlist)
     return {
         "const_lut_simplify": s1 + s2 + s3,
         "lut_dedup": dd,
         "buffer_absorb": ab,
         "dead_lut": dl + dl2,
         "chain_merge": mc,
+        "loops_broken": bl,
     }

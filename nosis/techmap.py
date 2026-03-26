@@ -1151,6 +1151,8 @@ class _ECP5Mapper:
                 dpr = self.nl.add_cell(self._fresh_name("dpr"), "TRELLIS_DPR16X4")
                 if cell.src:
                     dpr.attributes["src"] = cell.src
+                dpr.parameters["WCKMUX"] = "WCK"
+                dpr.parameters["WREMUX"] = "WRE"
                 # Address ports (4 bits each for 16 entries)
                 for i in range(4):
                     dpr.ports[f"RAD{i}"] = [raddr_bits[i] if i < len(raddr_bits) else "0"]

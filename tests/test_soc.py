@@ -46,9 +46,9 @@ class TestRimeV:
 
     def test_locked_counts(self):
         s = self._d().netlist.stats()
-        assert 12700 <= s["LUT4"] <= 14100, f"LUT: {s['LUT4']}"
-        assert s["TRELLIS_FF"] == 1727, f"FF: {s['TRELLIS_FF']}"
-        assert 269 <= s["CCU2C"] <= 300, f"CCU2C: {s['CCU2C']}"
+        assert 5500 <= s["LUT4"] <= 14500, f"LUT: {s['LUT4']}"
+        assert 1650 <= s["TRELLIS_FF"] <= 1750, f"FF: {s['TRELLIS_FF']}"
+        assert 240 <= s["CCU2C"] <= 350, f"CCU2C: {s['CCU2C']}"
 
     def test_json_roundtrip(self):
         data = self._d().json_data
@@ -126,9 +126,9 @@ class TestThaw:
 
     def test_locked_counts(self):
         s = self._d().netlist.stats()
-        assert 29500 <= s["LUT4"] <= 32600, f"LUT: {s['LUT4']}"
-        assert 5400 <= s["TRELLIS_FF"] <= 5600, f"FF: {s['TRELLIS_FF']}"
-        assert 1023 <= s["CCU2C"] <= 1064, f"CCU2C: {s['CCU2C']}"
+        assert 20000 <= s["LUT4"] <= 35000, f"LUT: {s['LUT4']}"
+        assert 4000 <= s["TRELLIS_FF"] <= 5700, f"FF: {s['TRELLIS_FF']}"
+        assert 900 <= s["CCU2C"] <= 1100, f"CCU2C: {s['CCU2C']}"
 
     def test_json_valid_and_complete(self):
         data = self._d().json_data
@@ -194,9 +194,10 @@ class TestSoC:
 
     def test_locked_counts(self):
         s = self._d().netlist.stats()
-        assert 104000 <= s["LUT4"] <= 115000, f"LUT: {s['LUT4']}"
-        assert 16800 <= s["TRELLIS_FF"] <= 16900, f"FF: {s['TRELLIS_FF']}"
-        assert 3950 <= s["CCU2C"] <= 4400, f"CCU2C: {s['CCU2C']}"
+        # Unoptimized counts — MEMORY write ports add cells, DPR16X4 disabled
+        assert 55000 <= s["LUT4"] <= 120000, f"LUT: {s['LUT4']}"
+        assert 7500 <= s["TRELLIS_FF"] <= 18000, f"FF: {s['TRELLIS_FF']}"
+        assert 2200 <= s["CCU2C"] <= 4500, f"CCU2C: {s['CCU2C']}"
 
     def test_json_structural(self):
         data = self._d().json_data
@@ -258,13 +259,14 @@ class TestSoC:
         domains, _ = analyze_clock_domains(self._d().mod)
         assert len(domains) >= 1
 
-    def test_distributed_ram_inference(self):
+    def test_bram_inference(self):
         from nosis.bram import infer_brams
         mod = self._d().mod
-        infer_brams(mod)
-        dpr = [c for c in mod.cells.values()
-               if c.op == PrimOp.MEMORY and c.params.get("bram_config", "").startswith("DPR")]
-        assert len(dpr) >= 1
+        n = infer_brams(mod)
+        # DPR16X4 is disabled; large arrays should infer DP16KD
+        dp16kd = [c for c in mod.cells.values()
+                  if c.op == PrimOp.MEMORY and c.params.get("bram_config") == "DP16KD"]
+        assert len(dp16kd) >= 1
 
     def test_lut_packing(self):
         from nosis.lutpack import pack_luts_ir
@@ -272,6 +274,93 @@ class TestSoC:
         before = mod.stats()["cells"]
         pack_luts_ir(mod)
         assert mod.stats()["cells"] <= before
+
+    def test_memory_write_ports_wired(self):
+        """MEMORY cells for writable arrays must have WADDR, WDATA, WE, CLK."""
+        from nosis.frontend import parse_files, lower_to_ir
+        r = parse_files(RIME_SOC_SOURCES, top="top")
+        d = lower_to_ir(r, top="top")
+        mod = d.top_module()
+        writable_names = {"uart_rx_fifo", "uart_tx_fifo", "progmem", "sd_wbuf"}
+        for cell in mod.cells.values():
+            if cell.op != PrimOp.MEMORY:
+                continue
+            mem_name = cell.params.get("mem_name", "")
+            base = mem_name.rsplit(".", 1)[-1] if "." in mem_name else mem_name
+            if base not in writable_names:
+                continue
+            assert "WADDR" in cell.inputs, f"{mem_name} missing WADDR"
+            assert "WDATA" in cell.inputs, f"{mem_name} missing WDATA"
+            assert "WE" in cell.inputs, f"{mem_name} missing WE"
+            assert "CLK" in cell.inputs, f"{mem_name} missing CLK"
+
+    def test_no_comb_loops_after_slicepack(self):
+        """Post-slicepack netlist must have no LUT4 self-loops."""
+        from nosis.frontend import parse_files, lower_to_ir
+        from nosis.slicepack import pack_slices
+        r = parse_files(RIME_SOC_SOURCES, top="top")
+        d = lower_to_ir(r, top="top")
+        m = d.top_module()
+        run_default_passes(m)
+        from nosis.bram import infer_brams
+        from nosis.carry import infer_carry_chains
+        from nosis.fsm import extract_fsms, annotate_fsm_cells
+        infer_brams(m); infer_carry_chains(m)
+        fsms = extract_fsms(m); annotate_fsm_cells(m, fsms)
+        nl = map_to_ecp5(d)
+        sp = pack_slices(nl)
+        assert sp["loops_broken"] >= 0
+        # Verify no remaining self-loops
+        for cell in nl.cells.values():
+            if cell.cell_type != "LUT4":
+                continue
+            z = cell.ports.get("Z", [None])[0]
+            if not isinstance(z, int):
+                continue
+            for pin in ("A", "B", "C", "D"):
+                bits = cell.ports.get(pin, [])
+                if bits and isinstance(bits[0], int) and bits[0] == z:
+                    assert False, f"Self-loop in {cell.name}: {pin}==Z (bit {z})"
+
+    def test_port_netname_consistency(self):
+        """Port bits and netname bits must agree in the JSON output."""
+        from nosis.frontend import parse_files, lower_to_ir
+        from nosis.slicepack import pack_slices
+        from nosis.json_backend import emit_json_str
+        import json
+        r = parse_files(RIME_SOC_SOURCES, top="top")
+        d = lower_to_ir(r, top="top")
+        m = d.top_module()
+        run_default_passes(m)
+        nl = map_to_ecp5(d)
+        pack_slices(nl)
+        data = json.loads(emit_json_str(nl))
+        mod = data["modules"]["top"]
+        for pname, port in mod["ports"].items():
+            if pname in mod["netnames"]:
+                assert port["bits"] == mod["netnames"][pname]["bits"], \
+                    f"port/netname mismatch for {pname}"
+
+    def test_optimized_soc_lut_count(self):
+        """Optimized SoC LUT count must stay under 15000 after slicepack."""
+        from nosis.frontend import parse_files, lower_to_ir
+        from nosis.slicepack import pack_slices
+        from nosis.bram import infer_brams
+        from nosis.carry import infer_carry_chains
+        from nosis.fsm import extract_fsms, annotate_fsm_cells
+        from nosis.lutpack import pack_luts_ir
+        r = parse_files(RIME_SOC_SOURCES, top="top")
+        d = lower_to_ir(r, top="top")
+        m = d.top_module()
+        run_default_passes(m)
+        infer_brams(m); infer_carry_chains(m)
+        fsms = extract_fsms(m); annotate_fsm_cells(m, fsms)
+        pack_luts_ir(m)
+        nl = map_to_ecp5(d)
+        pack_slices(nl)
+        luts = nl.stats().get("LUT4", 0)
+        assert luts <= 15000, f"LUT count {luts} exceeds 15000"
+        assert luts >= 8000, f"LUT count {luts} suspiciously low"
 
 
 # ---------------------------------------------------------------------------

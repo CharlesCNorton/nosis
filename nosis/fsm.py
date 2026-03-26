@@ -242,10 +242,11 @@ def _collect_mux_tree(mod: Module, root_net: Net, state_net_name: str) -> tuple[
                         states.append(FSMState(name=label, value=val, width=width))
 
             # Recurse into MUX inputs (the true/false branches)
-            for port in ("A", "B"):
-                branch = cell.inputs.get(port)
-                if branch:
-                    walk(branch, depth + 1)
+            if depth < 200:
+                for port in ("A", "B"):
+                    branch = cell.inputs.get(port)
+                    if branch:
+                        walk(branch, depth + 1)
 
         elif cell.op == PrimOp.EQ:
             mux_cells.append(cell.name)

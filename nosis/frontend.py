@@ -265,6 +265,8 @@ class _Lowerer:
         self._net_counter = 0
         self._cell_counter = 0
         self.warnings: list[SynthesisWarning] = []
+        self._current_clock_net: Net | None = None
+        self._condition_stack: list[Net] = []  # stack of enclosing condition nets for WE gating
 
     def _fresh_net(self, prefix: str, width: int) -> Net:
         name = f"${prefix}_{self._net_counter}"
@@ -869,6 +871,10 @@ class _Lowerer:
                             async_reset = True
                 stmt = body.stmt
 
+            # Store the clock net so _try_wire_memory_write can find it
+            # for MEMORY cells written inside this always_ff block.
+            self._current_clock_net = clock_net
+
             # Build MUX trees for the always_ff body using the same
             # recursive handler that works for always_comb. This correctly
             # handles nested case/if with conditional guards.
@@ -1075,6 +1081,178 @@ class _Lowerer:
 
         return targets
 
+    def _find_memory_cell_for_lhs(self, lhs_expr: Any) -> tuple[Any | None, str]:
+        """Check if an assignment LHS is an ElementSelect on a MEMORY-backed array.
+
+        Returns ``(mem_cell, mem_name)`` if found, ``(None, "")`` otherwise.
+        Searches by exact name first, then by suffix match for hierarchy-prefixed cells.
+        """
+        lhs_kind = str(lhs_expr.kind)
+        if lhs_kind != "ExpressionKind.ElementSelect":
+            return None, ""
+        value_node = lhs_expr.value
+        value_sym = getattr(value_node, "symbol", None)
+        mem_name = getattr(value_sym, "name", "") if value_sym else ""
+        if not mem_name:
+            return None, ""
+        # Exact match first
+        for cell in self.mod.cells.values():
+            if cell.op == PrimOp.MEMORY and cell.params.get("mem_name") == mem_name:
+                return cell, mem_name
+        # Suffix match: "uart_rx_fifo" matches "SOC.uart_rx_fifo"
+        suffix = f".{mem_name}"
+        for cell in self.mod.cells.values():
+            if cell.op == PrimOp.MEMORY:
+                cell_mem_name = cell.params.get("mem_name", "")
+                if cell_mem_name.endswith(suffix):
+                    return cell, cell_mem_name
+        return None, ""
+
+    def _try_wire_memory_write(self, assign_expr: Any) -> bool:
+        """Wire MEMORY cell write ports for array element assignments.
+
+        Handles patterns like:
+            ``array[index] <= data``         — simple write
+            ``array[index][hi:lo] <= data``  — byte-lane write (partial)
+
+        Returns True if the assignment was handled as a memory write.
+        """
+        lhs_expr = assign_expr.left
+        rhs_expr = assign_expr.right
+
+        # Unwrap RangeSelect on the LHS (byte-lane writes like progmem[addr][7:0])
+        lhs_slice_lo: int | None = None
+        lhs_slice_hi: int | None = None
+        if str(lhs_expr.kind) == "ExpressionKind.RangeSelect":
+            inner = lhs_expr.value
+            left_sel = getattr(lhs_expr, "left", None)
+            right_sel = getattr(lhs_expr, "right", None)
+            if left_sel is not None and right_sel is not None:
+                lc = getattr(left_sel, "constant", None)
+                rc = getattr(right_sel, "constant", None)
+                if lc is not None and rc is not None:
+                    lhs_slice_hi = _svint_to_int(lc)
+                    lhs_slice_lo = _svint_to_int(rc)
+            lhs_expr = inner
+
+        mem_cell, mem_name = self._find_memory_cell_for_lhs(lhs_expr)
+        if mem_cell is None:
+            return False
+
+        # Get the selector (write address)
+        selector = getattr(lhs_expr, "selector", None)
+        if selector is None:
+            return False
+
+        waddr_net = self.lower_expr(selector)
+        wdata_net = self.lower_expr(rhs_expr)
+
+        elem_w = int(mem_cell.params.get("width", 1))
+
+        # For byte-lane writes, we need to read-modify-write:
+        # read the current value, replace the target byte lane, write back.
+        if lhs_slice_lo is not None and lhs_slice_hi is not None:
+            slice_w = lhs_slice_hi - lhs_slice_lo + 1
+            if slice_w < elem_w:
+                # Read current value
+                rport_id = len([k for k in mem_cell.outputs if k.startswith("RDATA")])
+                raddr_key = f"RADDR{rport_id}" if rport_id > 0 else "RADDR"
+                rdata_key = f"RDATA{rport_id}" if rport_id > 0 else "RDATA"
+                # Connect read address = write address for read-modify-write
+                if raddr_key not in mem_cell.inputs:
+                    self.mod.connect(mem_cell, raddr_key, waddr_net)
+                if rdata_key not in mem_cell.outputs:
+                    cur_val = self._fresh_net(f"memrmw_{mem_name}", elem_w)
+                    self.mod.connect(mem_cell, rdata_key, cur_val, direction="output")
+                else:
+                    cur_val = mem_cell.outputs[rdata_key]
+
+                # Build the modified word: replace bits [hi:lo] with wdata
+                # Use CONCAT of: cur_val[elem_w-1:hi+1], wdata, cur_val[lo-1:0]
+                pieces: list[Net] = []
+                piece_count = 0
+                if lhs_slice_lo > 0:
+                    lo_net = self._fresh_net(f"rmw_lo_{mem_name}", lhs_slice_lo)
+                    lo_cell = self._fresh_cell(f"rmw_lo_{mem_name}", PrimOp.SLICE,
+                                               offset=0, width=lhs_slice_lo)
+                    self.mod.connect(lo_cell, "A", cur_val)
+                    self.mod.connect(lo_cell, "Y", lo_net, direction="output")
+                    pieces.append(lo_net)
+                    piece_count += 1
+                pieces.append(wdata_net)
+                piece_count += 1
+                if lhs_slice_hi + 1 < elem_w:
+                    hi_w = elem_w - lhs_slice_hi - 1
+                    hi_net = self._fresh_net(f"rmw_hi_{mem_name}", hi_w)
+                    hi_cell = self._fresh_cell(f"rmw_hi_{mem_name}", PrimOp.SLICE,
+                                               offset=lhs_slice_hi + 1, width=hi_w)
+                    self.mod.connect(hi_cell, "A", cur_val)
+                    self.mod.connect(hi_cell, "Y", hi_net, direction="output")
+                    pieces.append(hi_net)
+                    piece_count += 1
+
+                if piece_count > 1:
+                    merged = self._fresh_net(f"rmw_merged_{mem_name}", elem_w)
+                    concat_cell = self._fresh_cell(f"rmw_concat_{mem_name}", PrimOp.CONCAT,
+                                                    count=piece_count)
+                    for i, p in enumerate(pieces):
+                        self.mod.connect(concat_cell, f"I{i}", p)
+                        concat_cell.params[f"I{i}_width"] = p.width
+                    self.mod.connect(concat_cell, "Y", merged, direction="output")
+                    wdata_net = merged
+
+        # Wire write ports on the MEMORY cell
+        if "WADDR" not in mem_cell.inputs:
+            self.mod.connect(mem_cell, "WADDR", waddr_net)
+        else:
+            # Multiple write ports — create additional write port
+            wport_id = len([k for k in mem_cell.inputs if k.startswith("WADDR")])
+            self.mod.connect(mem_cell, f"WADDR{wport_id}", waddr_net)
+
+        if "WDATA" not in mem_cell.inputs:
+            self.mod.connect(mem_cell, "WDATA", wdata_net)
+        else:
+            wport_id = len([k for k in mem_cell.inputs if k.startswith("WDATA")])
+            self.mod.connect(mem_cell, f"WDATA{wport_id}", wdata_net)
+
+        # WE (write enable) — AND of all enclosing conditions from the
+        # condition stack. If no conditions, WE=1 (always write).
+        if "WE" not in mem_cell.inputs:
+            if self._condition_stack:
+                # AND all conditions together
+                we_net = self._condition_stack[0]
+                for cond in self._condition_stack[1:]:
+                    and_out = self._fresh_net(f"memwe_and_{mem_name}", 1)
+                    and_cell = self._fresh_cell(f"memwe_and_{mem_name}", PrimOp.AND)
+                    self.mod.connect(and_cell, "A", we_net)
+                    self.mod.connect(and_cell, "B", cond)
+                    self.mod.connect(and_cell, "Y", and_out, direction="output")
+                    we_net = and_out
+            else:
+                we_net = self._fresh_net(f"memwe_{mem_name}", 1)
+                we_cell = self._fresh_cell(f"memwe_{mem_name}", PrimOp.CONST, value=1, width=1)
+                self.mod.connect(we_cell, "Y", we_net, direction="output")
+            self.mod.connect(mem_cell, "WE", we_net)
+        else:
+            # WE already wired — OR with new condition for multiple write sites
+            if self._condition_stack:
+                existing_we = mem_cell.inputs["WE"]
+                cond = self._condition_stack[-1]
+                or_out = self._fresh_net(f"memwe_or_{mem_name}", 1)
+                or_cell = self._fresh_cell(f"memwe_or_{mem_name}", PrimOp.OR)
+                self.mod.connect(or_cell, "A", existing_we)
+                self.mod.connect(or_cell, "B", cond)
+                self.mod.connect(or_cell, "Y", or_out, direction="output")
+                mem_cell.inputs["WE"] = or_out
+
+        # CLK — find the clock net from the enclosing always_ff block.
+        # The clock net is stored on self._current_clock_net by lower_procedural_block.
+        clk = getattr(self, "_current_clock_net", None)
+        if clk is not None and "CLK" not in mem_cell.inputs:
+            self.mod.connect(mem_cell, "CLK", clk)
+
+        return True
+
     # _collect_nb_assignments removed — replaced by _collect_blocking_with_muxes(allow_nb=True)
     def _collect_blocking_with_muxes(self, stmt: Any, allow_nb: bool = False) -> dict[str, "Net"]:
         """Collect assignments, building MUXes for nested conditionals.
@@ -1091,16 +1269,32 @@ class _Lowerer:
             expr = stmt.expr
             if str(expr.kind) == "ExpressionKind.Assignment":
                 if not expr.isNonBlocking or allow_nb:
-                    lhs = self.lower_expr(expr.left)
-                    rhs = self.lower_expr(expr.right)
-                    results[lhs.name] = rhs
+                    # Check if LHS is an array element write (MEMORY cell)
+                    if self._try_wire_memory_write(expr):
+                        pass  # Memory write handled — no scalar FF needed
+                    else:
+                        lhs = self.lower_expr(expr.left)
+                        rhs = self.lower_expr(expr.right)
+                        results[lhs.name] = rhs
 
         elif kind == "StatementKind.Conditional":
             conds = list(stmt.conditions)
             if conds:
                 cond_net = self.lower_expr(conds[0].expr)
+                # Push condition for memory write WE gating in true branch
+                self._condition_stack.append(cond_net)
                 true_map = self._collect_blocking_with_muxes(stmt.ifTrue, allow_nb=allow_nb) if stmt.ifTrue else {}
+                self._condition_stack.pop()
+                # Push NOT(condition) for false branch
+                if stmt.ifFalse:
+                    not_cond = self._fresh_net("cond_not", 1)
+                    not_cell = self._fresh_cell("cond_not", PrimOp.NOT)
+                    self.mod.connect(not_cell, "A", cond_net)
+                    self.mod.connect(not_cell, "Y", not_cond, direction="output")
+                    self._condition_stack.append(not_cond)
                 false_map = self._collect_blocking_with_muxes(stmt.ifFalse, allow_nb=allow_nb) if stmt.ifFalse else {}
+                if stmt.ifFalse:
+                    self._condition_stack.pop()
                 all_targets = set(true_map) | set(false_map)
                 for tgt_name in all_targets:
                     tgt_net = self.mod.nets.get(tgt_name)

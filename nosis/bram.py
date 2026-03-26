@@ -73,19 +73,12 @@ def infer_brams(mod: Module) -> int:
 
         total_bits = depth * width
 
-        # Tiny arrays that fit in TRELLIS_DPR16X4 (distributed RAM):
-        # 16 entries, up to 4 bits wide per DPR cell.
-        if depth <= 16 and width <= 4 and total_bits >= 16:
-            cell.params["bram_config"] = "DPR16X4"
-            cell.params["bram_count"] = 1
-            tagged += 1
-            continue
-        if depth <= 16 and width > 4:
-            dpr_count = (width + 3) // 4
-            cell.params["bram_config"] = "DPR16X4_TILED"
-            cell.params["bram_count"] = dpr_count
-            tagged += 1
-            continue
+        # DPR16X4 (distributed RAM) is disabled for now.
+        # nextpnr's ECP5 packer has issues when DPR16X4 cells share
+        # constant nets with CCU2C carry chain cells — they get packed
+        # into the same TRELLIS_SLICE which is invalid.  Small arrays
+        # (depth <= 16) map to DP16KD instead if they meet the minimum
+        # size, or fall through to FF-based mapping.
 
         # Below 256 bits: leave as LUT-based FFs
         if total_bits < 256:

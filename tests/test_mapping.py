@@ -672,61 +672,30 @@ def test_skip_tiny_array():
 # DPR16X4 emission through full techmap pipeline
 # ---------------------------------------------------------------------------
 
-def test_dpr16x4_inference_and_emission():
-    """A 16x4 array must be tagged DPR16X4 and emit TRELLIS_DPR16X4 cells."""
+def test_dpr16x4_disabled():
+    """DPR16X4 inference is disabled — small arrays fall through to FF-based mapping."""
 
     mod = Module(name="dpr_test")
-    # Create a 16-entry, 4-bit wide memory -> should fit DPR16X4
-    raddr = mod.add_net("raddr", 4)
-    waddr = mod.add_net("waddr", 4)
-    wdata = mod.add_net("wdata", 4)
     rdata = mod.add_net("rdata", 4)
-    we = mod.add_net("we", 1)
-    clk = mod.add_net("clk", 1)
-
     mem = mod.add_cell("mem0", PrimOp.MEMORY, depth=16, width=4, mem_name="fifo")
-    mod.connect(mem, "RADDR", raddr)
-    mod.connect(mem, "WADDR", waddr)
-    mod.connect(mem, "WDATA", wdata)
-    mod.connect(mem, "WE", we)
-    mod.connect(mem, "CLK", clk)
     mod.connect(mem, "RDATA", rdata, direction="output")
 
-    # Input ports
-    for name, net in [("raddr", raddr), ("waddr", waddr), ("wdata", wdata),
-                      ("we", we), ("clk", clk)]:
-        inp = mod.add_cell(f"inp_{name}", PrimOp.INPUT, port_name=name)
-        mod.connect(inp, "Y", net, direction="output")
-        mod.ports[name] = net
-    out = mod.add_cell("out_rdata", PrimOp.OUTPUT, port_name="rdata")
-    mod.connect(out, "A", rdata)
-    mod.ports["rdata"] = rdata
-
-    # Infer BRAM
     tagged = infer_brams(mod)
-    assert tagged == 1
-    assert mem.params["bram_config"] == "DPR16X4"
-
-    # Tech map — should produce TRELLIS_DPR16X4 cells
-    design = Design()
-    design.modules["dpr_test"] = mod
-    design.top = "dpr_test"
-    nl = map_to_ecp5(design)
-    stats = nl.stats()
-    assert stats.get("TRELLIS_DPR16X4", 0) >= 1, f"expected DPR16X4, got {stats}"
+    # 16x4 = 64 bits < 256 threshold — should NOT be tagged for BRAM
+    assert tagged == 0
+    assert "bram_config" not in mem.params
 
 
-def test_dpr16x4_tiled_wide():
-    """A 16x8 array must tile across 2 DPR16X4 cells."""
+def test_small_array_ff_fallback():
+    """A 16x8 array (128 bits < 256) must fall through to FF-based mapping."""
     mod = Module(name="dpr_wide")
     rdata = mod.add_net("rdata", 8)
     mem = mod.add_cell("mem0", PrimOp.MEMORY, depth=16, width=8, mem_name="wide_fifo")
     mod.connect(mem, "RDATA", rdata, direction="output")
 
     tagged = infer_brams(mod)
-    assert tagged == 1
-    assert mem.params["bram_config"] == "DPR16X4_TILED"
-    assert mem.params["bram_count"] == 2
+    assert tagged == 0
+    assert "bram_config" not in mem.params
 
 
 def test_memory_port_inference():

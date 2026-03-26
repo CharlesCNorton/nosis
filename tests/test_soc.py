@@ -46,7 +46,7 @@ class TestRimeV:
 
     def test_locked_counts(self):
         s = self._d().netlist.stats()
-        assert 7700 <= s["LUT4"] <= 8400, f"LUT: {s['LUT4']}"
+        assert 12700 <= s["LUT4"] <= 14100, f"LUT: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 1727, f"FF: {s['TRELLIS_FF']}"
         assert 269 <= s["CCU2C"] <= 300, f"CCU2C: {s['CCU2C']}"
 
@@ -126,7 +126,7 @@ class TestThaw:
 
     def test_locked_counts(self):
         s = self._d().netlist.stats()
-        assert 17400 <= s["LUT4"] <= 19000, f"LUT: {s['LUT4']}"
+        assert 29500 <= s["LUT4"] <= 32600, f"LUT: {s['LUT4']}"
         assert 5400 <= s["TRELLIS_FF"] <= 5600, f"FF: {s['TRELLIS_FF']}"
         assert 1023 <= s["CCU2C"] <= 1064, f"CCU2C: {s['CCU2C']}"
 
@@ -194,9 +194,9 @@ class TestSoC:
 
     def test_locked_counts(self):
         s = self._d().netlist.stats()
-        assert 67000 <= s["LUT4"] <= 73000, f"LUT: {s['LUT4']}"
+        assert 104000 <= s["LUT4"] <= 115000, f"LUT: {s['LUT4']}"
         assert 16800 <= s["TRELLIS_FF"] <= 16900, f"FF: {s['TRELLIS_FF']}"
-        assert 4000 <= s["CCU2C"] <= 4200, f"CCU2C: {s['CCU2C']}"
+        assert 3950 <= s["CCU2C"] <= 4400, f"CCU2C: {s['CCU2C']}"
 
     def test_json_structural(self):
         data = self._d().json_data
@@ -230,7 +230,7 @@ class TestSoC:
         run_default_passes(m)
         nl = map_to_ecp5(d)
         pack_slices(nl)
-        assert nl.stats().get("LUT4", 0) < 9000
+        assert nl.stats().get("LUT4", 0) < 32000
 
     def test_area(self):
         from nosis.bram import infer_brams

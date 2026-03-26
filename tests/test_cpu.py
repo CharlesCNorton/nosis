@@ -240,3 +240,64 @@ def test_multiple_arithmetic():
     ]
     result = _run_program(program, max_cycles=300)
     assert result["_pc"] >= 0x10, f"PC didn't advance through all instructions: 0x{result['_pc']:08X}"
+
+
+# --- Branch instructions ---
+
+def _beq(rs1, rs2, offset):
+    """BEQ rs1, rs2, offset (offset in bytes, must be even)"""
+    imm = offset & 0x1FFF
+    return (((imm >> 12) & 1) << 31) | (((imm >> 5) & 0x3F) << 25) | \
+           (rs2 << 20) | (rs1 << 15) | (0b000 << 12) | \
+           (((imm >> 1) & 0xF) << 8) | (((imm >> 11) & 1) << 7) | 0b1100011
+
+def _bne(rs1, rs2, offset):
+    """BNE rs1, rs2, offset"""
+    imm = offset & 0x1FFF
+    return (((imm >> 12) & 1) << 31) | (((imm >> 5) & 0x3F) << 25) | \
+           (rs2 << 20) | (rs1 << 15) | (0b001 << 12) | \
+           (((imm >> 1) & 0xF) << 8) | (((imm >> 11) & 1) << 7) | 0b1100011
+
+def _sw(rs2, rs1, offset):
+    """SW rs2, offset(rs1)"""
+    imm = offset & 0xFFF
+    return (((imm >> 5) & 0x7F) << 25) | (rs2 << 20) | (rs1 << 15) | \
+           (0b010 << 12) | ((imm & 0x1F) << 7) | 0b0100011
+
+def _lw(rd, rs1, offset):
+    """LW rd, offset(rs1)"""
+    return ((offset & 0xFFF) << 20) | (rs1 << 15) | (0b010 << 12) | (rd << 7) | 0b0000011
+
+def _jal(rd, offset):
+    """JAL rd, offset"""
+    imm = offset & 0x1FFFFF
+    return (((imm >> 20) & 1) << 31) | (((imm >> 1) & 0x3FF) << 21) | \
+           (((imm >> 11) & 1) << 20) | (((imm >> 12) & 0xFF) << 12) | \
+           (rd << 7) | 0b1101111
+
+
+@requires_rime_soc
+def test_read_after_write():
+    """Write x1, then read x1 in the next instruction."""
+    program = [
+        _addi(1, 0, 42),    # x1 = 42
+        _addi(2, 1, 8),     # x2 = x1 + 8 = 50 (reads x1 from register file)
+        _nop(),
+        _nop(),
+    ]
+    result = _run_program(program, max_cycles=200)
+    assert result["_pc"] >= 0x08, f"PC didn't advance: 0x{result['_pc']:08X}"
+
+
+@requires_rime_soc
+def test_pc_increment_exact():
+    """Verify PC increments by exactly 4 per instruction."""
+    program = [
+        _addi(1, 0, 1),
+        _addi(2, 0, 2),
+        _addi(3, 0, 3),
+        _nop(),
+    ]
+    # 4 instructions * 4 cycles each = 16 cycles to reach PC=0x10
+    result = _run_program(program, max_cycles=16)
+    assert result["_pc"] == 0x10, f"PC should be 0x10, got 0x{result['_pc']:08X}"

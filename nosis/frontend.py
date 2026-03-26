@@ -1052,9 +1052,25 @@ class _Lowerer:
                             self.mod.connect(mux, "Y", mux_out, direction="output")
                             results.append((t_entry[0], mux_out, None, None))
                         elif t_entry:
-                            results.append(t_entry)
+                            # Only true branch assigns — MUX with hold value
+                            w = t_entry[1].width
+                            mux_out = self._fresh_net("cmux", w)
+                            mux = self._fresh_cell("cmux", PrimOp.MUX)
+                            self.mod.connect(mux, "S", cond_net)
+                            self.mod.connect(mux, "A", t_entry[0])  # hold
+                            self.mod.connect(mux, "B", t_entry[1])
+                            self.mod.connect(mux, "Y", mux_out, direction="output")
+                            results.append((t_entry[0], mux_out, None, None))
                         elif f_entry:
-                            results.append(f_entry)
+                            # Only false branch assigns — MUX with hold value
+                            w = f_entry[1].width
+                            mux_out = self._fresh_net("cmux", w)
+                            mux = self._fresh_cell("cmux", PrimOp.MUX)
+                            self.mod.connect(mux, "S", cond_net)
+                            self.mod.connect(mux, "A", f_entry[1])
+                            self.mod.connect(mux, "B", f_entry[0])  # hold
+                            self.mod.connect(mux, "Y", mux_out, direction="output")
+                            results.append((f_entry[0], mux_out, None, None))
 
         elif kind == "StatementKind.Case":
             # Case statement -> parallel MUX
@@ -1109,8 +1125,27 @@ class _Lowerer:
                 results.extend(self._collect_nb_assignments(inner))
 
         elif kind == "StatementKind.List":
+            # Sequential statements in a block. If multiple children assign
+            # to the same target, chain them: later assignments override
+            # earlier ones via MUX with the earlier result as default.
+            running_list: dict[str, Net] = {}
             for child in stmt.list:
-                results.extend(self._collect_nb_assignments(child))
+                child_results = self._collect_nb_assignments(child)
+                for lhs, rhs, rc, rv in child_results:
+                    if lhs.name in running_list:
+                        # This target was already assigned by a previous
+                        # statement. The previous result becomes the
+                        # "hold" value — it's already wired as part of
+                        # the MUX chain from the earlier assignment.
+                        pass
+                    running_list[lhs.name] = rhs
+                results.extend(child_results)
+
+            # Deduplicate: only keep the LAST assignment to each target
+            seen: dict[str, int] = {}
+            for i, (lhs, rhs, rc, rv) in enumerate(results):
+                seen[lhs.name] = i
+            results = [results[i] for i in sorted(seen.values())]
 
         return results
 

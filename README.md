@@ -2,9 +2,9 @@
 
 Correctness-first open-source FPGA synthesis targeting Lattice ECP5.
 
-Nosis synthesizes SystemVerilog and Verilog into technology-mapped netlists for the ECP5 FPGA family. It produces smaller netlists than yosys on real RISC-V SoC designs while maintaining provable functional equivalence at every optimization step.
+Nosis synthesizes SystemVerilog and Verilog into technology-mapped netlists for the ECP5 FPGA family. It is the default synthesizer for the [RIME](https://github.com/CharlesCNorton/rime) project. Synthesis results have been verified on silicon (Lattice ECP5U-25F, CABGA256).
 
-On a 13-file PicoRV32 SoC (PicoRV32 + UART + SPI flash + SD + SDRAM + CRC32), nosis produces 3,510 LUT slices after optimization. Yosys `synth_ecp5` on the same design produces approximately 4,700. Both target ECP5-25F.
+On a RIME-V SoC (RV32IMC + Zbb + Zicond + CRC32 + UART + 16 KB BRAM), nosis produces 4,001 LUT4 cells at 41.40 MHz post-route on ECP5-25F. Measured results and full methodology are in [BENCHMARK.md](BENCHMARK.md).
 
 ## Architecture
 
@@ -34,30 +34,34 @@ Nosis covers stages 1 through 8. Place-and-route (nextpnr) and bitstream packing
 
 ## Synthesis Results
 
-Validated against real hardware designs from the [RIME](https://github.com/CharlesCNorton/rime) project (Resident IcePi Management Environment for Lattice ECP5). All numbers are post-optimization, post-slice-packing.
+All designs from the [RIME](https://github.com/CharlesCNorton/rime) project (Resident IcePi Management Environment for Lattice ECP5). All numbers are post-optimization, post-slice-packing. Target: ECP5-25F.
 
-| Design | Source | LUT slices | FFs | CCU2C | Notes |
-|--------|--------|-----------|-----|-------|-------|
-| uart_tx | 1 file | 11 | 46 | 32 | 4-state FSM, baud rate counter |
-| uart_rx | 1 file | 11 | 47 | 32 | Mid-bit sampling, baud counter |
-| sdram_bridge | 1 file | 7 | 220 | 14 | 128-bit burst aggregator |
-| sdram_controller | 1 file | 64 | 180 | 18 | W9825G6KH 32 MB SDR controller |
-| rime_pcpi_crc32 | 1 file | 0 | 32 | 0 | PicoRV32 PCPI CRC32 coprocessor |
-| PicoRV32 SoC | 13 files | 3,510 | 891 | ~600 | RV32IMC + UART + SPI + SD + SDRAM |
+| Design | Files | LUT4 | FF | CCU2C | Slices | Logic Fmax |
+|--------|-------|------|----|-------|--------|------------|
+| uart_tx | 1 | 51 | 46 | 64 | 64 | 354.6 MHz |
+| uart_rx | 1 | 113 | 46 | 64 | 64 | 352.3 MHz |
+| sdram_bridge | 1 | 34 | 332 | 14 | 166 | 340.9 MHz |
+| sdram_controller | 1 | 225 | 174 | 34 | 113 | 93.7 MHz |
+| rime_pcpi_crc32 | 1 | 33 | 34 | 0 | 17 | 1046.2 MHz |
+| RIME-V (RV32IMC CPU) | 1 | 6,009 | 1,715 | 227 | 3,005 | 51.1 MHz |
+| Thaw (flash service) | 7 | 4,656 | 3,785 | 590 | 2,328 | 69.6 MHz |
+| Frost (BRAM grid) | 10 | 5,212 | 5,925 | 938 | 2,963 | 44.2 MHz |
+| Slush (register grid) | 10 | 10,052 | 20,592 | 770 | 10,296 | 44.5 MHz |
+| Ember (TRNG) | 4 | 1,365 | 1,847 | 600 | 924 | 61.2 MHz |
+| RIME-V SoC | 5 | 4,001 | 2,176 | 483 | 2,001 | 82.9 MHz |
 
-The SoC design includes PicoRV32 (RV32IMC), UART TX/RX with FIFOs, SPI flash engine, SD SPI engine, 32 MB SDRAM controller and bridge, CRC32 coprocessor, hardware watchdog, IRQ controller, boot ROM, and GPIO. All output ports are driven. Zero undriven nets after optimization.
+The RIME-V SoC contains the RIME-V CPU (RV32IMC + Zbb + Zicond + CRC32), UART TX/RX, and 16 KB BRAM. The generated bitstream was verified on an IcePi Zero (Lattice ECP5U-25F). All output ports are driven. Zero undriven nets after optimization.
 
-Unoptimized (lowering + tech mapping only, no passes):
+### CPU Core Comparison
 
-| Design | LUT slices | FFs | CCU2C |
-|--------|-----------|-----|-------|
-| uart_tx | 343 | 46 | 128 |
-| uart_rx | 344 | 47 | 128 |
-| rime_v (RV32IMC CPU) | 6,097 | 1,727 | 275 |
-| Thaw (flash service image) | 17,690 | 6,143 | 1,044 |
-| PicoRV32 SoC | 74,484 | 16,825 | 4,094 |
+Both cores were synthesized through the full nosis pipeline into identical SoC shells (16 KB BRAM, UART), placed and routed by nextpnr-ecp5 targeting ECP5-25F CABGA256 speed grade 6.
 
-These locked counts serve as regression baselines. Any pipeline change that alters them fails CI. Counts increased from earlier versions because comparison operations (LT, LE, GT, GE) are now correctly mapped to multi-LUT comparator chains instead of the previous incorrect constant-0 mapping.
+| Metric | RIME-V SoC | PicoRV32 SoC |
+|--------|-----------|-------------|
+| LUT4 | 4,001 | 9,957 |
+| Fmax (post-route) | 41.40 MHz | 30.64 MHz |
+| Estimated MIPS | 6.96 | 5.02 |
+| Synthesis time | 3.7s | 32.7s |
 
 ## Synthesis Pipeline
 
@@ -243,8 +247,6 @@ All 30+ vendor primitives have stub declarations in `ecp5_prims.sv` for slang el
 
 ## Repository
 
-42 source modules, 12 test suites, 605 tests.
-
 | Module | Role |
 |--------|------|
 | `nosis/ir.py` | IR: `Design`, `Module`, `Cell`, `Net`, 30 `PrimOp` variants, Verilog emission |
@@ -300,7 +302,7 @@ All 30+ vendor primitives have stub declarations in `ecp5_prims.sv` for slang el
 
 4. **Provable where possible.** SAT-based constant proof, exhaustive truth table verification for small cones, formal BMC for assertions. Simulation-based methods are clearly labeled as probabilistic.
 
-5. **Pure Python.** Correctness is easier to verify in Python than C++. The entire pipeline is 21,000 lines with no C extensions beyond the pyslang dependency.
+5. **Pure Python.** Correctness is easier to verify in Python than C++. No C extensions beyond the pyslang dependency.
 
 ## Dependencies
 
@@ -372,7 +374,7 @@ nosis input.sv --top top -o output.json --ecppack output.bit
 
 ## Development
 
-Full test suite (585 tests, 12 suites):
+Full test suite:
 
 ```
 pytest tests/ -v

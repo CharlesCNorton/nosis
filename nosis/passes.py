@@ -187,6 +187,12 @@ def identity_simplify(mod: Module) -> int:
                 to_bypass.append((cell.name, a_net.name))
             elif s_const == 1 and b_net:
                 to_bypass.append((cell.name, b_net.name))
+            elif a_net and b_net and a_net is b_net:
+                # MUX(cond, x, x) = x — both branches identical
+                to_bypass.append((cell.name, a_net.name))
+            elif a_net and b_net and a_net.driver is not None and b_net.driver is not None and a_net.driver is b_net.driver:
+                # Both branches driven by the same cell — same value
+                to_bypass.append((cell.name, a_net.name))
         elif cell.op == PrimOp.NOT:
             # NOT(NOT(a)) -> a
             if a_net and a_net.driver and a_net.driver.op == PrimOp.NOT:

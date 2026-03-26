@@ -1501,3 +1501,71 @@ def test_mod_power_of_2_is_masking():
 
     nl = map_to_ecp5(design)
     assert nl.stats().get("LUT4", 0) == 0, f"expected 0 LUT4 for mod-by-8, got {nl.stats().get('LUT4', 0)}"
+
+
+# --- Gate-level primitive tests (#12) ---
+
+def test_gate_primitives_lower():
+    """Verilog gate primitives (and, or, nand, buf, not) lower to IR cells."""
+    from nosis.frontend import parse_files, lower_to_ir
+    r = parse_files(["tests/designs/gate_prims.sv"], top="gate_prims")
+    d = lower_to_ir(r, top="gate_prims")
+    m = d.top_module()
+    assert m.stats()["cells"] > 8, "gate primitives should produce cells beyond ports"
+
+
+def test_gate_primitives_simulate():
+    """Gate primitives produce correct values in simulation."""
+    from nosis.frontend import parse_files, lower_to_ir
+    from nosis.sim import FastSimulator
+    r = parse_files(["tests/designs/gate_prims.sv"], top="gate_prims")
+    d = lower_to_ir(r, top="gate_prims")
+    m = d.top_module()
+    sim = FastSimulator(m)
+
+    vals = sim.step({"a": 1, "b": 0, "c": 1})
+    assert vals.get("y_and") == 0
+    assert vals.get("y_or") == 1
+    assert vals.get("y_nand") == 1
+    assert vals.get("y_buf") == 1
+    assert vals.get("y_not") == 0
+
+    vals = sim.step({"a": 1, "b": 1, "c": 0})
+    assert vals.get("y_and") == 1
+    assert vals.get("y_nand") == 0
+
+
+# --- For-loop in always_comb (#2) ---
+
+def test_for_loop_lowers():
+    """For loops in always blocks should produce cells."""
+    from nosis.frontend import parse_files, lower_to_ir
+    r = parse_files(["tests/designs/for_loop.sv"], top="for_loop")
+    d = lower_to_ir(r, top="for_loop")
+    m = d.top_module()
+    assert m.stats()["cells"] > 10, "for-loop should produce cells"
+
+
+# --- casez (#4) ---
+
+def test_casez_lowers():
+    """casez with wildcards should produce MUX cells."""
+    from nosis.frontend import parse_files, lower_to_ir
+    r = parse_files(["tests/designs/casez_test.sv"], top="casez_test")
+    d = lower_to_ir(r, top="casez_test")
+    m = d.top_module()
+    assert m.stats()["cells"] > 5
+
+
+# --- User-defined function call (#6) ---
+
+def test_func_call_lowers():
+    """User-defined function calls should inline and produce cells."""
+    from nosis.frontend import parse_files, lower_to_ir
+    r = parse_files(["tests/designs/func_call.sv"], top="func_call")
+    d = lower_to_ir(r, top="func_call")
+    m = d.top_module()
+    # Should have ADD cells from the saturating add
+    from nosis.ir import PrimOp
+    adds = sum(1 for c in m.cells.values() if c.op == PrimOp.ADD)
+    assert adds >= 1, "function should inline to produce ADD cells"

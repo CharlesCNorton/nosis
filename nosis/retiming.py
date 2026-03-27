@@ -267,6 +267,8 @@ def duplicate_high_fanout(mod: Module, *, threshold: int = 32) -> int:
             dup_name = f"{cell.name}_dup{counter[0]}"
             dup_out_name = f"{out_net.name}_dup{counter[0]}"
 
+            if dup_out_name in mod.nets or dup_name in mod.cells:
+                continue
             dup_out = mod.add_net(dup_out_name, out_net.width)
             dup_cell = mod.add_cell(dup_name, cell.op, **cell.params)
 

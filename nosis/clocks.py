@@ -137,7 +137,8 @@ def insert_synchronizers(mod: Module, crossings: list[ClockCrossing]) -> int:
     Returns the number of synchronizer pairs inserted.
     """
     inserted = 0
-    counter = 0
+    import random
+    counter = random.randint(100000, 999999)
 
     for crossing in crossings:
         dest_ff = mod.cells.get(crossing.dest_ff)

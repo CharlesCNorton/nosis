@@ -679,11 +679,15 @@ class _Lowerer:
         value_sym = getattr(value_node, "symbol", None)
         mem_name = getattr(value_sym, "name", "") if value_sym else ""
 
-        # Look for a MEMORY cell with this name
+        # Look for a MEMORY cell with this name (exact or suffix match)
         mem_cell = None
         if mem_name:
+            suffix = f".{mem_name}"
             for cell in self.mod.cells.values():
-                if cell.op == PrimOp.MEMORY and cell.params.get("mem_name") == mem_name:
+                if cell.op != PrimOp.MEMORY:
+                    continue
+                cm = cell.params.get("mem_name", "")
+                if cm == mem_name or cm.endswith(suffix):
                     mem_cell = cell
                     break
 

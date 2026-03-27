@@ -29,11 +29,16 @@ def _cell_signature(cell: Cell) -> tuple | None:
     if cell.op not in _CSE_OPS:
         return None
     input_key = tuple(sorted((port, net.name) for port, net in cell.inputs.items()))
-    param_key = tuple(sorted(
-        (k, v) for k, v in cell.params.items()
-        if k not in ("packed", "packed_lut_init", "fsm_state", "fsm_encoding",
-                      "fsm_num_states", "fsm_transition")
-    ))
+    try:
+        param_key = tuple(sorted(
+            (k, v if not isinstance(v, list) else tuple(v))
+            for k, v in cell.params.items()
+            if k not in ("packed", "packed_lut_init", "fsm_state", "fsm_encoding",
+                          "fsm_num_states", "fsm_transition", "_bdd_absorbable",
+                          "eq_carry", "eq_carry_width")
+        ))
+    except TypeError:
+        return None
     return (cell.op, input_key, param_key)
 
 

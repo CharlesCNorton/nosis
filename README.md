@@ -252,23 +252,33 @@ All 30+ vendor primitives have stub declarations in `ecp5_prims.sv` for slang el
 |--------|------|
 | `nosis/ir.py` | IR: `Design`, `Module`, `Cell`, `Net`, 30 `PrimOp` variants, Verilog emission |
 | `nosis/frontend.py` | pyslang frontend: parse, elaborate, lower to IR, hierarchy flattening |
-| `nosis/passes.py` | 13 iterative passes + pipeline orchestration |
+| `nosis/passes/` | Optimization pipeline split by pass category |
+| `nosis/passes/pipeline.py` | Pipeline orchestration: 13 iterative passes in 6 rounds + post-optimization |
+| `nosis/passes/folding.py` | Constant folding to fixed point |
+| `nosis/passes/identity.py` | Identity and absorbing simplification |
+| `nosis/passes/dce.py` | Dead code elimination via backward reachability |
+| `nosis/passes/constff.py` | Constant-input FF removal |
+| `nosis/passes/mux.py` | MUX chain merging, case chain collapse, constant mask simplification |
+| `nosis/passes/equiv.py` | Functional identity, HIT equivalence, don't-care inputs, MUX-to-AND |
+| `nosis/passes/misc.py` | EQ width narrowing, carry chain annotation |
 | `nosis/boolopt.py` | Boolean algebra: AND/OR distribution, complement, idempotent |
 | `nosis/cse.py` | Hash-based common subexpression elimination |
 | `nosis/cutmap.py` | Cut-based LUT4 remapping with composed truth tables |
 | `nosis/dontcare.py` | Backward don't-care propagation |
-| `nosis/reqmerge.py` | Reachable-state equivalence merging (HoTT quotient types) |
+| `nosis/reqmerge.py` | Reachable-state equivalence merging via incremental FNV-1a hashing |
 | `nosis/satconst.py` | SAT-based constant proof via exhaustive cone evaluation |
 | `nosis/eval.py` | Single source of truth for PrimOp evaluation semantics (signed and unsigned) |
 | `nosis/sim.py` | Pre-compiled flat-array simulator for fast multi-cycle simulation |
 | `nosis/equiv.py` | Equivalence checking: exhaustive, SAT, random simulation |
 | `nosis/formal.py` | Bounded model checking and sequential equivalence |
-| `nosis/techmap.py` | ECP5 technology mapping with dual-LUT packing |
+| `nosis/techmap/` | ECP5 technology mapping split into netlist types and mapper |
+| `nosis/techmap/netlist.py` | `ECP5Cell`, `ECP5Net`, `ECP5Netlist`, LUT4 INIT computation |
+| `nosis/techmap/mapper.py` | IR-to-ECP5 mapper: LUT4, TRELLIS_FF, CCU2C, MULT18X18D, ALU54B, DP16KD |
 | `nosis/slicepack.py` | Post-mapping: chain merge, dedup, buffer absorb, dual-LUT pack |
 | `nosis/json_backend.py` | nextpnr-compatible JSON serialization |
 | `nosis/fsm.py` | FSM extraction and encoding classification |
 | `nosis/bram.py` | BRAM inference: DP16KD and DPR16X4 |
-| `nosis/dsp.py` | DSP inference: MULT18X18D and ALU54B MAC detection |
+| `nosis/dsp.py` | DSP inference: MULT18X18D (with ZEXT look-through) and ALU54B MAC detection |
 | `nosis/carry.py` | Carry chain inference: CCU2C |
 | `nosis/lutpack.py` | IR-level cascaded operation merging |
 | `nosis/timing.py` | Static timing analysis with per-pin LUT4 delay model |
@@ -282,15 +292,15 @@ All 30+ vendor primitives have stub declarations in `ecp5_prims.sv` for slang el
 | `nosis/hierarchy.py` | Sub-module instance support and vendor primitive skip list |
 | `nosis/constraints.py` | LPF constraint parsing |
 | `nosis/sdc.py` | SDC constraint and specify block parsing |
-| `nosis/validate.py` | RTL simulation harness with testbench generation |
-| `nosis/postsynth.py` | Post-synthesis Verilog generation with ECP5 cell models |
-| `nosis/incremental.py` | IR snapshots and incremental re-mapping |
+| `nosis/validate.py` | RTL simulation harness with cycle-accurate testbench generation |
+| `nosis/postsynth.py` | Post-synthesis Verilog with behavioral models (LUT4, FF, CCU2C, DP16KD, MULT18X18D, ALU54B) |
+| `nosis/incremental.py` | IR snapshots, delta computation, and warm-cache incremental synthesis |
 | `nosis/diff.py` | Netlist structural comparison |
 | `nosis/warnings.py` | Design warning detection |
 | `nosis/readmem.py` | `$readmemh`/`$readmemb` file parsing for BRAM initialization |
 | `nosis/retiming.py` | Register retiming (forward/backward) and high-fanout duplication |
 | `nosis/pnr_feedback.py` | Parse nextpnr logs for timing closure, critical path extraction |
-| `nosis/cli.py` | Command-line interface with `--stats`, `--benchmark`, `--ecppack`, `--lpf` |
+| `nosis/cli.py` | Command-line interface with `--stats`, `--benchmark`, `--ecppack`, `--incremental`, `--quiet`, `--timeout`, `--warn-unused` |
 | `nosis/ecp5_prims.sv` | ECP5 vendor primitive stubs for slang elaboration |
 
 ## Design Principles

@@ -18,17 +18,17 @@ Source files (.sv, .v)
    [frontend]      nosis/frontend.py -- walk AST, emit IR cells and nets
        |            Handles hierarchy flattening, FF Q-redirect, concat LHS
        v
-   [optimization]  nosis/passes.py -- 13 passes x 6 rounds + 6 post-passes
+   [optimization]  nosis/passes/ -- 13 passes x 6 rounds + 6 post-passes
        |            constant fold, identity, boolean, tech-aware, CSE,
        |            HIT merge, don't-care, MUX merge, timing-driven round,
-       |            reqmerge (500 cycles), SAT const (Tseitin CNF), cut-map,
+       |            reqmerge (FNV-1a hashing), SAT const, cut-map,
        |            retiming (forward), CDC sync, fanout duplication
        v
    [inference]     nosis/fsm.py, bram.py, dsp.py, carry.py -- annotate cells
        |
        v
-   [tech mapping]  nosis/techmap.py -- IR primitives to LUT4, TRELLIS_FF,
-       |            CCU2C, MULT18X18D, DP16KD, ALU54B
+   [tech mapping]  nosis/techmap/ -- IR primitives to LUT4, TRELLIS_FF,
+       |            CCU2C, MULT18X18D, ALU54B, DP16KD
        v
    [slice packing] nosis/slicepack.py -- chain merge, dedup, const simplify,
        |            buffer absorb, dead LUT eliminate
@@ -98,17 +98,19 @@ Shifts wider than 8 bits use a logarithmic barrel shifter: B stages of N MUX2 ce
 - Output: `Design` with flattened `Module` instances
 - Contract: every FF has CLK and D inputs; every net has width > 0; every port has a corresponding INPUT or OUTPUT cell
 
-### `nosis/passes.py`
+### `nosis/passes/` (package)
 
 - Input/output: `Module` mutated in place
 - Contract: cell count is monotonically non-increasing per pass; functional equivalence is preserved
-- 570 tests verify this across all RIME designs
+- Pipeline orchestration in `passes/pipeline.py`; individual passes in `passes/folding.py`, `passes/identity.py`, `passes/dce.py`, `passes/constff.py`, `passes/mux.py`, `passes/equiv.py`, `passes/misc.py`
+- Shared memory-fanout protection state in `passes/__init__._active_mem_protect`
 
-### `nosis/techmap.py`
+### `nosis/techmap/` (package)
 
 - Input: `Design` with technology-independent IR
-- Output: `ECP5Netlist` with `LUT4`, `TRELLIS_FF`, `CCU2C`, `MULT18X18D`, `DP16KD` cells
+- Output: `ECP5Netlist` with `LUT4`, `TRELLIS_FF`, `CCU2C`, `MULT18X18D`, `ALU54B`, `DP16KD` cells
 - Contract: every IR cell produces at least one ECP5 cell (or is pure wiring)
+- Netlist types in `techmap/netlist.py`; mapper in `techmap/mapper.py`
 
 ### `nosis/json_backend.py`
 
@@ -118,11 +120,13 @@ Shifts wider than 8 bits use a logarithmic barrel shifter: B stages of N MUX2 ce
 
 ## Test Architecture
 
-590+ tests organized by module:
+Tests organized by module:
 - Unit tests: IR construction, evaluation, individual pass behavior
-- Integration tests: full pipeline on real RIME hardware designs
+- Integration tests: full pipeline on real RIME hardware designs, including SoC-scale synthesis
 - Property tests: Hypothesis-generated random inputs verify invariants
 - Regression tests: locked cell counts prevent undetected changes
 - Structural tests: connectivity, monotonicity, port survival
+- Gate-level simulation: iverilog cycle-accurate RTL-vs-post-synth comparison
+- DSP path: end-to-end MULT18X18D and ALU54B inference, mapping, and JSON validation
 
-CI runs lint + unit tests across Python 3.11-3.13 with pyslang installed.
+CI runs lint, mypy, unit tests across Python 3.11-3.13, SoC integration tests, gate-level simulation via iverilog, and nextpnr place-and-route verification.

@@ -10,7 +10,6 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-import pytest
 
 from nosis.ir import PrimOp
 from nosis.readmem import parse_readmemh, parse_readmemb

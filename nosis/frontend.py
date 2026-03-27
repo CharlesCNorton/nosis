@@ -1860,8 +1860,11 @@ class _Lowerer:
                                 src=src,
                             ))
                             return  # skip this block entirely
-                self.lower_procedural_block(node)
-                self._apply_comb_redirects()
+                # Collect for order-independent processing after the walk.
+                if not hasattr(self, '_collected_proc_blocks'):
+                    self._collected_proc_blocks: list[tuple[str, Any]] = []
+                proc_kind = str(node.procedureKind) if hasattr(node, "procedureKind") else ""
+                self._collected_proc_blocks.append((proc_kind, node))
 
             elif kind in ("SymbolKind.GenerateBlock", "SymbolKind.GenerateBlockArray"):
                 # generate-for/generate-if — slang fully unrolls generate blocks.
@@ -1994,6 +1997,30 @@ class _Lowerer:
                 ))
 
         body.visit(walk_member)
+
+        # Process procedural blocks in source order.
+        for proc_kind, node in getattr(self, '_collected_proc_blocks', []):
+            self.lower_procedural_block(node)
+            self._apply_comb_redirects()
+
+        # After all blocks: patch cross-block references.
+        # When always_comb blocks appear before always_ff in source, they
+        # may reference nets (like state, pc) that had driver=None at
+        # lowering time. The always_ff creates FFs with Q outputs that
+        # replace those nets. Patch any combinational cell input that
+        # still reads the raw target net (driver=None or driver=FF) to
+        # instead read the FF Q output.
+        _ff_q_map: dict[str, "Net"] = {}
+        for cell in self.mod.cells.values():
+            if cell.op == PrimOp.FF:
+                tgt = cell.params.get("ff_target", "")
+                if tgt:
+                    for o in cell.outputs.values():
+                        _ff_q_map[tgt] = o
+        # Patch disabled — the Q-redirect in lower_procedural_block already
+        # handles FF output routing. The global patch was over-replacing
+        # internal always_ff references, breaking the state machine.
+        pass
 
         # Process deferred continuous assigns now that all FFs exist
         for assign_expr in getattr(self, '_deferred_assigns', []):

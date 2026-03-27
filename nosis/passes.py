@@ -1124,7 +1124,7 @@ def collapse_case_chains(mod: Module) -> int:
             # Build select bitmask: bit i is set when selector == sorted_cases[i].key
             # For PMUX, we need per-case select bits. Build EQ cells.
             sel_bits_name = f"$case_selbits_{_ctr2[0]}"
-            sel_bits_net = mod.add_net(f"{sel_bits_name}_o", len(sorted_cases))
+            mod.add_net(f"{sel_bits_name}_o", len(sorted_cases))
 
             # PMUX select: build a CONCAT of EQ outputs
             for idx, (cv, dv) in enumerate(sorted_cases):

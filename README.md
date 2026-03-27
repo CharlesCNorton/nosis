@@ -373,6 +373,25 @@ End-to-end with integrated ecppack:
 nosis input.sv --top top -o output.json --ecppack output.bit
 ```
 
+Quiet mode for scripted pipelines:
+
+```
+nosis input.sv --top top -o output.json --quiet
+```
+
+Abort after a time limit:
+
+```
+nosis input.sv --top top -o output.json --timeout 60
+```
+
+## Environment Variables
+
+| Variable | Purpose |
+|----------|---------|
+| `NOSIS_PYSLANG_PATH` | Directory containing the pyslang `.pyd`/`.so` if built from source |
+| `RIME_SYNTH` | When using nosis as a RIME build backend: `nosis` (default) or `yosys` |
+
 ## Development
 
 Full test suite:

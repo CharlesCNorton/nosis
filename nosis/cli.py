@@ -49,6 +49,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lpf", help="LPF constraint file for nextpnr pin assignments")
     parser.add_argument("--snapshot", help="save an IR snapshot for incremental compilation")
     parser.add_argument("--delta", help="compare against a previous IR snapshot and print delta")
+    parser.add_argument("--incremental", help="load a previous snapshot and re-synthesize only changed modules")
+    parser.add_argument("--timeout", type=float, default=0, help="abort synthesis after N seconds (0 = unlimited)")
+    parser.add_argument("--warn-unused", action="store_true", help="report non-trivial IR cells removed by dead code elimination")
+    parser.add_argument("-q", "--quiet", action="store_true", help="suppress non-error output (for scripted use)")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose output")
     args = parser.parse_args(argv)
 
@@ -86,23 +90,41 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     t_parse = time.monotonic()
-    if args.verbose:
+    if args.verbose and not args.quiet:
         print(f"parse: {len(result.top_instances)} top instance(s) in {t_parse - t0:.3f}s")
 
     # --- Lower to IR ---
     design = lower_to_ir(result, top=args.top)
     mod = design.top_module()
     t_lower = time.monotonic()
-    if args.verbose:
+    if args.verbose and not args.quiet:
         print(f"lower: {mod.stats()}")
         print(f"lower: {t_lower - t_parse:.3f}s")
+
+    # --- Timeout guard ---
+    _deadline = (time.monotonic() + args.timeout) if args.timeout > 0 else 0
+
+    def _check_timeout(stage: str) -> None:
+        if _deadline and time.monotonic() > _deadline:
+            print(f"error: timeout exceeded during {stage} ({args.timeout:.1f}s limit)", file=sys.stderr)
+            raise SystemExit(2)
 
     # --- Optimize ---
     if not args.no_opt:
         from nosis.passes import run_default_passes
+        pre_dce = dict(mod.cells) if args.warn_unused else {}
         opt_stats = run_default_passes(mod, verify=getattr(args, 'verify', False))
+        if args.warn_unused:
+            from nosis.ir import PrimOp as _P
+            trivial = {_P.CONST, _P.INPUT, _P.OUTPUT}
+            removed = set(pre_dce) - set(mod.cells)
+            for name in sorted(removed):
+                cell = pre_dce[name]
+                if cell.op not in trivial and cell.inputs:
+                    print(f"warn-unused: {name} ({cell.op.name}) removed by DCE", file=sys.stderr)
         t_opt = time.monotonic()
-        if args.verbose:
+        _check_timeout("optimization")
+        if args.verbose and not args.quiet:
             print(f"opt: {opt_stats}")
             print(f"opt: {t_opt - t_lower:.3f}s")
     else:

@@ -328,7 +328,7 @@ class TestSoC:
     def test_bram_inference(self):
         from nosis.bram import infer_brams
         mod = self._d().mod
-        n = infer_brams(mod)
+        infer_brams(mod)
         # DPR16X4 is disabled; large arrays should infer DP16KD
         dp16kd = [c for c in mod.cells.values()
                   if c.op == PrimOp.MEMORY and c.params.get("bram_config") == "DP16KD"]
@@ -371,8 +371,10 @@ class TestSoC:
         from nosis.bram import infer_brams
         from nosis.carry import infer_carry_chains
         from nosis.fsm import extract_fsms, annotate_fsm_cells
-        infer_brams(m); infer_carry_chains(m)
-        fsms = extract_fsms(m); annotate_fsm_cells(m, fsms)
+        infer_brams(m)
+        infer_carry_chains(m)
+        fsms = extract_fsms(m)
+        annotate_fsm_cells(m, fsms)
         nl = map_to_ecp5(d)
         sp = pack_slices(nl)
         assert sp["loops_broken"] >= 0
@@ -434,8 +436,10 @@ class TestSoC:
         d = lower_to_ir(r, top="top")
         m = d.top_module()
         run_default_passes(m)
-        infer_brams(m); infer_carry_chains(m)
-        fsms = extract_fsms(m); annotate_fsm_cells(m, fsms)
+        infer_brams(m)
+        infer_carry_chains(m)
+        fsms = extract_fsms(m)
+        annotate_fsm_cells(m, fsms)
         pack_luts_ir(m)
         nl = map_to_ecp5(d)
         pack_slices(nl)

@@ -9,7 +9,7 @@ description = "Correctness-first FPGA synthesis targeting ECP5"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
-dependencies = ["pyslang>=7"]
+dependencies = ["pyslang>=7,<9"]
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff", "hypothesis", "mypy"]

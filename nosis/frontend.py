@@ -239,12 +239,22 @@ def parse_files(
     top_instances = list(comp.getRoot().topInstances)
 
     if errors:
+        human_errors = []
+        for err in errors:
+            # Strip pyslang DiagCode wrappers for readability
+            text = err.replace("DiagCode(", "").rstrip(")")
+            human_errors.append(text)
         raise FrontendError(
-            f"compilation produced {len(errors)} error(s):\n" + "\n".join(errors)
+            f"compilation produced {len(errors)} error(s):\n" + "\n".join(human_errors)
         )
 
     if not top_instances:
-        raise FrontendError("no top-level instances found after elaboration")
+        top_hint = f" (--top={top})" if top else ""
+        raise FrontendError(
+            f"no top-level instances found after elaboration{top_hint}. "
+            f"Check that the module name exists in the source files and that "
+            f"all required source files are listed."
+        )
 
     # Pre-scan source files for $readmemh/$readmemb calls.
     # pyslang may resolve these during elaboration and remove them

@@ -117,6 +117,12 @@ def prove_constants_sat(
             try:
                 from pysat.solvers import Glucose3
             except ImportError:
+                import warnings
+                warnings.warn(
+                    f"satconst: skipping {net_name} ({n_inputs} cone inputs > 16) — "
+                    f"install python-sat for SAT-based proof",
+                    stacklevel=2,
+                )
                 continue
 
             _vctr = [1]

@@ -138,6 +138,26 @@ module MULT18X18D_SIM #(
     wire signed [35:0] product = A * B;
     assign P = product;
 endmodule
+
+module ALU54B_SIM #(
+    parameter REG_INPUTA_CLK = "NONE",
+    parameter REG_INPUTB_CLK = "NONE",
+    parameter REG_INPUTC_CLK = "NONE",
+    parameter REG_OUTPUT_CLK = "NONE"
+) (
+    input signed [35:0] A, B,
+    input signed [53:0] C,
+    input CLK0, CLK1, CLK2, CLK3,
+    input CE0, CE1, CE2, CE3,
+    input RST0, RST1, RST2, RST3,
+    input SIGNEDA, SIGNEDB,
+    input [3:0] OP,
+    output signed [53:0] R
+);
+    // Simplified: accumulate mode (C + A*B)
+    wire signed [53:0] product = A * B;
+    assign R = C + product;
+endmodule
 """
 
 

@@ -42,6 +42,20 @@ jobs:
       - run: pip install pytest "pyslang>=7"
       - run: pytest tests/test_designs.py -v -k "iverilog" --timeout=120
 
+  soc-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install pytest "pyslang>=7"
+      - uses: actions/checkout@v4
+        with:
+          repository: CharlesCNorton/rime
+          path: rime
+      - run: pytest tests/test_soc.py -v --timeout=900
+
   nextpnr:
     runs-on: ubuntu-latest
     steps:

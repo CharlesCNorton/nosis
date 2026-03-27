@@ -1320,13 +1320,15 @@ class _Lowerer:
         return True
 
     # _collect_nb_assignments removed — replaced by _collect_blocking_with_muxes(allow_nb=True)
-    def _collect_blocking_with_muxes(self, stmt: Any, allow_nb: bool = False) -> dict[str, "Net"]:
+    def _collect_blocking_with_muxes(self, stmt: Any, allow_nb: bool = False, *, _running: dict[str, "Net"] | None = None) -> dict[str, "Net"]:
         """Collect assignments, building MUXes for nested conditionals.
 
         Returns {target_name: value_net} where value_net includes conditional
         MUX trees for if/else/case within the statement.
 
         If allow_nb is True, also captures non-blocking (<=) assignments.
+        *_running* provides the current running values from outer List handlers,
+        used as the hold value in conditional branches.
         """
         results: dict[str, Net] = {}
         kind = str(stmt.kind)
@@ -1349,7 +1351,7 @@ class _Lowerer:
                 cond_net = self.lower_expr(conds[0].expr)
                 # Push condition for memory write WE gating in true branch
                 self._condition_stack.append(cond_net)
-                true_map = self._collect_blocking_with_muxes(stmt.ifTrue, allow_nb=allow_nb) if stmt.ifTrue else {}
+                true_map = self._collect_blocking_with_muxes(stmt.ifTrue, allow_nb=allow_nb, _running=_running) if stmt.ifTrue else {}
                 self._condition_stack.pop()
                 # Push NOT(condition) for false branch
                 if stmt.ifFalse:
@@ -1358,7 +1360,7 @@ class _Lowerer:
                     self.mod.connect(not_cell, "A", cond_net)
                     self.mod.connect(not_cell, "Y", not_cond, direction="output")
                     self._condition_stack.append(not_cond)
-                false_map = self._collect_blocking_with_muxes(stmt.ifFalse, allow_nb=allow_nb) if stmt.ifFalse else {}
+                false_map = self._collect_blocking_with_muxes(stmt.ifFalse, allow_nb=allow_nb, _running=_running) if stmt.ifFalse else {}
                 if stmt.ifFalse:
                     self._condition_stack.pop()
                 all_targets = set(true_map) | set(false_map)
@@ -1378,10 +1380,17 @@ class _Lowerer:
                         results[tgt_name] = mux_out
                     elif t_val:
                         # Only true branch assigns — hold value when false.
-                        # For always_ff: use target net (FF Q will replace it).
+                        # For always_ff: use running value from prior assignment
+                        # ONLY if it's a cross-block combinational value.
+                        # Otherwise use the target net (FF Q will replace it).
                         # For always_comb: use CONST(0).
                         if allow_nb:
-                            hold_net = tgt_net
+                            _prev = (_running or {}).get(tgt_name)
+                            # Use _prev only if it's from an always_comb block
+                            if _prev is not None and _prev.driver is not None and 'comb_' in _prev.driver.name:
+                                hold_net = _prev
+                            else:
+                                hold_net = tgt_net
                         else:
                             hold_net = self._fresh_net("bmux_dflt", tgt_net.width)
                             hold_cell = self._fresh_cell("bmux_dflt", PrimOp.CONST, value=0, width=tgt_net.width)
@@ -1398,10 +1407,10 @@ class _Lowerer:
 
         elif kind == "StatementKind.Case":
             inner_sel = self.lower_expr(stmt.expr)
-            inner_default = self._collect_blocking_with_muxes(stmt.defaultCase, allow_nb=allow_nb) if stmt.defaultCase else {}
+            inner_default = self._collect_blocking_with_muxes(stmt.defaultCase, allow_nb=allow_nb, _running=_running) if stmt.defaultCase else {}
             inner_running: dict[str, Net] = dict(inner_default)
             for inner_item in stmt.items:
-                inner_map = self._collect_blocking_with_muxes(inner_item.stmt, allow_nb=allow_nb)
+                inner_map = self._collect_blocking_with_muxes(inner_item.stmt, allow_nb=allow_nb, _running=_running)
                 for inner_expr in inner_item.expressions:
                     iv = self.lower_expr(inner_expr)
                     ieq = self._fresh_net("bcase_eq", 1)
@@ -1440,16 +1449,16 @@ class _Lowerer:
             if body is not None:
                 # For synthesis, treat the loop body as a single pass.
                 # pyslang evaluates the loop variable for constant loops.
-                child_map = self._collect_blocking_with_muxes(body, allow_nb=allow_nb)
+                child_map = self._collect_blocking_with_muxes(body, allow_nb=allow_nb, _running=_running)
                 results.update(child_map)
 
         elif kind == "StatementKind.Block":
             if stmt.body is not None:
-                results.update(self._collect_blocking_with_muxes(stmt.body, allow_nb=allow_nb))
+                results.update(self._collect_blocking_with_muxes(stmt.body, allow_nb=allow_nb, _running=_running))
 
         elif kind == "StatementKind.List":
             for child in stmt.list:
-                child_map = self._collect_blocking_with_muxes(child, allow_nb=allow_nb)
+                child_map = self._collect_blocking_with_muxes(child, allow_nb=allow_nb, _running=results)
                 for tgt_name, rhs_net in child_map.items():
                     if tgt_name in results:
                         # Target already assigned by an earlier child.
@@ -1459,30 +1468,33 @@ class _Lowerer:
                         prev = results[tgt_name]
                         tgt_net = self.mod.nets.get(tgt_name)
                         if tgt_net:
-                            # Walk the cone of rhs_net and replace references
-                            # to tgt_net with prev. Stop at nets that were
-                            # driven by a different scope (always_comb redirect)
-                            # to avoid corrupting cross-block combinational logic.
-                            visited: set[str] = set()
-                            work = [rhs_net]
-                            while work:
-                                net = work.pop()
-                                if net.name in visited:
-                                    continue
-                                visited.add(net.name)
-                                if net.driver is None:
-                                    continue
-                                d = net.driver
-                                # Stop at cells from a different scope (always_comb)
-                                if 'comb_' in d.name and net is not rhs_net:
-                                    continue
-                                for pn, pnet in list(d.inputs.items()):
-                                    if pnet is tgt_net or pnet.name == tgt_name:
-                                        d.inputs[pn] = prev
-                                    elif pnet.name not in visited:
-                                        work.append(pnet)
-                                if len(visited) > 500:
-                                    break  # safety limit
+                            # If the RHS is driven by an always_comb block
+                            # (cross-block reference), do NOT walk into its
+                            # cone. The always_comb MUX chain is a separate
+                            # scope and must not be mutated.
+                            rhs_is_comb = (rhs_net.driver is not None and
+                                           'comb_' in rhs_net.driver.name)
+                            if not rhs_is_comb:
+                                # Walk the cone of rhs_net and replace references
+                                # to tgt_net with prev. Handles chained assignments
+                                # from unrolled for-loops within the same always_ff.
+                                visited: set[str] = set()
+                                work = [rhs_net]
+                                while work:
+                                    net = work.pop()
+                                    if net.name in visited:
+                                        continue
+                                    visited.add(net.name)
+                                    if net.driver is None:
+                                        continue
+                                    d = net.driver
+                                    for pn, pnet in list(d.inputs.items()):
+                                        if pnet is tgt_net or pnet.name == tgt_name:
+                                            d.inputs[pn] = prev
+                                        elif pnet.name not in visited:
+                                            work.append(pnet)
+                                    if len(visited) > 500:
+                                        break
                     results[tgt_name] = rhs_net
 
         return results

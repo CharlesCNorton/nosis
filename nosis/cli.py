@@ -157,19 +157,34 @@ def main(argv: list[str] | None = None) -> int:
         print(emit_verilog(mod))
         return 0
 
-    # --- Snapshot / Delta ---
-    if args.snapshot or args.delta:
-        from nosis.incremental import snapshot_module, compute_delta, save_snapshot, load_snapshot
-        snap = snapshot_module(mod)
-        if args.snapshot:
-            save_snapshot(snap, args.snapshot)
-            if args.verbose:
-                print(f"snapshot: saved to {args.snapshot}")
-        if args.delta:
-            prev = load_snapshot(args.delta)
-            delta = compute_delta(prev, snap)
-            for line in delta.summary_lines():
-                print(line)
+    # --- Snapshot / Delta / Incremental ---
+    from nosis.incremental import snapshot_module, compute_delta, save_snapshot, load_snapshot
+    _incremental_delta = None
+    snap = snapshot_module(mod)
+
+    if args.snapshot:
+        save_snapshot(snap, args.snapshot)
+        if args.verbose and not args.quiet:
+            print(f"snapshot: saved to {args.snapshot}")
+
+    if args.delta:
+        prev = load_snapshot(args.delta)
+        delta = compute_delta(prev, snap)
+        for line in delta.summary_lines():
+            print(line)
+
+    if args.incremental:
+        prev_snap = load_snapshot(args.incremental)
+        _incremental_delta = compute_delta(prev_snap, snap)
+        if _incremental_delta.is_empty:
+            if not args.quiet:
+                print("incremental: no IR changes detected — skipping tech mapping")
+            # Save updated snapshot for next run
+            if args.snapshot:
+                save_snapshot(snap, args.snapshot)
+            return 0
+        if args.verbose and not args.quiet:
+            print(f"incremental: {_incremental_delta.changed_count} cells changed — full re-map")
 
     # --- Dead module elimination ---
     dead = design.eliminate_dead_modules()
@@ -234,6 +249,10 @@ def main(argv: list[str] | None = None) -> int:
         if not args.benchmark:
             print(emit_json_str(netlist))
         t_emit = time.monotonic()
+
+    # --- Save snapshot for incremental next run ---
+    if args.incremental and args.snapshot:
+        save_snapshot(snap, args.snapshot)
 
     # --- nextpnr + ecppack integration ---
     if args.ecppack and args.output:

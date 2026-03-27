@@ -1468,10 +1468,8 @@ class _Lowerer:
                         prev = results[tgt_name]
                         tgt_net = self.mod.nets.get(tgt_name)
                         if tgt_net:
-                            # If the RHS is driven by an always_comb block
-                            # (cross-block reference), do NOT walk into its
-                            # cone. The always_comb MUX chain is a separate
-                            # scope and must not be mutated.
+                            # If the RHS is directly driven by an always_comb
+                            # block, do NOT walk into its cone.
                             rhs_is_comb = (rhs_net.driver is not None and
                                            'comb_' in rhs_net.driver.name)
                             if not rhs_is_comb:
@@ -2029,10 +2027,33 @@ class _Lowerer:
                 if tgt:
                     for o in cell.outputs.values():
                         _ff_q_map[tgt] = o
-        # Patch disabled — the Q-redirect in lower_procedural_block already
-        # handles FF output routing. The global patch was over-replacing
-        # internal always_ff references, breaking the state machine.
-        pass
+        # Patch cells in always_comb output cones that reference raw FF
+        # target nets. Walk backward from each combinationally-redirected
+        # target net to find all cells in its cone, then patch their
+        # inputs to use FF Q outputs.
+        if _ff_q_map:
+            _comb_cone_cells: set[str] = set()
+            for tgt_name, final_net in getattr(self, '_all_comb_redirects', []):
+                # Walk cone of final_net
+                _wl = [final_net]
+                _vis: set[str] = set()
+                while _wl:
+                    _n = _wl.pop()
+                    if _n.name in _vis:
+                        continue
+                    _vis.add(_n.name)
+                    if _n.driver and _n.driver.op not in (PrimOp.FF, PrimOp.INPUT, PrimOp.CONST, PrimOp.OUTPUT):
+                        _comb_cone_cells.add(_n.driver.name)
+                        for _inp in _n.driver.inputs.values():
+                            _wl.append(_inp)
+
+            for cell in self.mod.cells.values():
+                if cell.name not in _comb_cone_cells:
+                    continue
+                for pn, pnet in list(cell.inputs.items()):
+                    q = _ff_q_map.get(pnet.name)
+                    if q is not None and pnet is not q and q.width == pnet.width:
+                        cell.inputs[pn] = q
 
         # Process deferred continuous assigns now that all FFs exist
         for assign_expr in getattr(self, '_deferred_assigns', []):
@@ -2111,8 +2132,11 @@ class _Lowerer:
                     if onet is final_net:
                         final_net.driver.outputs[opn] = tgt_net
                         break
-        # Clear processed redirects to avoid double application
+        # Save redirects for the FF Q cone patch, then clear
         if hasattr(self, '_deferred_comb_redirects'):
+            if not hasattr(self, '_all_comb_redirects'):
+                self._all_comb_redirects: list[tuple[str, "Net"]] = []
+            self._all_comb_redirects.extend(self._deferred_comb_redirects)
             self._deferred_comb_redirects.clear()
 
     def _lower_sub_instance(self, inst: Any) -> None:

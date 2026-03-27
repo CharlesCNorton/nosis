@@ -4,7 +4,7 @@ Correctness-first open-source FPGA synthesis targeting Lattice ECP5.
 
 Nosis synthesizes SystemVerilog and Verilog into technology-mapped netlists for the ECP5 FPGA family. It is the default synthesizer for the [RIME](https://github.com/CharlesCNorton/rime) project. Synthesis results have been verified on silicon (Lattice ECP5U-25F, CABGA256).
 
-On a RIME-V SoC (RV32IMC + Zbb + Zicond + CRC32 + UART + 16 KB BRAM), nosis produces 4,001 LUT4 cells at 41.40 MHz post-route on ECP5-25F. Measured results and full methodology are in [BENCHMARK.md](BENCHMARK.md).
+On a minimal RIME-V SoC (RV32IMC + Zbb + Zicond + CRC32 + UART + 16 KB BRAM), nosis produces 3,753 LUT4 cells at 42.08 MHz post-route on ECP5-25F. The full production SoC with all peripherals synthesizes to 10,969 LUT4. Measured results and full methodology are in [BENCHMARK.md](BENCHMARK.md).
 
 ## Architecture
 
@@ -48,19 +48,20 @@ All designs from the [RIME](https://github.com/CharlesCNorton/rime) project (Res
 | Frost (BRAM grid) | 10 | 5,212 | 5,925 | 938 | 2,963 | 44.2 MHz |
 | Slush (register grid) | 10 | 10,052 | 20,592 | 770 | 10,296 | 44.5 MHz |
 | Ember (TRNG) | 4 | 1,365 | 1,847 | 600 | 924 | 61.2 MHz |
-| RIME-V SoC | 5 | 4,001 | 2,176 | 483 | 2,001 | 82.9 MHz |
+| RIME-V SoC (minimal) | 5 | 3,753 | 2,179 | 451 | 1,877 | 82.9 MHz |
+| RIME-V SoC (full, 12 files) | 12 | 10,969 | 8,651 | 1,164 | 5,485 | — |
 
-The RIME-V SoC contains the RIME-V CPU (RV32IMC + Zbb + Zicond + CRC32), UART TX/RX, and 16 KB BRAM. The generated bitstream was verified on an IcePi Zero (Lattice ECP5U-25F). All output ports are driven. Zero undriven nets after optimization.
+The minimal SoC contains the RIME-V CPU (RV32IMC + Zbb + Zicond + CRC32), UART TX/RX, and 16 KB BRAM. The full SoC adds SPI flash engine, SD SPI engine, 32 MB SDRAM controller and bridge, CRC32 coprocessor, hardware watchdog, IRQ controller, boot ROM, and GPIO. The generated bitstream was verified on an IcePi Zero (Lattice ECP5U-25F).
 
 ### CPU Core Comparison
 
-Both cores were synthesized through the full nosis pipeline into identical SoC shells (16 KB BRAM, UART), placed and routed by nextpnr-ecp5 targeting ECP5-25F CABGA256 speed grade 6.
+Both cores were synthesized through the full nosis pipeline into identical minimal SoC shells (16 KB BRAM, UART), placed and routed by nextpnr-ecp5 targeting ECP5-25F CABGA256 speed grade 6.
 
 | Metric | RIME-V SoC | PicoRV32 SoC |
 |--------|-----------|-------------|
-| LUT4 | 4,001 | 9,957 |
-| Fmax (post-route) | 41.40 MHz | 30.64 MHz |
-| Estimated MIPS | 6.96 | 5.02 |
+| LUT4 | 3,753 | 9,957 |
+| Fmax (post-route) | 42.08 MHz | 30.64 MHz |
+| Estimated MIPS | 7.06 | 5.02 |
 | Synthesis time | 3.7s | 32.7s |
 
 ## Synthesis Pipeline

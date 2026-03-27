@@ -75,6 +75,13 @@ def prove_constants_sat(
 
     proven: dict[str, int] = {}
 
+    # Pre-collect CONST cell values once (hoisted from inner loop)
+    _global_consts: dict[str, int] = {}
+    for _c in mod.cells.values():
+        if _c.op == PrimOp.CONST:
+            for _o in _c.outputs.values():
+                _global_consts[_o.name] = int(_c.params.get("value", 0))
+
     for net_name, expected_val in candidates.items():
         net = mod.nets.get(net_name)
         if net is None or net.width != 1:
@@ -205,17 +212,11 @@ def prove_constants_sat(
         boundary_list = sorted(boundary_nets)
         is_constant = True
         for i in range(1 << n_inputs):
-            net_values = {}
+            net_values = dict(_global_consts)  # copy pre-collected constants
             for idx, bname in enumerate(boundary_list):
                 bnet = mod.nets.get(bname)
                 if bnet:
                     net_values[bname] = (i >> idx) & ((1 << bnet.width) - 1)
-
-            # Set CONST values
-            for c in mod.cells.values():
-                if c.op == PrimOp.CONST:
-                    for out in c.outputs.values():
-                        net_values[out.name] = int(c.params.get("value", 0))
 
             # Evaluate cone
             for c in cone_cells:
@@ -257,6 +258,13 @@ def prove_equivalences_sat(
 
     proven: list[tuple[str, str]] = []
 
+    # Pre-collect CONST cell values once
+    _global_consts: dict[str, int] = {}
+    for _c in mod.cells.values():
+        if _c.op == PrimOp.CONST:
+            for _o in _c.outputs.values():
+                _global_consts[_o.name] = int(_c.params.get("value", 0))
+
     for net_a_name, net_b_name in candidates:
         net_a = mod.nets.get(net_a_name)
         net_b = mod.nets.get(net_b_name)
@@ -286,11 +294,7 @@ def prove_equivalences_sat(
         n_inputs = len(boundary)
         if n_inputs == 0:
             # No inputs — evaluate once
-            net_values: dict[str, int] = {}
-            for c in mod.cells.values():
-                if c.op == PrimOp.CONST:
-                    for out in c.outputs.values():
-                        net_values[out.name] = int(c.params.get("value", 0))
+            net_values: dict[str, int] = dict(_global_consts)
             for c in combined:
                 results = eval_cell(c, net_values)
                 for pname, val in results.items():
@@ -309,16 +313,11 @@ def prove_equivalences_sat(
         is_equiv = True
         mask = (1 << net_a.width) - 1
         for i in range(1 << n_inputs):
-            net_values = {}
+            net_values = dict(_global_consts)  # copy pre-collected constants
             for idx, bname in enumerate(boundary_list):
                 bnet = mod.nets.get(bname)
                 if bnet:
                     net_values[bname] = (i >> idx) & ((1 << bnet.width) - 1)
-
-            for c in mod.cells.values():
-                if c.op == PrimOp.CONST:
-                    for out in c.outputs.values():
-                        net_values[out.name] = int(c.params.get("value", 0))
 
             for c in combined:
                 results = eval_cell(c, net_values)

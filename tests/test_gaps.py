@@ -136,7 +136,66 @@ def test_signed_div_truncates_toward_zero():
 
 
 # ---------------------------------------------------------------------------
-# Item 43: ALU54B MAC detection
+# ALU54B end-to-end: inference -> techmap -> JSON
+# ---------------------------------------------------------------------------
+
+
+def test_alu54b_end_to_end():
+    """acc += a * b infers ALU54B and produces a valid nextpnr cell."""
+    from pathlib import Path
+    from nosis.frontend import parse_files, lower_to_ir
+    from nosis.passes import run_default_passes
+    from nosis.bram import infer_brams
+    from nosis.dsp import infer_dsps, detect_mac
+    from nosis.carry import infer_carry_chains
+    from nosis.fsm import extract_fsms, annotate_fsm_cells
+    from nosis.lutpack import pack_luts_ir
+    from nosis.techmap import map_to_ecp5
+    from nosis.slicepack import pack_slices
+    from nosis.json_backend import emit_json_str
+    import json
+
+    mac_sv = Path(__file__).parent / "designs" / "mac_test.sv"
+    if not mac_sv.exists():
+        pytest.skip("mac_test.sv not found")
+
+    result = parse_files([str(mac_sv)], top="mac_test")
+    design = lower_to_ir(result, top="mac_test")
+    mod = design.top_module()
+    run_default_passes(mod)
+    infer_dsps(mod)
+    n_mac = detect_mac(mod)
+    assert n_mac >= 1, "MAC pattern should be detected in acc += a * b"
+
+    infer_brams(mod)
+    infer_carry_chains(mod)
+    fsms = extract_fsms(mod)
+    annotate_fsm_cells(mod, fsms)
+    pack_luts_ir(mod)
+    design.eliminate_dead_modules()
+    netlist = map_to_ecp5(design)
+    pack_slices(netlist)
+
+    stats = netlist.stats()
+    assert stats.get("ALU54B", 0) == 1, f"expected 1 ALU54B, got {stats}"
+
+    js = json.loads(emit_json_str(netlist))
+    cells = js["modules"]["mac_test"]["cells"]
+    alu_cells = {k: v for k, v in cells.items() if v["type"] == "ALU54B"}
+    assert len(alu_cells) == 1
+    alu = next(iter(alu_cells.values()))
+    for i in range(36):
+        assert f"A{i}" in alu["connections"]
+        assert f"B{i}" in alu["connections"]
+    for i in range(54):
+        assert f"C{i}" in alu["connections"]
+        assert f"R{i}" in alu["connections"]
+    assert "GSR" in alu["parameters"]
+    assert "RESETMODE" in alu["parameters"]
+
+
+# ---------------------------------------------------------------------------
+# Item 43: ALU54B MAC detection (unit test with manually constructed IR)
 # ---------------------------------------------------------------------------
 
 def test_mac_detection():

@@ -123,14 +123,32 @@ def detect_mac(mod: Module) -> int:
             continue
         acc_ff = other_net.driver
 
-        # The FF's D input should be the ADD output (feedback loop)
+        # The FF's D input should be the ADD output (feedback loop).
+        # Allow a single MUX (reset mux) between ADD output and FF D:
+        #   ADD.Y -> MUX.B -> FF.D  (MUX.A = reset value, MUX.S = rst)
         ff_d = acc_ff.inputs.get("D")
         add_outs = list(add_cell.outputs.values())
         if not add_outs or ff_d is None:
             continue
 
         add_out = add_outs[0]
-        if ff_d.name != add_out.name:
+        feedback_ok = False
+        if ff_d.name == add_out.name:
+            feedback_ok = True
+        elif ff_d.driver and ff_d.driver.op == PrimOp.MUX:
+            # Check if either MUX branch is the ADD output (reset MUX pattern)
+            mux_a = ff_d.driver.inputs.get("A")
+            mux_b = ff_d.driver.inputs.get("B")
+            if (mux_a and mux_a.name == add_out.name) or (mux_b and mux_b.name == add_out.name):
+                feedback_ok = True
+        elif ff_d.driver and ff_d.driver.op == PrimOp.AND:
+            # MUX(sel, X, 0) optimizes to AND(~sel, X) — check if either
+            # AND input is the ADD output (reset-to-zero pattern)
+            and_a = ff_d.driver.inputs.get("A")
+            and_b = ff_d.driver.inputs.get("B")
+            if (and_a and and_a.name == add_out.name) or (and_b and and_b.name == add_out.name):
+                feedback_ok = True
+        if not feedback_ok:
             continue
 
         # MAC pattern confirmed: MUL -> ADD -> FF -> (back to ADD)

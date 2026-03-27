@@ -326,6 +326,12 @@ class _ECP5Mapper:
                 alu.parameters["REG_PIPELINE_CLK"] = "NONE"
                 alu.parameters["REG_OUTPUT_CLK"] = "NONE"
                 alu.parameters["GSR"] = "DISABLED"
+                alu.parameters["RESETMODE"] = "SYNC"
+                alu.parameters["CLK0_DIV"] = "ENABLED"
+                alu.parameters["CLK1_DIV"] = "ENABLED"
+                alu.parameters["CLK2_DIV"] = "ENABLED"
+                alu.parameters["CLK3_DIV"] = "ENABLED"
+                alu.parameters["HIGHSPEED_CLK"] = "NONE"
                 # Wire A (multiply input, up to 36 bits)
                 for i in range(36):
                     bit = a_bits[i] if i < len(a_bits) else "0"

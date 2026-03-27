@@ -382,10 +382,20 @@ class _ECP5Mapper:
                 dsp = self.nl.add_cell(self._fresh_name("mult"), "MULT18X18D")
                 if cell.src:
                     dsp.attributes["src"] = cell.src
+                # All parameters required by nextpnr's ECP5 DSP packer
                 dsp.parameters["REG_INPUTA_CLK"] = "NONE"
                 dsp.parameters["REG_INPUTB_CLK"] = "NONE"
                 dsp.parameters["REG_OUTPUT_CLK"] = "NONE"
+                dsp.parameters["REG_PIPELINE_CLK"] = "NONE"
                 dsp.parameters["SOURCEB_MODE"] = "B_INPUT"
+                dsp.parameters["MULT_BYPASS"] = "DISABLED"
+                dsp.parameters["GSR"] = "DISABLED"
+                dsp.parameters["RESETMODE"] = "SYNC"
+                dsp.parameters["CLK0_DIV"] = "ENABLED"
+                dsp.parameters["CLK1_DIV"] = "ENABLED"
+                dsp.parameters["CLK2_DIV"] = "ENABLED"
+                dsp.parameters["CLK3_DIV"] = "ENABLED"
+                dsp.parameters["HIGHSPEED_CLK"] = "NONE"
 
                 # Wire A input (up to 18 bits)
                 for i in range(18):
@@ -397,12 +407,16 @@ class _ECP5Mapper:
                     bit = b_bits[i] if i < len(b_bits) else "0"
                     dsp.ports[f"B{i}"] = [bit]
 
+                # Wire C input (unused, tie to 0)
+                for i in range(18):
+                    dsp.ports[f"C{i}"] = ["0"]
+
                 # Wire output (up to 36 bits)
                 for i in range(36):
                     bit = out_bits[i] if i < len(out_bits) else self.nl.alloc_bit()
                     dsp.ports[f"P{i}"] = [bit]
 
-                # Unused control signals
+                # Control signals
                 dsp.ports["CLK0"] = ["0"]
                 dsp.ports["CLK1"] = ["0"]
                 dsp.ports["CLK2"] = ["0"]
@@ -417,6 +431,8 @@ class _ECP5Mapper:
                 dsp.ports["RST3"] = ["0"]
                 dsp.ports["SIGNEDA"] = ["1" if cell.params.get("dsp_signed_a") else "0"]
                 dsp.ports["SIGNEDB"] = ["1" if cell.params.get("dsp_signed_b") else "0"]
+                dsp.ports["SOURCEA"] = ["0"]
+                dsp.ports["SOURCEB"] = ["0"]
                 return
         if cell.op in (PrimOp.DIV, PrimOp.MOD):
             # Check if divisor B is a constant

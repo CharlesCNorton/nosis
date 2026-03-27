@@ -27,6 +27,18 @@ def infer_dsps(mod: Module) -> int:
     """
     tagged = 0
 
+    def _effective_width(net) -> int:
+        """Look through ZEXT/SEXT to find the real data width."""
+        if net.driver and net.driver.op == PrimOp.ZEXT:
+            inner = net.driver.inputs.get("A")
+            if inner:
+                return inner.width
+        if net.driver and net.driver.op == PrimOp.SEXT:
+            inner = net.driver.inputs.get("A")
+            if inner:
+                return inner.width
+        return net.width
+
     for cell in mod.cells.values():
         if cell.op != PrimOp.MUL:
             continue
@@ -36,8 +48,8 @@ def infer_dsps(mod: Module) -> int:
         if a_net is None or b_net is None:
             continue
 
-        a_width = a_net.width
-        b_width = b_net.width
+        a_width = _effective_width(a_net)
+        b_width = _effective_width(b_net)
 
         # MULT18X18D handles up to 18x18
         if a_width <= 18 and b_width <= 18:

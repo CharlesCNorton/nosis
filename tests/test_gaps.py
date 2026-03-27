@@ -213,3 +213,73 @@ def test_bram_tiled_inference_tag():
     assert tagged == 1
     assert cell.params.get("bram_config") == "DP16KD_TILED"
     assert cell.params.get("bram_count", 0) > 1
+
+
+# ---------------------------------------------------------------------------
+# MULT18X18D end-to-end: inference -> techmap -> JSON
+# ---------------------------------------------------------------------------
+
+def test_mult18x18d_end_to_end():
+    """18x18 multiply infers MULT18X18D and produces a valid nextpnr cell."""
+    from pathlib import Path
+    from nosis.frontend import parse_files, lower_to_ir
+    from nosis.passes import run_default_passes
+    from nosis.bram import infer_brams
+    from nosis.dsp import infer_dsps
+    from nosis.carry import infer_carry_chains
+    from nosis.fsm import extract_fsms, annotate_fsm_cells
+    from nosis.lutpack import pack_luts_ir
+    from nosis.techmap import map_to_ecp5
+    from nosis.slicepack import pack_slices
+    from nosis.json_backend import emit_json_str
+    import json
+
+    mul_sv = Path(__file__).parent / "designs" / "mul_test.sv"
+    if not mul_sv.exists():
+        pytest.skip("mul_test.sv not found")
+
+    result = parse_files([str(mul_sv)], top="mul_test")
+    design = lower_to_ir(result, top="mul_test")
+    mod = design.top_module()
+    run_default_passes(mod)
+    infer_brams(mod)
+    n_dsp = infer_dsps(mod)
+    assert n_dsp >= 1, "DSP inference should tag at least one multiply"
+
+    # Verify the MUL cell is tagged as MULT18X18D (not DECOMPOSED)
+    from nosis.ir import PrimOp as P
+    mul_cells = [c for c in mod.cells.values() if c.op == P.MUL]
+    assert any(c.params.get("dsp_config") == "MULT18X18D" for c in mul_cells), \
+        f"expected MULT18X18D tag, got: {[c.params.get('dsp_config') for c in mul_cells]}"
+
+    infer_carry_chains(mod)
+    fsms = extract_fsms(mod)
+    annotate_fsm_cells(mod, fsms)
+    pack_luts_ir(mod)
+    design.eliminate_dead_modules()
+    netlist = map_to_ecp5(design)
+    pack_slices(netlist)
+
+    stats = netlist.stats()
+    assert stats.get("MULT18X18D", 0) == 1, f"expected 1 MULT18X18D, got {stats}"
+    assert stats.get("TRELLIS_FF", 0) >= 36, f"expected >= 36 FFs, got {stats}"
+
+    # Verify JSON is structurally valid for nextpnr
+    js = json.loads(emit_json_str(netlist))
+    cells = js["modules"]["mul_test"]["cells"]
+    dsp_cells = {k: v for k, v in cells.items() if v["type"] == "MULT18X18D"}
+    assert len(dsp_cells) == 1
+    dsp = next(iter(dsp_cells.values()))
+
+    # Must have all 18 A/B input ports and 36 P output ports
+    for i in range(18):
+        assert f"A{i}" in dsp["connections"], f"missing A{i}"
+        assert f"B{i}" in dsp["connections"], f"missing B{i}"
+    for i in range(36):
+        assert f"P{i}" in dsp["connections"], f"missing P{i}"
+
+    # Must have required parameters
+    assert dsp["parameters"]["REG_INPUTA_CLK"] == "NONE"
+    assert dsp["parameters"]["SOURCEB_MODE"] == "B_INPUT"
+    assert "GSR" in dsp["parameters"]
+    assert "MULT_BYPASS" in dsp["parameters"]

@@ -40,7 +40,7 @@ jobs:
           python-version: "3.13"
       - run: sudo apt-get update && sudo apt-get install -y iverilog
       - run: pip install pytest "pyslang>=7"
-      - run: pytest tests/test_designs.py -v -k "iverilog"
+      - run: pytest tests/test_designs.py -v -k "iverilog" --timeout=120
 
   nextpnr:
     runs-on: ubuntu-latest

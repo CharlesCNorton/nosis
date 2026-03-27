@@ -452,6 +452,26 @@ def test_iverilog_postsynth_uart_tx():
         assert r.returncode == 0, f"iverilog failed:\n{r.stderr}"
 
 
+def test_iverilog_cycle_accurate_uart_tx():
+    """RTL-vs-post-synth cycle-accurate comparison on uart_tx via validate_design."""
+    import shutil
+    iverilog = shutil.which("iverilog")
+    vvp = shutil.which("vvp")
+    if not iverilog or not vvp:
+        return  # skip if not installed
+
+    from nosis.validate import validate_design
+    result = validate_design(
+        source_files=[RIME_UART_TX],
+        top="uart_tx",
+        num_cycles=50,
+        seed=42,
+    )
+    assert result.rtl_sim_ok, f"RTL sim failed: {result.error}"
+    assert result.passed, f"Mismatch at cycle {result.mismatches[0]['cycle'] if result.mismatches else '?'}: {result.error}"
+    assert result.cycles >= 10, f"Only {result.cycles} cycles compared"
+
+
 def test_cli_verify():
     """The --verify flag should run equivalence checks without error on uart_tx."""
     from nosis.cli import main

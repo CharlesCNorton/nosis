@@ -141,27 +141,34 @@ def merge_reachable_equivalent(
                 for out in cell.outputs.values():
                     ff_pairs.append((d_net.name, out.name))
 
-    # Simulate and collect per-net value signatures
-    signatures: dict[str, list[int]] = {}
+    # Simulate and collect per-net value signatures via incremental hashing.
+    # Instead of storing a list[int] per net per cycle (O(cycles * nets) memory),
+    # we maintain a running hash per net. Two nets with the same hash sequence
+    # are candidate equivalents.
+    _FNV_OFFSET = 0xCBF29CE484222325
+    _FNV_PRIME = 0x100000001B3
+    _MASK64 = (1 << 64) - 1
+    sig_hashes: dict[str, int] = {}  # net_name -> running FNV-1a hash
     for cycle in range(cycles):
         inputs = {name: rng.getrandbits(w) for name, w in input_ports.items()}
         inputs.update(ff_state)
         vals = fast_sim.step(inputs)
 
         for name, val in vals.items():
-            if name not in signatures:
-                signatures[name] = []
-            signatures[name].append(val)
+            h = sig_hashes.get(name, _FNV_OFFSET)
+            h = ((h ^ (val & 0xFFFFFFFF)) * _FNV_PRIME) & _MASK64
+            h = ((h ^ ((val >> 32) & 0xFFFFFFFF)) * _FNV_PRIME) & _MASK64
+            sig_hashes[name] = h
 
         # Update FF state
         for d_name, q_name in ff_pairs:
             if d_name in vals:
                 ff_state[q_name] = vals[d_name]
 
-    # Group nets by value signature
-    sig_groups: dict[tuple[int, ...], list[str]] = defaultdict(list)
-    for name, sig in signatures.items():
-        sig_groups[tuple(sig)].append(name)
+    # Group nets by signature hash
+    sig_groups: dict[int, list[str]] = defaultdict(list)
+    for name, h in sig_hashes.items():
+        sig_groups[h].append(name)
 
     # Compute nets that feed FF D inputs (sequential state feedback).
     ff_input_reachable: set[str] = set()

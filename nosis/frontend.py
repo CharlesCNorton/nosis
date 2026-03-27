@@ -2113,21 +2113,12 @@ class _Lowerer:
                     for pn2, pnet2 in net.driver.inputs.items():
                         wl.append(pnet2.name)
 
-            for cell in list(self.mod.cells.values()):
-                if cell.name in own_chain:
-                    continue
-                for pn, pnet in list(cell.inputs.items()):
-                    if pnet is tgt_net:
-                        cell.inputs[pn] = final_net
-            for pn, pnet in list(self.mod.ports.items()):
-                if pnet is tgt_net:
-                    self.mod.ports[pn] = final_net
-            # Wire the final MUX cell's output directly to tgt_net so the
-            # simulator evaluates into the correct net. This replaces the
-            # internal comb net with the named target net.
+            # Wire the final MUX cell's output directly to tgt_net.
+            # Do NOT redirect readers — they already reference tgt_net
+            # and will read the value naturally. Only set the driver
+            # and change the cell's output port.
             if final_net.driver is not None:
                 tgt_net.driver = final_net.driver
-                # Change the driver cell's output port to point to tgt_net
                 for opn, onet in list(final_net.driver.outputs.items()):
                     if onet is final_net:
                         final_net.driver.outputs[opn] = tgt_net

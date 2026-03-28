@@ -379,22 +379,6 @@ class _Lowerer:
 
     # --- Expression lowering ---
 
-    def _lower_clock_expr(self, expr: Any) -> Net:
-        """Lower a clock sensitivity expression, preserving the net identity.
-
-        Unlike lower_expr which may follow driver chains, this method
-        returns the named net directly so that @(posedge sys_clk) uses
-        the sys_clk net (which will be Q-redirected later), not whatever
-        net lower_expr resolves through the driver chain.
-        """
-        kind = str(expr.kind)
-        if kind == "ExpressionKind.NamedValue":
-            name = expr.symbol.name
-            net = self.mod.nets.get(name)
-            if net is not None:
-                return net
-        return self.lower_expr(expr)
-
     def lower_expr(self, expr: Any) -> Net:
         """Lower a pyslang expression to a Nosis IR net (the expression's output)."""
         kind = str(expr.kind)
@@ -943,13 +927,13 @@ class _Lowerer:
                 timing = body.timing
                 timing_kind = str(timing.kind)
                 if timing_kind == "TimingControlKind.SignalEvent":
-                    clock_net = self._lower_clock_expr(timing.expr)
+                    clock_net = self.lower_expr(timing.expr)
                 elif timing_kind == "TimingControlKind.EventList":
                     # Multiple events: @(posedge clk or posedge rst)
                     # First is clock, subsequent are async reset/set signals
                     events = list(timing.events) if hasattr(timing, "events") else []
                     if events:
-                        clock_net = self._lower_clock_expr(events[0].expr)
+                        clock_net = self.lower_expr(events[0].expr)
                         if len(events) > 1:
                             reset_net = self.lower_expr(events[1].expr)
                             async_reset = True
@@ -1015,16 +999,12 @@ class _Lowerer:
                 # graph so DCE does not orphan it.
                 q_net = self._fresh_net(f"ff_q_{lhs_net.name}", lhs_net.width)
                 self.mod.connect(ff, "Q", q_net, direction="output")
-                # Redirect consumers of lhs_net to q_net (skip CLK — handled separately)
+                # Redirect consumers of lhs_net to q_net
                 for other_cell in list(self.mod.cells.values()):
                     if other_cell is ff:
                         continue
                     for pname, pnet in list(other_cell.inputs.items()):
-                        if pname == "CLK":
-                            continue
                         if pnet is lhs_net or pnet.name == lhs_net.name:
-                            if other_cell.op == PrimOp.FF and pname == "CLK":
-                                pass  # should not reach here due to skip above
                             other_cell.inputs[pname] = q_net
                 # Update port references
                 for pname, pnet in list(self.mod.ports.items()):
@@ -1056,7 +1036,7 @@ class _Lowerer:
                         continue
                     for pn, pnet in list(cell.inputs.items()):
                         if pn == "CLK":
-                            continue
+                            continue  # never redirect CLK in per-block sweep
                         if pnet is tnet or (pnet.name == tgt_name and pnet.width == q_net.width):
                             cell.inputs[pn] = q_net
 
@@ -2127,11 +2107,9 @@ class _Lowerer:
             q_net = ff_q_map.get(rhs.name)
             if q_net is not None:
                 lhs.driver = q_net.driver if q_net.driver else rhs.driver
-                # Redirect consumers of lhs to read from q_net (skip CLK)
+                # Redirect consumers of lhs to read from q_net
                 for cell in self.mod.cells.values():
                     for pn, pnet in list(cell.inputs.items()):
-                        if pn == "CLK":
-                            continue
                         if pnet is lhs:
                             cell.inputs[pn] = q_net
             elif rhs.driver is not None:
@@ -2331,7 +2309,7 @@ class _Lowerer:
                             if pnet is sub_net:
                                 cell.inputs[pn] = parent_net
             elif is_output and not is_input:
-                if parent_net.driver is None and sub_net.driver is not None:
+                if sub_net.driver is not None:
                     parent_net.driver = sub_net.driver
             elif is_input and is_output:
                 # InOut: wire both directions
@@ -2426,6 +2404,54 @@ def lower_to_ir(result: ParseResult, *, top: str | None = None) -> Design:
                     cell.params["init_file"] = file_str
                     cell.params["init_format"] = fmt
 
+    # Remove duplicate FFs: sub-instance lowering with a prefix may
+    # also create unprefixed FFs for the same targets (from pyslang
+    # AST shadowing).  If both "TX.state" and "state" exist as FF
+    # targets, the unprefixed one is a duplicate — remove it.
+    # Also redirect any cells that consumed the duplicate's outputs
+    # to the prefixed FF's outputs, and repair net drivers.
+    for mod in design.modules.values():
+        # Map: base_name -> prefixed FF cell name
+        prefixed_ffs: dict[str, str] = {}
+        for cname, cell in mod.cells.items():
+            if cell.op == PrimOp.FF:
+                tgt = cell.params.get("ff_target", "")
+                if "." in tgt:
+                    base = tgt.rsplit(".", 1)[-1]
+                    prefixed_ffs[base] = cname
+        if not prefixed_ffs:
+            continue
+        to_remove: list[str] = []
+        for cname, cell in mod.cells.items():
+            if cell.op != PrimOp.FF:
+                continue
+            tgt = cell.params.get("ff_target", "")
+            if "." in tgt or tgt not in prefixed_ffs:
+                continue
+            # This is a duplicate — redirect consumers to the prefixed FF's Q
+            prefixed_cell = mod.cells[prefixed_ffs[tgt]]
+            pref_q = list(prefixed_cell.outputs.values())[0] if prefixed_cell.outputs else None
+            dup_q = list(cell.outputs.values())[0] if cell.outputs else None
+            if pref_q and dup_q:
+                # Redirect all cells reading the duplicate's Q to the prefixed Q
+                for c2 in mod.cells.values():
+                    if c2 is cell:
+                        continue
+                    for pn, pnet in list(c2.inputs.items()):
+                        if pnet is dup_q or pnet.name == dup_q.name:
+                            c2.inputs[pn] = pref_q
+                # Fix net drivers: if any net is driven by the duplicate, update
+                for net in mod.nets.values():
+                    if net.driver is cell:
+                        net.driver = prefixed_cell
+                # Fix port references
+                for pn, pnet in list(mod.ports.items()):
+                    if pnet is dup_q:
+                        mod.ports[pn] = pref_q
+            to_remove.append(cname)
+        for cname in to_remove:
+            del mod.cells[cname]
+
     # Global FF Q-redirect: ensure ALL cells that read a target net
     # (or any net whose driver was set to the same FF) use the Q output.
     # This catches hierarchy-prefixed copies (RX.clk, TX.clk) that
@@ -2453,48 +2479,73 @@ def lower_to_ir(result: ParseResult, *, top: str | None = None) -> Design:
             if tnet.driver is not None:
                 driver_to_q[id(tnet.driver)] = q_net
 
-        # Clean up port alias attributes
+        # Use recorded port aliases to find hierarchy-prefixed nets
+        # that should redirect to Q.
+        port_aliases: dict[str, str] = {}
         for net in mod.nets.values():
-            for attr_key in list(net.attributes):
+            for attr_key, attr_val in list(net.attributes.items()):
                 if attr_key.startswith("__port_alias__"):
+                    alias_name = attr_key[len("__port_alias__"):]
+                    if alias_name == net.name:
+                        port_aliases[alias_name] = attr_val
                     del net.attributes[attr_key]
 
-        # Simple redirect: target name -> Q net (data inputs only, not CLK)
+        # Build: net name -> Q net, including aliases
+        redirect_map: dict[str, Net] = {}
         for tgt_name, q_net in target_to_q.items():
-            tnet = target_nets[tgt_name]
-            for cell in mod.cells.values():
-                own_target = cell.params.get("ff_target", "") if cell.op == PrimOp.FF else ""
-                if cell.op == PrimOp.FF and own_target == tgt_name:
-                    continue
-                for pn, pnet in list(cell.inputs.items()):
-                    if pn == "CLK":
-                        continue
-                    if cell.op == PrimOp.FF and pn == "D" and pnet.name == own_target:
-                        continue
-                    if pnet is tnet or pnet.name == tgt_name:
-                        cell.inputs[pn] = q_net
+            redirect_map[tgt_name] = q_net
+        # Follow port aliases: if RX.clk -> sys_clk and sys_clk -> Q,
+        # then RX.clk -> Q
+        changed = True
+        while changed:
+            changed = False
+            for alias_name, parent_name in port_aliases.items():
+                if alias_name not in redirect_map and parent_name in redirect_map:
+                    redirect_map[alias_name] = redirect_map[parent_name]
+                    changed = True
 
-        # Derived clock redirect: if an FF creates Q from target T,
-        # and T's FF is clocked on IO port P, then ALL other FFs
-        # NOT on Q already should use Q (they were misassigned during
-        # lowering due to processing order or redirect contamination).
-        for tgt_name, q_net in target_to_q.items():
-            divider_ff = None
-            divider_clk = None
-            for cell in mod.cells.values():
-                if cell.op == PrimOp.FF and cell.params.get("ff_target") == tgt_name:
-                    divider_ff = cell
-                    divider_clk = cell.inputs.get("CLK")
-                    break
-            if divider_ff is None or divider_clk is None:
+        # Also redirect nets driven by FFs whose target is in the map.
+        # Example: usb_tx driven by TX.tx FF → redirect usb_tx to Q(TX.tx)
+        for net in mod.nets.values():
+            if net.name in redirect_map:
                 continue
-            if divider_clk.name not in mod.ports:
+            if net.driver is None:
                 continue
-            for cell in mod.cells.values():
-                if cell.op != PrimOp.FF or cell is divider_ff:
+            # If driver is an FF whose target is in redirect_map
+            drv = net.driver
+            if drv.op == PrimOp.FF:
+                tgt = drv.params.get("ff_target", "")
+                if tgt in redirect_map:
+                    redirect_map[net.name] = redirect_map[tgt]
+
+        # Identify clock targets: FF targets whose target net is used
+        # as CLK by at least one other FF.  Only these should have their
+        # Q outputs forwarded into CLK inputs.
+        clock_q_nets: set[int] = set()  # id() of Q nets that are clocks
+        for cell in mod.cells.values():
+            if cell.op != PrimOp.FF:
+                continue
+            clk_net = cell.inputs.get("CLK")
+            if clk_net is None:
+                continue
+            # If this FF's CLK name (or alias) maps to a Q net, that Q is a clock
+            if clk_net.name in redirect_map:
+                clock_q_nets.add(id(redirect_map[clk_net.name]))
+
+        # Redirect every cell input
+        for cell in mod.cells.values():
+            own_target = cell.params.get("ff_target", "") if cell.op == PrimOp.FF else ""
+            for pn, pnet in list(cell.inputs.items()):
+                if cell.op == PrimOp.FF and pn == "D" and pnet.name == own_target:
                     continue
-                clk = cell.inputs.get("CLK")
-                if clk is divider_clk:
-                    cell.inputs["CLK"] = q_net
+                if pnet.name not in redirect_map:
+                    continue
+                q_net = redirect_map[pnet.name]
+                if pnet is q_net:
+                    continue
+                # CLK inputs: only redirect to clock-divider Q outputs
+                if pn == "CLK" and id(q_net) not in clock_q_nets:
+                    continue
+                cell.inputs[pn] = q_net
 
     return design

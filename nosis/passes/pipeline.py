@@ -358,6 +358,44 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
     stats["bram_infer"] = infer_brams(mod)
     stats["dsp_infer"] = infer_dsps(mod)
 
+    # Break combinational self-loops: optimization may merge a MUX output
+    # net with one of its inputs, creating input=output on the same cell.
+    # Resolve by finding the FF Q net that should provide the "hold" value.
+    _ff_q_for_target: dict[str, Net] = {}
+    for _c in mod.cells.values():
+        if _c.op == PrimOp.FF:
+            _tgt = _c.params.get("ff_target", "")
+            for _q in _c.outputs.values():
+                _ff_q_for_target[_tgt] = _q
+    _loops_broken = 0
+    for _c in mod.cells.values():
+        if _c.op in (PrimOp.FF, PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.CONST):
+            continue
+        _out_ids = {id(n) for n in _c.outputs.values()}
+        for _pn, _pnet in list(_c.inputs.items()):
+            if id(_pnet) not in _out_ids:
+                continue
+            # Self-loop: find a FF Q net to replace with
+            _replaced = False
+            for _qname, _qnet in _ff_q_for_target.items():
+                if _qnet.width == _pnet.width and _pnet.name in (
+                    _qname, _qnet.name,
+                    *[n.name for n in _c.outputs.values()],
+                ):
+                    _c.inputs[_pn] = _qnet
+                    _replaced = True
+                    _loops_broken += 1
+                    break
+            if not _replaced:
+                # Last resort: create a const 0 to break the loop
+                _ctr_lb = len(mod.nets) + len(mod.cells) + 5000
+                _znet = mod.add_net(f"$loop_break_{_ctr_lb}", _pnet.width)
+                _zc = mod.add_cell(f"$loop_const_{_ctr_lb}", PrimOp.CONST, value=0, width=_pnet.width)
+                mod.connect(_zc, "Y", _znet, direction="output")
+                _c.inputs[_pn] = _znet
+                _loops_broken += 1
+    stats["loops_broken"] = _loops_broken
+
     # Post-optimization integrity check: no internal net should be undriven
     # (ports are exempt — they're driven externally)
     undriven = []

@@ -50,14 +50,20 @@ class _ECP5Mapper:
             ecp5_net = self._get_net(port_net)
             # Determine direction from the IR cells
             direction = "input"
+            actual_net = ecp5_net  # default: use port net
             for cell in mod.cells.values():
                 if cell.op == PrimOp.OUTPUT and cell.params.get("port_name", "") == port_name:
                     direction = "output"
+                    # Use the OUTPUT cell's INPUT net for the port bits —
+                    # the Q-redirect may have changed the input to a different net.
+                    for inp_net in cell.inputs.values():
+                        actual_net = self._get_net(inp_net)
                     break
                 if cell.op == PrimOp.OUTPUT:
                     for inp_net in cell.inputs.values():
                         if inp_net.name == port_name:
                             direction = "output"
+                            actual_net = self._get_net(inp_net)
                             break
                 if cell.op == PrimOp.INPUT:
                     if cell.params.get("inout"):
@@ -66,7 +72,7 @@ class _ECP5Mapper:
 
             self.nl.ports[port_name] = {
                 "direction": direction,
-                "bits": ecp5_net.bits,
+                "bits": actual_net.bits,
             }
 
         # Second pass: map each IR cell

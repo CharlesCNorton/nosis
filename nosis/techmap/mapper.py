@@ -99,6 +99,38 @@ class _ECP5Mapper:
                 for ff_name, sel_net, data_net in entries:
                     self._lsr_candidates[ff_name] = (sel_net, data_net)
 
+        # Pre-pass: detect CE (clock enable) patterns.
+        # After LSR extraction, the remaining outermost MUX may be
+        # MUX(ce, Q, data) — hold Q when ce=0, update to data when ce=1.
+        # Only extract when the same select signal drives >= 2 FFs.
+        self._ce_candidates: dict[str, tuple] = {}
+        _ce_sel_counts: dict[str, int] = {}
+        _ce_entries: dict[str, list] = {}
+        for cell in mod.cells.values():
+            if cell.op != PrimOp.FF:
+                continue
+            if cell.name in self._lsr_candidates:
+                d = self._lsr_candidates[cell.name][1]
+            else:
+                d = cell.inputs.get("D")
+            q = list(cell.outputs.values())[0] if cell.outputs else None
+            if d is None or q is None or d.driver is None or d.driver.op != PrimOp.MUX:
+                continue
+            mux = d.driver
+            s, a, b = mux.inputs.get("S"), mux.inputs.get("A"), mux.inputs.get("B")
+            if s is None or a is None or b is None:
+                continue
+            if a is q or a.name == q.name:
+                _ce_sel_counts[s.name] = _ce_sel_counts.get(s.name, 0) + 1
+                _ce_entries.setdefault(s.name, []).append((cell.name, s, b, False))
+            elif b is q or b.name == q.name:
+                _ce_sel_counts[s.name] = _ce_sel_counts.get(s.name, 0) + 1
+                _ce_entries.setdefault(s.name, []).append((cell.name, s, a, True))
+        for sname, entries in _ce_entries.items():
+            if _ce_sel_counts.get(sname, 0) >= 2:
+                for ff_name, sel, data, inv in entries:
+                    self._ce_candidates[ff_name] = (sel, data, inv)
+
         # Second pass: map each IR cell (sorted for determinism)
         for cell in sorted(mod.cells.values(), key=lambda c: c.name):
             self._map_cell(cell)
@@ -248,11 +280,20 @@ class _ECP5Mapper:
             actual_d = data_net
             lsr_net = sel_net
 
+        # Extract CE from hold-MUX pattern
+        ce_net = None
+        ce_invert = False
+        if cell.name in getattr(self, '_ce_candidates', {}):
+            ce_sel, ce_data, ce_invert = self._ce_candidates[cell.name]
+            ce_net = ce_sel
+            actual_d = ce_data
+
         width = actual_d.width
         d_bits = self._get_bits(actual_d)
         q_bits = self._get_bits(q_net)
         clk_bits = self._get_bits(clk_net) if clk_net else ["0"]
         lsr_bits = self._get_bits(lsr_net) if lsr_net else ["0"]
+        ce_bits = self._get_bits(ce_net) if ce_net else None
 
         for i in range(min(width, len(d_bits), len(q_bits))):
             ff = self.nl.add_cell(self._fresh_name("tff"), "TRELLIS_FF")
@@ -260,7 +301,7 @@ class _ECP5Mapper:
                 ff.attributes["src"] = cell.src
             is_async = bool(cell.params.get("async_reset", False))
             ff.parameters["GSR"] = "DISABLED"
-            ff.parameters["CEMUX"] = "1 "
+            ff.parameters["CEMUX"] = "INV" if ce_invert else ("CE" if ce_bits else "1 ")
             ff.parameters["CLKMUX"] = "CLK"
             ff.parameters["LSRMUX"] = "LSR"
             ff.parameters["REGSET"] = "RESET"
@@ -268,6 +309,8 @@ class _ECP5Mapper:
             ff.ports["CLK"] = [clk_bits[0] if clk_bits else "0"]
             ff.ports["DI"] = [d_bits[i] if i < len(d_bits) else "0"]
             ff.ports["LSR"] = [lsr_bits[0] if lsr_bits else "0"]
+            if ce_bits:
+                ff.ports["CE"] = [ce_bits[0]]
             ff.ports["Q"] = [q_bits[i] if i < len(q_bits) else self.nl.alloc_bit()]
 
     def _map_equality(self, cell: Cell) -> None:

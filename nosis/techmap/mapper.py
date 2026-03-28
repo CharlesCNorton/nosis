@@ -1468,10 +1468,51 @@ class _ECP5Mapper:
             ecp5_net.bits = ["0"] * out_net.width
 
 
+def _dead_cell_eliminate(netlist: ECP5Netlist) -> int:
+    """Remove ECP5 cells whose outputs are not referenced by any other cell or port."""
+    # Collect all bit references from cell inputs and ports
+    used_bits: set[int] = set()
+    for port_info in netlist.ports.values():
+        for b in port_info.get("bits", []):
+            if isinstance(b, int):
+                used_bits.add(b)
+    for cell in netlist.cells.values():
+        for port_name, bits in cell.ports.items():
+            # Only input ports create references
+            pd = {"CLK": "input", "DI": "input", "LSR": "input", "CE": "input",
+                   "A": "input", "B": "input", "C": "input", "D": "input",
+                   "A0": "input", "B0": "input", "C0": "input", "D0": "input",
+                   "A1": "input", "B1": "input", "C1": "input", "D1": "input",
+                   "CIN": "input"}.get(port_name)
+            if pd == "input":
+                for b in bits:
+                    if isinstance(b, int):
+                        used_bits.add(b)
+
+    # Remove cells whose outputs are all unreferenced
+    to_remove = []
+    for name, cell in netlist.cells.items():
+        if cell.cell_type == "TRELLIS_FF":
+            continue  # keep all FFs (they have side effects)
+        out_bits = set()
+        for port_name, bits in cell.ports.items():
+            if port_name in ("Z", "F", "S0", "S1", "COUT", "Q"):
+                for b in bits:
+                    if isinstance(b, int):
+                        out_bits.add(b)
+        if out_bits and not (out_bits & used_bits):
+            to_remove.append(name)
+
+    for name in to_remove:
+        del netlist.cells[name]
+    return len(to_remove)
+
+
 def map_to_ecp5(design: Design) -> ECP5Netlist:
     """Map a Nosis IR Design to an ECP5 netlist."""
     mod = design.top_module()
     netlist = ECP5Netlist(top=mod.name)
     mapper = _ECP5Mapper(netlist)
     mapper.map_module(mod)
+    _dead_cell_eliminate(netlist)
     return netlist

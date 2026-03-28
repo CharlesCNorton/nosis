@@ -109,8 +109,12 @@ def retime_forward(mod: Module, *, max_moves: int = 100) -> int:
                 continue
             consumer = mod.cells[consumer_name]
 
-            # Consumer must be combinational with one output
-            if consumer.op in (PrimOp.FF, PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.MEMORY):
+            # Consumer must be a simple combinational gate (not MUX/PMUX
+            # which have complex fanout that enables post-opt merges
+            # creating D=Q loops).
+            _safe_ops = {PrimOp.AND, PrimOp.OR, PrimOp.XOR, PrimOp.NOT,
+                         PrimOp.ADD, PrimOp.SUB}
+            if consumer.op not in _safe_ops:
                 continue
             consumer_outs = list(consumer.outputs.values())
             if len(consumer_outs) != 1:

@@ -340,7 +340,7 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
 
     # Register retiming: move FFs across single-fanout combinational cells
     from nosis.retiming import retime_forward, duplicate_high_fanout
-    stats["retime_fwd"] = 0  # disabled: creates D=Q loops on multi-module designs
+    stats["retime_fwd"] = retime_forward(mod, max_moves=50)
     stats["fanout_dup"] = duplicate_high_fanout(mod, threshold=64)
     if stats["retime_fwd"] > 0 or stats["fanout_dup"] > 0:
         dead_code_eliminate(mod)

@@ -1023,6 +1023,8 @@ class _Lowerer:
                         if pname == "CLK":
                             continue
                         if pnet is lhs_net or pnet.name == lhs_net.name:
+                            if other_cell.op == PrimOp.FF and pname == "CLK":
+                                pass  # should not reach here due to skip above
                             other_cell.inputs[pname] = q_net
                 # Update port references
                 for pname, pnet in list(self.mod.ports.items()):
@@ -2125,9 +2127,11 @@ class _Lowerer:
             q_net = ff_q_map.get(rhs.name)
             if q_net is not None:
                 lhs.driver = q_net.driver if q_net.driver else rhs.driver
-                # Redirect consumers of lhs to read from q_net
+                # Redirect consumers of lhs to read from q_net (skip CLK)
                 for cell in self.mod.cells.values():
                     for pn, pnet in list(cell.inputs.items()):
+                        if pn == "CLK":
+                            continue
                         if pnet is lhs:
                             cell.inputs[pn] = q_net
             elif rhs.driver is not None:
@@ -2472,8 +2476,8 @@ def lower_to_ir(result: ParseResult, *, top: str | None = None) -> Design:
 
         # Derived clock redirect: if an FF creates Q from target T,
         # and T's FF is clocked on IO port P, then ALL other FFs
-        # clocked on P should use Q instead (they were supposed to
-        # be on the derived clock but got the IO clock during lowering).
+        # NOT on Q already should use Q (they were misassigned during
+        # lowering due to processing order or redirect contamination).
         for tgt_name, q_net in target_to_q.items():
             divider_ff = None
             divider_clk = None
@@ -2486,11 +2490,21 @@ def lower_to_ir(result: ParseResult, *, top: str | None = None) -> Design:
                 continue
             if divider_clk.name not in mod.ports:
                 continue
+            # Only redirect if this target is actually used as a clock
+            # by at least one other FF (i.e., it's a clock divider)
+            is_clock_target = any(
+                c.op == PrimOp.FF and c is not divider_ff and
+                c.inputs.get("CLK") is not None and
+                (c.inputs["CLK"].name == tgt_name or c.inputs["CLK"] is target_nets.get(tgt_name))
+                for c in mod.cells.values()
+            )
+            if not is_clock_target:
+                continue
             for cell in mod.cells.values():
                 if cell.op != PrimOp.FF or cell is divider_ff:
                     continue
                 clk = cell.inputs.get("CLK")
-                if clk is divider_clk:
+                if clk is not q_net:
                     cell.inputs["CLK"] = q_net
 
     return design

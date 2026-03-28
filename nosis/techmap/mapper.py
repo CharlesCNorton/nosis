@@ -202,8 +202,9 @@ class _ECP5Mapper:
         width = int(cell.params.get("width", 1))
         for port_name, out_net in cell.outputs.items():
             ecp5_net = self._get_net(out_net)
-            # Override bits with constant values
-            ecp5_net.bits = _const_bits(value, width)
+            # Override bits with constant values (in-place to preserve port refs)
+            new_bits = _const_bits(value, width)
+            ecp5_net.bits[:] = new_bits[:len(ecp5_net.bits)]
 
     def _map_ff(self, cell: Cell) -> None:
         """Map an IR FF to TRELLIS_FF cells (one per bit)."""

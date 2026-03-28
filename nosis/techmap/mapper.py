@@ -1470,7 +1470,7 @@ class _ECP5Mapper:
 
 def _dead_cell_eliminate(netlist: ECP5Netlist) -> int:
     """Remove ECP5 cells whose outputs are not referenced by any other cell or port."""
-    # Collect all bit references from cell inputs and ports
+    # Collect all bit references from cell inputs and module ports
     used_bits: set[int] = set()
     for port_info in netlist.ports.values():
         for b in port_info.get("bits", []):
@@ -1478,13 +1478,15 @@ def _dead_cell_eliminate(netlist: ECP5Netlist) -> int:
                 used_bits.add(b)
     for cell in netlist.cells.values():
         for port_name, bits in cell.ports.items():
-            # Only input ports create references
-            pd = {"CLK": "input", "DI": "input", "LSR": "input", "CE": "input",
-                   "A": "input", "B": "input", "C": "input", "D": "input",
-                   "A0": "input", "B0": "input", "C0": "input", "D0": "input",
-                   "A1": "input", "B1": "input", "C1": "input", "D1": "input",
-                   "CIN": "input"}.get(port_name)
-            if pd == "input":
+            # Use port_directions if available, otherwise assume input
+            # for non-output ports (conservative)
+            pd = cell.attributes.get("_port_dir_" + port_name, "")
+            if not pd:
+                # Determine from port name convention: known outputs
+                _out_names = {"Z", "F", "F0", "F1", "S0", "S1", "COUT", "Q",
+                              "P", "PPOUT", "CO", "OFX0", "OFX1"}
+                pd = "output" if port_name in _out_names else "input"
+            if pd != "output":
                 for b in bits:
                     if isinstance(b, int):
                         used_bits.add(b)

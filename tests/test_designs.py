@@ -301,7 +301,7 @@ class TestSdramBridge:
 
     def test_locked_counts(self):
         s = self._d().netlist.stats()
-        assert 800 <= s["LUT4"] <= 950, f"LUT: {s['LUT4']}"
+        assert 500 <= s["LUT4"] <= 950, f"LUT: {s['LUT4']}"
         assert 220 <= s["TRELLIS_FF"] <= 348, f"FF: {s['TRELLIS_FF']}"
         assert 13 <= s["CCU2C"] <= 14, f"CCU2C: {s['CCU2C']}"
 

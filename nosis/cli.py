@@ -295,6 +295,7 @@ def main(argv: list[str] | None = None) -> int:
                 # Run nextpnr: JSON -> textcfg
                 nextpnr_args = [
                     nextpnr_cmd, f"--{args.device}", "--package", args.package,
+                    "--seed", "1",
                     "--json", str(json_path), "--textcfg", str(config_path),
                 ]
                 if args.lpf:

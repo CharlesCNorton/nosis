@@ -75,6 +75,30 @@ class _ECP5Mapper:
                 "bits": actual_net.bits,
             }
 
+        # Pre-pass: detect shared reset signals for safe LSR extraction.
+        # Only extract when the same MUX select drives the outermost D-MUX
+        # of >= 2 FFs (true reset signals fan out; data constants don't).
+        self._lsr_candidates: dict[str, tuple] = {}
+        _sel_counts: dict[str, int] = {}
+        _sel_entries: dict[str, list] = {}
+        for cell in mod.cells.values():
+            if cell.op != PrimOp.FF:
+                continue
+            d = cell.inputs.get("D")
+            if d is None or d.driver is None or d.driver.op != PrimOp.MUX:
+                continue
+            mux = d.driver
+            s, a, b = mux.inputs.get("S"), mux.inputs.get("A"), mux.inputs.get("B")
+            if s is None or a is None or b is None:
+                continue
+            if b.driver is not None and b.driver.op == PrimOp.CONST and b.driver.params.get("value", -1) == 0:
+                _sel_counts[s.name] = _sel_counts.get(s.name, 0) + 1
+                _sel_entries.setdefault(s.name, []).append((cell.name, s, a))
+        for sname, entries in _sel_entries.items():
+            if _sel_counts.get(sname, 0) >= 2:
+                for ff_name, sel_net, data_net in entries:
+                    self._lsr_candidates[ff_name] = (sel_net, data_net)
+
         # Second pass: map each IR cell (sorted for determinism)
         for cell in sorted(mod.cells.values(), key=lambda c: c.name):
             self._map_cell(cell)
@@ -216,11 +240,19 @@ class _ECP5Mapper:
         if d_net is None or q_net is None:
             return
 
-        width = d_net.width
-        d_bits = self._get_bits(d_net)
+        # Extract LSR from shared-reset MUX pattern
+        actual_d = d_net
+        lsr_net = rst_net
+        if cell.name in getattr(self, '_lsr_candidates', {}):
+            sel_net, data_net = self._lsr_candidates[cell.name]
+            actual_d = data_net
+            lsr_net = sel_net
+
+        width = actual_d.width
+        d_bits = self._get_bits(actual_d)
         q_bits = self._get_bits(q_net)
         clk_bits = self._get_bits(clk_net) if clk_net else ["0"]
-        rst_bits = self._get_bits(rst_net) if rst_net else ["0"]
+        lsr_bits = self._get_bits(lsr_net) if lsr_net else ["0"]
 
         for i in range(min(width, len(d_bits), len(q_bits))):
             ff = self.nl.add_cell(self._fresh_name("tff"), "TRELLIS_FF")
@@ -235,7 +267,7 @@ class _ECP5Mapper:
             ff.parameters["SRMODE"] = "ASYNC" if is_async else "LSR_OVER_CE"
             ff.ports["CLK"] = [clk_bits[0] if clk_bits else "0"]
             ff.ports["DI"] = [d_bits[i] if i < len(d_bits) else "0"]
-            ff.ports["LSR"] = [rst_bits[0] if rst_bits else "0"]
+            ff.ports["LSR"] = [lsr_bits[0] if lsr_bits else "0"]
             ff.ports["Q"] = [q_bits[i] if i < len(q_bits) else self.nl.alloc_bit()]
 
     def _map_equality(self, cell: Cell) -> None:

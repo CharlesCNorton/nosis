@@ -64,9 +64,22 @@ def constant_fold(mod: Module) -> int:
                 continue
             width = out_nets[0].width
 
+            # For CONCAT, inject input widths so eval_const_op can compute
+            # the correct bit positions (I{i}_width params).
+            fold_params = cell.params
+            if cell.op == PrimOp.CONCAT:
+                fold_params = dict(cell.params)
+                for port_name, net in cell.inputs.items():
+                    fold_params[f"{port_name}_width"] = net.width
+            elif cell.op == PrimOp.REPEAT:
+                fold_params = dict(cell.params)
+                a_net = cell.inputs.get("A")
+                if a_net:
+                    fold_params["a_width"] = a_net.width
+
             # Try to evaluate using the shared evaluator
             try:
-                result = eval_const_op(cell.op, const_inputs, cell.params, width)
+                result = eval_const_op(cell.op, const_inputs, fold_params, width)
             except Exception:
                 result = None
             if result is not None:

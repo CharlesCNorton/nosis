@@ -91,7 +91,7 @@ class TestUartTx:
 
     def test_locked_counts(self):
         s = self._d().netlist.stats()
-        assert 350 <= s["LUT4"] <= 700, f"LUT: {s['LUT4']}"
+        assert 350 <= s["LUT4"] <= 750, f"LUT: {s['LUT4']}"
         assert s["TRELLIS_FF"] == 46, f"FF: {s['TRELLIS_FF']}"
         assert 125 <= s["CCU2C"] <= 130, f"CCU2C: {s['CCU2C']}"
 

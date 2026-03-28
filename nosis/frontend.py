@@ -795,13 +795,42 @@ class _Lowerer:
             return out
 
         if selector is not None:
-            # Variable index: build a MUX tree to select the element
+            # Variable index: build a priority MUX tree to select the element
             idx_net = self.lower_expr(selector)
-            out = self._fresh_net("esel", w)
-            cell = self._fresh_cell("esel", PrimOp.SLICE, offset=0, width=w)
-            self.mod.connect(cell, "A", src)
-            self.mod.connect(cell, "Y", out, direction="output")
-            return out
+            src_width = src.width
+            n_elements = src_width // w if w > 0 else 1
+            if n_elements <= 1:
+                out = self._fresh_net("esel", w)
+                sc = self._fresh_cell("esel", PrimOp.SLICE, offset=0, width=w)
+                self.mod.connect(sc, "A", src)
+                self.mod.connect(sc, "Y", out, direction="output")
+                return out
+            # Default = element 0; each higher index overrides via MUX
+            result = self._fresh_net("esel_0", w)
+            sc = self._fresh_cell("esel_s0", PrimOp.SLICE, offset=0, width=w)
+            self.mod.connect(sc, "A", src)
+            self.mod.connect(sc, "Y", result, direction="output")
+            for i in range(1, n_elements):
+                alt = self._fresh_net(f"esel_{i}", w)
+                si = self._fresh_cell(f"esel_s{i}", PrimOp.SLICE, offset=i * w, width=w)
+                self.mod.connect(si, "A", src)
+                self.mod.connect(si, "Y", alt, direction="output")
+                ci = self._fresh_net(f"esel_c{i}", idx_net.width)
+                cc = self._fresh_cell(f"esel_c{i}", PrimOp.CONST, value=i, width=idx_net.width)
+                self.mod.connect(cc, "Y", ci, direction="output")
+                eq = self._fresh_net(f"esel_eq{i}", 1)
+                ec = self._fresh_cell(f"esel_eq{i}", PrimOp.EQ)
+                self.mod.connect(ec, "A", idx_net)
+                self.mod.connect(ec, "B", ci)
+                self.mod.connect(ec, "Y", eq, direction="output")
+                mux_out = self._fresh_net(f"esel_m{i}", w)
+                mc = self._fresh_cell(f"esel_m{i}", PrimOp.MUX)
+                self.mod.connect(mc, "S", eq)
+                self.mod.connect(mc, "A", result)
+                self.mod.connect(mc, "B", alt)
+                self.mod.connect(mc, "Y", mux_out, direction="output")
+                result = mux_out
+            return result
 
         out = self._fresh_net("esel", w)
         cell = self._fresh_cell("esel", PrimOp.SLICE, offset=0, width=w)

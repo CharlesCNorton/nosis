@@ -793,9 +793,9 @@ class _ECP5Mapper:
                 lut.attributes["src"] = cell.src
             # At MSB for signed comparison, swap LT/GT sense (equivalent to inverting both MSBs)
             if is_signed and i == width - 1:
-                lut.parameters["INIT"] = f"{init_gt:04X}"
+                lut.parameters["INIT"] = f"0x{init_gt:04X}"
             else:
-                lut.parameters["INIT"] = f"{init_lt:04X}"
+                lut.parameters["INIT"] = f"0x{init_lt:04X}"
             lut.ports["A"] = [ab]
             lut.ports["B"] = [bb]
             lut.ports["C"] = [borrow]
@@ -824,7 +824,7 @@ class _ECP5Mapper:
                 # AND with running equality
                 and_out = self.nl.alloc_bit()
                 and_lut = self.nl.add_cell(self._fresh_name("cmp_and"), "LUT4")
-                and_lut.parameters["INIT"] = f"{_compute_lut4_init(PrimOp.AND, 2):04X}"
+                and_lut.parameters["INIT"] = f"0x{_compute_lut4_init(PrimOp.AND, 2):04X}"
                 and_lut.ports["A"] = [xnor_out]
                 and_lut.ports["B"] = [eq_result]
                 and_lut.ports["C"] = ["0"]
@@ -836,7 +836,7 @@ class _ECP5Mapper:
             out_ecp5 = self._get_net(out_net)
             final_bit = out_ecp5.bits[0] if out_net.width >= 1 else self.nl.alloc_bit()
             or_lut = self.nl.add_cell(self._fresh_name("cmp_or"), "LUT4")
-            or_lut.parameters["INIT"] = f"{_compute_lut4_init(PrimOp.OR, 2):04X}"
+            or_lut.parameters["INIT"] = f"0x{_compute_lut4_init(PrimOp.OR, 2):04X}"
             or_lut.ports["A"] = [borrow]  # strict less
             or_lut.ports["B"] = [eq_result]  # all equal
             or_lut.ports["C"] = ["0"]

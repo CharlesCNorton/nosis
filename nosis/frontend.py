@@ -2490,21 +2490,11 @@ def lower_to_ir(result: ParseResult, *, top: str | None = None) -> Design:
                 continue
             if divider_clk.name not in mod.ports:
                 continue
-            # Only redirect if this target is actually used as a clock
-            # by at least one other FF (i.e., it's a clock divider)
-            is_clock_target = any(
-                c.op == PrimOp.FF and c is not divider_ff and
-                c.inputs.get("CLK") is not None and
-                (c.inputs["CLK"].name == tgt_name or c.inputs["CLK"] is target_nets.get(tgt_name))
-                for c in mod.cells.values()
-            )
-            if not is_clock_target:
-                continue
             for cell in mod.cells.values():
                 if cell.op != PrimOp.FF or cell is divider_ff:
                     continue
                 clk = cell.inputs.get("CLK")
-                if clk is not q_net:
+                if clk is divider_clk:
                     cell.inputs["CLK"] = q_net
 
     return design

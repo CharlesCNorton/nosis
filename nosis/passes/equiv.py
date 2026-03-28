@@ -55,14 +55,24 @@ def _simplify_mux_with_zero(mod: Module) -> int:
 
         if b_is_zero:
             # MUX(sel, A, 0) = ~sel & A per bit
-            # Create NOT(sel) then AND(NOT_sel, A)
+            # Only valid when sel is 1 bit (or matches data width)
+            if s_net.width != 1 and s_net.width != out_net.width:
+                continue
             not_name = _fresh("mux_not")
-            not_out = mod.add_net(f"{not_name}_o", s_net.width)
+            not_out = mod.add_net(f"{not_name}_o", out_net.width)
             not_cell = mod.add_cell(not_name, PrimOp.NOT)
-            mod.connect(not_cell, "A", s_net)
+            if s_net.width == 1 and out_net.width > 1:
+                # Broadcast 1-bit select to match data width via REPEAT
+                rep_name = _fresh("mux_rep")
+                rep_out = mod.add_net(f"{rep_name}_o", out_net.width)
+                rep_cell = mod.add_cell(rep_name, PrimOp.REPEAT, count=out_net.width)
+                mod.connect(rep_cell, "A", s_net)
+                mod.connect(rep_cell, "Y", rep_out, direction="output")
+                mod.connect(not_cell, "A", rep_out)
+            else:
+                mod.connect(not_cell, "A", s_net)
             mod.connect(not_cell, "Y", not_out, direction="output")
 
-            # Rewrite the MUX cell as AND
             cell.op = PrimOp.AND
             cell.inputs.clear()
             cell.inputs["A"] = not_out
@@ -71,9 +81,19 @@ def _simplify_mux_with_zero(mod: Module) -> int:
 
         elif a_is_zero:
             # MUX(sel, 0, B) = sel & B per bit
+            if s_net.width != 1 and s_net.width != out_net.width:
+                continue
             cell.op = PrimOp.AND
             cell.inputs.clear()
-            cell.inputs["A"] = s_net
+            if s_net.width == 1 and out_net.width > 1:
+                rep_name = _fresh("mux_rep")
+                rep_out = mod.add_net(f"{rep_name}_o", out_net.width)
+                rep_cell = mod.add_cell(rep_name, PrimOp.REPEAT, count=out_net.width)
+                mod.connect(rep_cell, "A", s_net)
+                mod.connect(rep_cell, "Y", rep_out, direction="output")
+                cell.inputs["A"] = rep_out
+            else:
+                cell.inputs["A"] = s_net
             cell.inputs["B"] = b_net
             replaced += 1
             continue
@@ -126,6 +146,8 @@ def _eliminate_functional_identities(mod: Module) -> int:
 
     for cell in list(mod.cells.values()):
         if cell.op in (PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.FF, PrimOp.CONST, PrimOp.MEMORY):
+            continue
+        if cell.attributes.get("keep"):
             continue
         out_nets = list(cell.outputs.values())
         if not out_nets or out_nets[0].width != 1:
@@ -208,6 +230,8 @@ def _eliminate_dont_care_inputs(mod: Module) -> int:
     for cell in list(mod.cells.values()):
         if cell.op in (PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.FF, PrimOp.CONST, PrimOp.MEMORY):
             continue
+        if cell.attributes.get("keep"):
+            continue
         outs = list(cell.outputs.values())
         if not outs or outs[0].width != 1:
             continue
@@ -260,9 +284,16 @@ def _merge_hit_equivalent(mod: Module) -> int:
     from nosis.eval import eval_cell
     from collections import defaultdict
 
+    # Bit-positional operations depend on parameters (offset, width) not
+    # just input values.  Truth table evaluation over {0,1}^n misses
+    # higher-bit differences.  Exclude them from HIT merging.
+    _POSITIONAL_OPS = {PrimOp.SLICE, PrimOp.ZEXT, PrimOp.SEXT, PrimOp.REPEAT, PrimOp.CONCAT}
+
     input_groups: dict[tuple, list[Cell]] = defaultdict(list)
     for cell in mod.cells.values():
         if cell.op in (PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.FF, PrimOp.CONST, PrimOp.MEMORY):
+            continue
+        if cell.op in _POSITIONAL_OPS:
             continue
         outs = list(cell.outputs.values())
         if not outs or outs[0].width != 1:
@@ -270,10 +301,18 @@ def _merge_hit_equivalent(mod: Module) -> int:
         inp_names = tuple(sorted(n.name for n in cell.inputs.values()))
         if len(inp_names) == 0 or len(inp_names) > 4:
             continue
+        # Use total input BIT width for truth table size, not net count
+        total_bits = sum(n.width for n in cell.inputs.values())
+        if total_bits > 4:
+            continue
         input_groups[inp_names].append(cell)
 
     merged = 0
     for inp_names, cells in input_groups.items():
+        if len(cells) < 2:
+            continue
+        # Exclude (* keep *) cells from merging — they must stay as distinct instances.
+        cells = [c for c in cells if not c.attributes.get("keep")]
         if len(cells) < 2:
             continue
         n = len(inp_names)

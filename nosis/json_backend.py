@@ -61,20 +61,18 @@ def _cell_to_json(cell: ECP5Cell) -> dict[str, Any]:
         else:
             port_directions[port_name] = "input"
 
-        # Convert bits: constant "0"/"1" become integer 0/1 (reserved GND/VCC
-        # bit indices). nextpnr's ECP5 DPR packer requires integer bit indices
-        # for constant connections, not string constants.
+        # Convert bits: constants stay as strings "0"/"1"/"x" in the
+        # nextpnr JSON format.  Integer values are wire indices.
+        # NOTE: a previous version converted "0"/"1" to integers 0/1,
+        # which made nextpnr interpret them as wire references instead
+        # of GND/VCC constants — causing broken carry chains and counters.
         json_bits: list[int | str] = []
         for bit in bits:
             if isinstance(bit, str):
-                if bit == "0":
-                    json_bits.append(0)  # bit index 0 = GND
-                elif bit == "1":
-                    json_bits.append(1)  # bit index 1 = VCC
-                elif bit == "x":
-                    json_bits.append("x")
+                if bit in ("0", "1", "x"):
+                    json_bits.append(bit)  # constant — keep as string
                 else:
-                    json_bits.append(int(bit))
+                    json_bits.append(int(bit))  # numeric string → wire index
             else:
                 json_bits.append(bit)
         connections[port_name] = json_bits

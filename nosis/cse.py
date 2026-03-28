@@ -52,6 +52,8 @@ def eliminate_common_subexpressions(mod: Module) -> int:
     to_redirect: list[tuple[Cell, Cell]] = []  # (duplicate, original)
 
     for cell in mod.cells.values():
+        if cell.attributes.get("keep"):
+            continue  # (* keep *) cells must not be merged
         sig = _cell_signature(cell)
         if sig is None:
             continue

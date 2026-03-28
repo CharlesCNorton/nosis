@@ -64,10 +64,13 @@ def dead_code_eliminate(mod: Module) -> int:
     live_nets = _find_live_nets(mod)
     removed = 0
 
-    # Find dead cells: cells whose outputs are all dead
+    # Find dead cells: cells whose outputs are all dead.
+    # Cells with (* keep *) attribute are never removed.
     dead_cells: list[str] = []
     for cell in mod.cells.values():
         if cell.op in (PrimOp.OUTPUT, PrimOp.INPUT):
+            continue
+        if cell.attributes.get("keep"):
             continue
         if not cell.outputs:
             dead_cells.append(cell.name)

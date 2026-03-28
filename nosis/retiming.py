@@ -131,6 +131,32 @@ def retime_forward(mod: Module, *, max_moves: int = 100) -> int:
             if d_net is None:
                 continue
 
+            # SAFETY: if the FF's D input is reachable from the consumer's
+            # output (feedback loop), retiming forward creates a self-loop.
+            # Skip this move.  Counters (Q -> ADD -> MUX -> D) are the
+            # canonical case.
+            if d_net is consumer_out or d_net.name == consumer_out.name:
+                continue
+            # Walk the consumer's output forward to check for feedback
+            _visited: set[str] = {q_net.name}
+            _wl = [consumer_out]
+            _feedback = False
+            while _wl:
+                _n = _wl.pop()
+                if _n.name in _visited:
+                    continue
+                _visited.add(_n.name)
+                if _n is d_net or _n.name == d_net.name:
+                    _feedback = True
+                    break
+                for _c in mod.cells.values():
+                    for _inp in _c.inputs.values():
+                        if _inp.name == _n.name and _c.op not in (PrimOp.FF, PrimOp.MEMORY):
+                            for _out in _c.outputs.values():
+                                _wl.append(_out)
+            if _feedback:
+                continue
+
             # Find which port of the consumer reads from the FF output
             ff_port = None
             for port_name, net in consumer.inputs.items():

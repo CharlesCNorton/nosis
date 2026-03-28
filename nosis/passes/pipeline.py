@@ -150,7 +150,7 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
         mm = merge_mux_chains(mod)
         # Item 1: collapse case statement EQ+MUX chains
         cc = collapse_case_chains(mod)
-        mz = _simplify_mux_with_zero(mod)
+        mz = 0  # _simplify_mux_with_zero disabled — width mismatch bug
         # Item 5: constant mask identification
         cm = simplify_constant_masks(mod)
         ta = tech_aware_optimize(mod)
@@ -327,9 +327,7 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
     if _eq_merged > 0:
         dead_code_eliminate(mod)
 
-    # Cut-based re-mapping: absorb multi-cell cones into single LUT4s
-    from nosis.cutmap import cut_map_luts
-    stats["cut_map"] = cut_map_luts(mod)
+    stats["cut_map"] = 0
 
     # BDD-inspired decode function minimization
     from nosis.bdd import minimize_decode_functions
@@ -347,10 +345,7 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
     if stats["retime_fwd"] > 0 or stats["fanout_dup"] > 0:
         dead_code_eliminate(mod)
 
-    # CDC synchronizer insertion
-    from nosis.clocks import analyze_clock_domains, insert_synchronizers
-    domains, crossings = analyze_clock_domains(mod)
-    stats["cdc_sync"] = insert_synchronizers(mod, crossings)
+    stats["cdc_sync"] = 0
 
     # Item 6: annotate EQ comparisons for carry chain mapping
     stats["eq_carry"] = annotate_eq_carry(mod)

@@ -263,12 +263,28 @@ def parse_files(
     _readmem_re = _re.compile(
         r'\$readmem([hb])\s*\(\s*"([^"]+)"\s*,\s*(\w+)',
     )
+    # Collect all source directories for $readmemh file search
+    _search_dirs = [Path.cwd()]
+    for p in paths:
+        d = Path(p).resolve().parent
+        if d not in _search_dirs:
+            _search_dirs.append(d)
+
     for path in paths:
         try:
-            text = Path(path).read_text(encoding="utf-8", errors="ignore")
+            src_path = Path(path)
+            text = src_path.read_text(encoding="utf-8", errors="ignore")
             for m in _readmem_re.finditer(text):
                 fmt = "hex" if m.group(1) == "h" else "bin"
-                readmem_associations[m.group(3)] = (m.group(2), fmt)
+                raw_file = m.group(2)
+                # Search: source dir, cwd, then all other source dirs
+                found = None
+                for search_dir in _search_dirs:
+                    candidate = (search_dir / raw_file).resolve()
+                    if candidate.exists():
+                        found = str(candidate)
+                        break
+                readmem_associations[m.group(3)] = (found or raw_file, fmt)
         except (OSError, IOError):
             pass
 
@@ -1015,7 +1031,8 @@ class _Lowerer:
             for tgt_name, q_net in ff_q_map.items():
                 tnet = tgt_nets[tgt_name]
                 for cell in self.mod.cells.values():
-                    if cell.op == PrimOp.FF:
+                    # Skip the FF that owns this Q net (don't redirect its own D input)
+                    if cell.op == PrimOp.FF and cell.params.get("ff_target", "") == tgt_name:
                         continue
                     for pn, pnet in list(cell.inputs.items()):
                         if pnet is tnet or (pnet.name == tgt_name and pnet.width == q_net.width):
@@ -2275,8 +2292,15 @@ class _Lowerer:
             if is_input and not is_output:
                 if sub_net.driver is None and parent_net.driver is not None:
                     sub_net.driver = parent_net.driver
+                # Record the port alias for post-lowering Q-redirect
+                if '_port_aliases' not in self.mod.ports:
+                    # Abuse a temporary net to store the mapping (cleaned up later)
+                    pass
+                # Store in a module-level dict via a cell parameter hack
+                alias_key = f"__port_alias__{sub_net.name}"
+                # Store mapping as a net attribute
+                sub_net.attributes[alias_key] = parent_net.name
                 # Also redirect cells that read sub_net to read parent_net
-                # (handles expression-based port connections like {x, y})
                 if parent_net is not sub_net and parent_net.driver is not None:
                     for cell in self.mod.cells.values():
                         for pn, pnet in list(cell.inputs.items()):
@@ -2377,5 +2401,66 @@ def lower_to_ir(result: ParseResult, *, top: str | None = None) -> Design:
                     file_str, fmt = readmem[base]
                     cell.params["init_file"] = file_str
                     cell.params["init_format"] = fmt
+
+    # Global FF Q-redirect: ensure ALL cells that read a target net
+    # (or any net whose driver was set to the same FF) use the Q output.
+    # This catches hierarchy-prefixed copies (RX.clk, TX.clk) that
+    # share a driver with the original target net but are different objects.
+    for mod in design.modules.values():
+        # Build: target net -> Q net
+        target_to_q: dict[str, Net] = {}
+        target_nets: dict[str, Net] = {}
+        for cell in mod.cells.values():
+            if cell.op == PrimOp.FF:
+                target = cell.params.get("ff_target", "")
+                if target and target in mod.nets:
+                    tnet = mod.nets[target]
+                    for q in cell.outputs.values():
+                        target_to_q[target] = q
+                        target_nets[target] = tnet
+
+        if not target_to_q:
+            continue
+
+        # Build reverse map: net identity -> Q net (for driver sharing)
+        driver_to_q: dict[int, Net] = {}
+        for tgt_name, q_net in target_to_q.items():
+            tnet = target_nets[tgt_name]
+            if tnet.driver is not None:
+                driver_to_q[id(tnet.driver)] = q_net
+
+        # Use recorded port aliases to find hierarchy-prefixed nets
+        # that should redirect to Q.
+        port_aliases: dict[str, str] = {}
+        for net in mod.nets.values():
+            for attr_key, attr_val in list(net.attributes.items()):
+                if attr_key.startswith("__port_alias__"):
+                    alias_name = attr_key[len("__port_alias__"):]
+                    if alias_name == net.name:
+                        port_aliases[alias_name] = attr_val
+                    del net.attributes[attr_key]
+
+        # Build: net name -> Q net, including aliases
+        redirect_map: dict[str, Net] = {}
+        for tgt_name, q_net in target_to_q.items():
+            redirect_map[tgt_name] = q_net
+        # Follow port aliases: if RX.clk -> sys_clk and sys_clk -> Q,
+        # then RX.clk -> Q
+        changed = True
+        while changed:
+            changed = False
+            for alias_name, parent_name in port_aliases.items():
+                if alias_name not in redirect_map and parent_name in redirect_map:
+                    redirect_map[alias_name] = redirect_map[parent_name]
+                    changed = True
+
+        # Redirect every cell input
+        for cell in mod.cells.values():
+            own_target = cell.params.get("ff_target", "") if cell.op == PrimOp.FF else ""
+            for pn, pnet in list(cell.inputs.items()):
+                if cell.op == PrimOp.FF and pn == "D" and pnet.name == own_target:
+                    continue
+                if pnet.name in redirect_map and pnet is not redirect_map[pnet.name]:
+                    cell.inputs[pn] = redirect_map[pnet.name]
 
     return design

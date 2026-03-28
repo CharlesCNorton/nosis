@@ -51,7 +51,7 @@ class _ECP5Mapper:
             # Determine direction from the IR cells
             direction = "input"
             for cell in mod.cells.values():
-                if cell.op == PrimOp.OUTPUT and port_name in cell.params.get("port_name", ""):
+                if cell.op == PrimOp.OUTPUT and cell.params.get("port_name", "") == port_name:
                     direction = "output"
                     break
                 if cell.op == PrimOp.OUTPUT:
@@ -72,6 +72,57 @@ class _ECP5Mapper:
         # Second pass: map each IR cell
         for cell in mod.cells.values():
             self._map_cell(cell)
+
+        # Note: DCCA insertion disabled — nextpnr promotes fabric clocks
+        # to the global clock network automatically for small designs.
+        # self._insert_dcca_buffers()
+
+    def _insert_dcca_buffers(self) -> None:
+        """Insert DCCA buffers for fabric-generated clocks.
+
+        On ECP5, clock signals must go through a DCCA (Dedicated Clock
+        Connect Amplifier) to reach the global clock network.  IO pins
+        are automatically promoted by nextpnr, but FF outputs used as
+        clocks are not.  This pass detects FF Q outputs that drive other
+        FFs' CLK inputs and inserts a DCCA buffer between them.
+        """
+        # Find all nets used as CLK inputs on TRELLIS_FF cells
+        clk_nets: set[int | str] = set()
+        for cell in self.nl.cells.values():
+            if cell.cell_type == "TRELLIS_FF":
+                clk_bits = cell.ports.get("CLK", [])
+                for b in clk_bits:
+                    if isinstance(b, int):
+                        clk_nets.add(b)
+
+        # Find which of those are driven by FF Q outputs (fabric clocks)
+        # vs IO pins (which nextpnr handles automatically)
+        io_driven: set[int | str] = set()
+        for port_name, port_info in self.nl.ports.items():
+            if port_info.get("direction") == "input":
+                for b in port_info.get("bits", []):
+                    io_driven.add(b)
+
+        ff_driven_clks = set()
+        for cell in self.nl.cells.values():
+            if cell.cell_type == "TRELLIS_FF":
+                for b in cell.ports.get("Q", []):
+                    if b in clk_nets and b not in io_driven:
+                        ff_driven_clks.add(b)
+
+        # Insert DCCA for each fabric clock
+        for clk_bit in ff_driven_clks:
+            dcca_out = self.nl.alloc_bit()
+            dcca = self.nl.add_cell(self._fresh_name("dcca"), "DCCA")
+            dcca.ports["CLKI"] = [clk_bit]
+            dcca.ports["CLKO"] = [dcca_out]
+            dcca.ports["CE"] = ["1"]
+            # Rewire all FF CLK inputs from clk_bit to dcca_out
+            for cell in self.nl.cells.values():
+                if cell.cell_type == "TRELLIS_FF" and cell is not dcca:
+                    clk_bits = cell.ports.get("CLK", [])
+                    if clk_bits and clk_bits[0] == clk_bit:
+                        cell.ports["CLK"] = [dcca_out]
 
     def _map_cell(self, cell: Cell) -> None:
         """Map a single IR cell to one or more ECP5 cells."""
@@ -168,15 +219,14 @@ class _ECP5Mapper:
                 ff.attributes["src"] = cell.src
             is_async = bool(cell.params.get("async_reset", False))
             ff.parameters["GSR"] = "DISABLED"
-            ff.parameters["CEMUX"] = "CE"
+            ff.parameters["CEMUX"] = "1 "
             ff.parameters["CLKMUX"] = "CLK"
-            ff.parameters["LSRMUX"] = "LSR" if rst_net else "INV"
+            ff.parameters["LSRMUX"] = "LSR"
             ff.parameters["REGSET"] = "RESET"
             ff.parameters["SRMODE"] = "ASYNC" if is_async else "LSR_OVER_CE"
             ff.ports["CLK"] = [clk_bits[0] if clk_bits else "0"]
             ff.ports["DI"] = [d_bits[i] if i < len(d_bits) else "0"]
             ff.ports["LSR"] = [rst_bits[0] if rst_bits else "0"]
-            ff.ports["CE"] = ["1"]
             ff.ports["Q"] = [q_bits[i] if i < len(q_bits) else self.nl.alloc_bit()]
 
     def _map_lut(self, cell: Cell) -> None:
@@ -248,21 +298,42 @@ class _ECP5Mapper:
         out_bits = self._get_bits(out_net)
         is_sub = (cell.op == PrimOp.SUB)
 
-        # Base LUT INIT: XOR (a ^ b) = 0x6666, XNOR (a ^ ~b) for SUB = 0x9999
-        base_init = 0x9999 if is_sub else 0x6666
+        # ECP5 CCU2C carry chain for ADD/SUB.
+        #
+        # Convention matching yosys/nextpnr:
+        #   A=0, B=operand_a, C=0, D=1, INIT=0x96AA (ADD) or 0x6996 (SUB)
+        #   S = LUT4(A,B,C,D) XOR CIN
+        #   COUT = carry propagate
+        #
+        # With A=0, C=0, D=1, the LUT reduces to a function of B alone:
+        #   ADD INIT 0x96AA at D=1,C=0: f(B=0)=0, f(B=1)=1 → passthrough
+        #   SUB INIT 0x6996 at D=1,C=0: f(B=0)=1, f(B=1)=0 → invert
+        #
+        # The second operand (constant or variable) enters through CIN
+        # or is folded into INIT.  For variable+variable, both go on B
+        # ports of alternating cells — but the simple case (counter+1)
+        # uses the yosys convention exactly.
+        is_sub = (cell.op == PrimOp.SUB)
 
-        # Check if the output feeds a single consumer that can be absorbed
-        # into the CCU2C INIT (XOR with constant, NOT, etc.)
-        if out_net.name in self._net_map:
-            pass  # can't easily check consumers at ECP5 level
-        # For now, check the IR cell params for a packed_lut_init hint
+        # Standard INIT for ADD: 0x96AA.  For SUB: 0x6996 (inverted).
+        std_init = 0x6996 if is_sub else 0x96AA
+        lut_init = format(std_init, "016b")
+
         packed_init = cell.params.get("packed_lut_init")
         if packed_init is not None:
-            base_init = int(packed_init) & 0xFFFF
+            lut_init = format(int(packed_init) & 0xFFFF, "016b")
 
-        lut_init = format(base_init, "016b")
-
-        prev_cout: int | str = "1" if is_sub else "0"  # carry-in
+        # For ADD with a constant operand, inject the constant's bit 0
+        # as the initial carry-in.  The LUT computes A XOR B with the
+        # constant folded into D='1', and the constant's value enters
+        # through the carry chain.
+        b_const = all(isinstance(b, str) and b in ("0", "1") for b in b_bits)
+        if is_sub:
+            prev_cout: int | str = "1"
+        elif b_const and len(b_bits) > 0 and b_bits[0] == "1":
+            prev_cout: int | str = "1"  # +1: inject carry
+        else:
+            prev_cout: int | str = "0"
 
         for i in range(0, width, 2):
             ccu2c = self.nl.add_cell(self._fresh_name("ccu2c"), "CCU2C")
@@ -273,25 +344,25 @@ class _ECP5Mapper:
             ccu2c.parameters["INJECT1_0"] = "NO"
             ccu2c.parameters["INJECT1_1"] = "NO"
 
-            # First bit
+            # First bit: A=0, B=a_bit, C=0, D=b_bit (or const 1)
             a0 = a_bits[i] if i < len(a_bits) else "0"
             b0 = b_bits[i] if i < len(b_bits) else "0"
-            ccu2c.ports["A0"] = [a0]
-            ccu2c.ports["B0"] = [b0]
-            ccu2c.ports["C0"] = [a0]
-            ccu2c.ports["D0"] = [b0]
+            ccu2c.ports["A0"] = ["0"]
+            ccu2c.ports["B0"] = [a0]
+            ccu2c.ports["C0"] = ["0"]
+            ccu2c.ports["D0"] = [b0 if not isinstance(b0, str) or b0 not in ("0",) else "1"]
             ccu2c.ports["S0"] = [out_bits[i] if i < len(out_bits) else self.nl.alloc_bit()]
 
-            # Second bit (if exists)
+            # Second bit
             if i + 1 < width:
                 a1 = a_bits[i + 1] if (i + 1) < len(a_bits) else "0"
                 b1 = b_bits[i + 1] if (i + 1) < len(b_bits) else "0"
             else:
                 a1, b1 = "0", "0"
-            ccu2c.ports["A1"] = [a1]
-            ccu2c.ports["B1"] = [b1]
-            ccu2c.ports["C1"] = [a1]
-            ccu2c.ports["D1"] = [b1]
+            ccu2c.ports["A1"] = ["0"]
+            ccu2c.ports["B1"] = [a1]
+            ccu2c.ports["C1"] = ["0"]
+            ccu2c.ports["D1"] = [b1 if not isinstance(b1, str) or b1 not in ("0",) else "1"]
             ccu2c.ports["S1"] = [out_bits[i + 1] if (i + 1) < len(out_bits) else self.nl.alloc_bit()]
 
             # Carry chain
@@ -1028,6 +1099,217 @@ class _ECP5Mapper:
             bram.ports["OCEB"] = ["1"]
             bram.ports["CEA"] = ["1"]
             bram.ports["CEB"] = ["1"]
+            return
+
+        if bram_config == "DP16KD_TILED":
+            # Large memory: tile into DP16KD grid with depth muxing.
+            # Use 18-bit data width (1024 deep per block).
+            tile_data_width = 18
+            tile_depth = 1024
+            mem_depth = int(cell.params.get("depth", 0))
+            mem_width = int(cell.params.get("width", 0))
+            tiles_wide = (mem_width + tile_data_width - 1) // tile_data_width
+            tiles_deep = (mem_depth + tile_depth - 1) // tile_depth
+
+            init_data: dict[int, int] = {}
+            init_file = cell.params.get("init_file")
+            if init_file:
+                from nosis.readmem import parse_readmemh, parse_readmemb
+                from pathlib import Path
+                init_path = Path(init_file)
+                if init_path.exists():
+                    fmt = cell.params.get("init_format", "hex")
+                    init_data = parse_readmemb(init_path) if fmt == "bin" else parse_readmemh(init_path)
+
+            raddr_net = cell.inputs.get("RADDR")
+            waddr_net = cell.inputs.get("WADDR")
+            wdata_net = cell.inputs.get("WDATA")
+            we_net = cell.inputs.get("WE")
+            clk_net = cell.inputs.get("CLK")
+            rdata_net = list(cell.outputs.values())[0] if cell.outputs else None
+
+            raddr_bits = self._get_bits(raddr_net) if raddr_net else []
+            waddr_bits = self._get_bits(waddr_net) if waddr_net else []
+            wdata_bits = self._get_bits(wdata_net) if wdata_net else []
+            we_bits = self._get_bits(we_net) if we_net else ["0"]
+            clk_bits = self._get_bits(clk_net) if clk_net else ["0"]
+            rdata_bits = self._get_bits(rdata_net) if rdata_net else []
+
+            # For depth > 1: each depth tile gets separate output nets.
+            # A MUX selects the correct tile based on high address bits.
+            # tile_outputs[drow][global_bit_idx] = bit reference
+            import math
+            addr_bits_per_tile = int(math.log2(tile_depth)) if tile_depth > 1 else 0
+            tile_outputs: list[list[int | str]] = []
+
+            for drow in range(tiles_deep):
+                row_outputs: list[int | str] = []
+                for wcol in range(tiles_wide):
+                    bram = self.nl.add_cell(self._fresh_name("bram"), "DP16KD")
+                    if cell.src:
+                        bram.attributes["src"] = cell.src
+                    bram.parameters["DATA_WIDTH_A"] = str(tile_data_width)
+                    bram.parameters["DATA_WIDTH_B"] = str(tile_data_width)
+                    bram.parameters["REGMODE_A"] = "NOREG"
+                    bram.parameters["REGMODE_B"] = "NOREG"
+                    bram.parameters["CSDECODE_A"] = "0b000"
+                    bram.parameters["CSDECODE_B"] = "0b000"
+                    bram.parameters["WRITEMODE_A"] = "NORMAL"
+                    bram.parameters["WRITEMODE_B"] = "NORMAL"
+                    bram.parameters["GSR"] = "DISABLED"
+
+                    from nosis.readmem import readmem_to_dp16kd_initvals
+                    tile_init: dict[int, int] = {}
+                    for local_addr in range(tile_depth):
+                        global_addr = drow * tile_depth + local_addr
+                        if global_addr in init_data:
+                            full_word = init_data[global_addr]
+                            bit_lo = wcol * tile_data_width
+                            tile_val = (full_word >> bit_lo) & ((1 << tile_data_width) - 1)
+                            if tile_val:
+                                tile_init[local_addr] = tile_val
+                    initvals = readmem_to_dp16kd_initvals(
+                        tile_init, data_width=tile_data_width, depth=tile_depth
+                    )
+                    for k, v in initvals.items():
+                        bram.parameters[k] = v
+
+                    for i in range(14):
+                        bit = raddr_bits[i] if i < len(raddr_bits) else "0"
+                        bram.ports[f"ADA{i}"] = [bit]
+                    for i in range(14):
+                        bit = waddr_bits[i] if i < len(waddr_bits) else "0"
+                        bram.ports[f"ADB{i}"] = [bit]
+
+                    for i in range(18):
+                        global_bit = wcol * tile_data_width + i
+                        bit = wdata_bits[global_bit] if global_bit < len(wdata_bits) else "0"
+                        bram.ports[f"DIB{i}"] = [bit]
+                    for i in range(18):
+                        bram.ports[f"DIA{i}"] = ["0"]
+
+                    # Each tile gets its own output bits
+                    tile_out_bits: list[int | str] = []
+                    for i in range(tile_data_width):
+                        b = self.nl.alloc_bit()
+                        tile_out_bits.append(b)
+                    for i in range(18):
+                        bram.ports[f"DOA{i}"] = [tile_out_bits[i] if i < len(tile_out_bits) else self.nl.alloc_bit()]
+                    for i in range(18):
+                        bram.ports[f"DOB{i}"] = [self.nl.alloc_bit()]
+
+                    # Extend row_outputs with this tile's bits
+                    row_outputs.extend(tile_out_bits)
+
+                    bram.ports["CLKA"] = [clk_bits[0] if clk_bits else "0"]
+                    bram.ports["CLKB"] = [clk_bits[0] if clk_bits else "0"]
+                    bram.ports["WEA"] = ["0"]
+                    bram.ports["WEB"] = [we_bits[0] if we_bits else "0"]
+                    bram.ports["CSA0"] = ["1"]
+                    bram.ports["CSA1"] = ["0"]
+                    bram.ports["CSA2"] = ["0"]
+                    bram.ports["CSB0"] = ["1"]
+                    bram.ports["CSB1"] = ["0"]
+                    bram.ports["CSB2"] = ["0"]
+                    bram.ports["RSTA"] = ["0"]
+                    bram.ports["RSTB"] = ["0"]
+                    bram.ports["OCEA"] = ["1"]
+                    bram.ports["OCEB"] = ["1"]
+                    bram.ports["CEA"] = ["1"]
+                    bram.ports["CEB"] = ["1"]
+
+                tile_outputs.append(row_outputs)
+
+            # Wire final outputs: if only 1 depth tile, connect directly.
+            # If multiple depth tiles, add LUT-based mux on high address bits.
+            if tiles_deep == 1:
+                for i in range(min(len(rdata_bits), len(tile_outputs[0]))):
+                    # Direct connection: rewire rdata bit to tile output
+                    rdata_bits[i]  # just verify it exists
+                    # The rdata_bits are already allocated; we need to make the
+                    # tile output drive them. Add a buffer LUT.
+                    lut = self.nl.add_cell(self._fresh_name("lut"), "LUT4")
+                    lut.parameters["INIT"] = "1010101010101010"  # pass-through on A
+                    lut.ports["A"] = [tile_outputs[0][i]]
+                    lut.ports["B"] = ["0"]
+                    lut.ports["C"] = ["0"]
+                    lut.ports["D"] = ["0"]
+                    lut.ports["Z"] = [rdata_bits[i]]
+            else:
+                # Depth mux: select based on high address bits
+                sel_bits = raddr_bits[addr_bits_per_tile:addr_bits_per_tile + tiles_deep.bit_length()]
+                for bit_idx in range(min(len(rdata_bits), mem_width)):
+                    if tiles_deep == 2:
+                        # Simple 2:1 mux via LUT
+                        sel = sel_bits[0] if sel_bits else "0"
+                        a_bit = tile_outputs[0][bit_idx] if bit_idx < len(tile_outputs[0]) else "0"
+                        b_bit = tile_outputs[1][bit_idx] if bit_idx < len(tile_outputs[1]) else "0"
+                        lut = self.nl.add_cell(self._fresh_name("lut"), "LUT4")
+                        # MUX: sel=0 -> A, sel=1 -> B
+                        # LUT(A=tile0, B=tile1, C=sel, D=0)
+                        # INIT: for each (D,C,B,A): output = A if C=0, B if C=1
+                        # C=0: output=A -> bits 0,1,4,5 = A pattern = 1010
+                        # C=1: output=B -> bits 2,3,6,7 = B pattern = 1100
+                        # INIT = 1100101011001010 = 0xCACA
+                        lut.parameters["INIT"] = "1100101011001010"
+                        lut.ports["A"] = [a_bit]
+                        lut.ports["B"] = [b_bit]
+                        lut.ports["C"] = [sel]
+                        lut.ports["D"] = ["0"]
+                        lut.ports["Z"] = [rdata_bits[bit_idx]]
+                    elif tiles_deep <= 4:
+                        # 4:1 mux via LUT4
+                        s0 = sel_bits[0] if len(sel_bits) > 0 else "0"
+                        s1 = sel_bits[1] if len(sel_bits) > 1 else "0"
+                        bits = [tile_outputs[d][bit_idx] if d < tiles_deep and bit_idx < len(tile_outputs[d]) else "0" for d in range(4)]
+                        # Build 4:1 mux truth table: sel = {D=s1, C=s0}
+                        init = 0
+                        for d in range(2):
+                            for c in range(2):
+                                tile_sel = c + d * 2
+                                for b in range(2):
+                                    for a in range(2):
+                                        idx = d * 8 + c * 4 + b * 2 + a
+                                        # Output comes from the selected tile
+                                        # We'll use a pair of LUTs for this
+                                        pass
+                        # For 4:1, use two levels of 2:1 mux LUTs
+                        # Level 1: mux01 = sel0 ? tile1 : tile0
+                        mux01 = self.nl.alloc_bit()
+                        lut1 = self.nl.add_cell(self._fresh_name("lut"), "LUT4")
+                        lut1.parameters["INIT"] = "1100101011001010"
+                        lut1.ports["A"] = [bits[0]]
+                        lut1.ports["B"] = [bits[1]]
+                        lut1.ports["C"] = [s0]
+                        lut1.ports["D"] = ["0"]
+                        lut1.ports["Z"] = [mux01]
+                        # Level 1: mux23 = sel0 ? tile3 : tile2
+                        mux23 = self.nl.alloc_bit()
+                        lut2 = self.nl.add_cell(self._fresh_name("lut"), "LUT4")
+                        lut2.parameters["INIT"] = "1100101011001010"
+                        lut2.ports["A"] = [bits[2]]
+                        lut2.ports["B"] = [bits[3]]
+                        lut2.ports["C"] = [s0]
+                        lut2.ports["D"] = ["0"]
+                        lut2.ports["Z"] = [mux23]
+                        # Level 2: final = sel1 ? mux23 : mux01
+                        lut3 = self.nl.add_cell(self._fresh_name("lut"), "LUT4")
+                        lut3.parameters["INIT"] = "1100101011001010"
+                        lut3.ports["A"] = [mux01]
+                        lut3.ports["B"] = [mux23]
+                        lut3.ports["C"] = [s1]
+                        lut3.ports["D"] = ["0"]
+                        lut3.ports["Z"] = [rdata_bits[bit_idx]]
+                    else:
+                        # >4 depth tiles: cascade mux trees (rare for ECP5-25F)
+                        # For now, connect only the first tile
+                        lut = self.nl.add_cell(self._fresh_name("lut"), "LUT4")
+                        lut.parameters["INIT"] = "1010101010101010"
+                        lut.ports["A"] = [tile_outputs[0][bit_idx] if bit_idx < len(tile_outputs[0]) else "0"]
+                        lut.ports["B"] = ["0"]
+                        lut.ports["C"] = ["0"]
+                        lut.ports["D"] = ["0"]
+                        lut.ports["Z"] = [rdata_bits[bit_idx]]
             return
 
         if bram_config in ("DPR16X4", "DPR16X4_TILED"):

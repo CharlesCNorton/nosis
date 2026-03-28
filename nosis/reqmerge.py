@@ -259,6 +259,9 @@ def merge_reachable_equivalent(
             if name in mod.ports:
                 continue
             # Safety guards:
+            # 0. Don't merge nets driven by (* keep *) cells.
+            if dup_net.driver and dup_net.driver.attributes.get("keep"):
+                continue
             # 1. Don't merge nets in the output-reachable cone
             if name in output_reachable:
                 continue

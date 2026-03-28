@@ -115,11 +115,11 @@ def _netname_to_json(net: ECP5Net) -> dict[str, Any]:
 def _netlist_to_json(netlist: ECP5Netlist) -> dict[str, Any]:
     """Convert a full ECP5Netlist to a nextpnr JSON dict."""
     cells: dict[str, Any] = {}
-    for name, cell in netlist.cells.items():
+    for name, cell in sorted(netlist.cells.items()):
         cells[name] = _cell_to_json(cell)
 
     ports: dict[str, Any] = {}
-    for name, port_info in netlist.ports.items():
+    for name, port_info in sorted(netlist.ports.items()):
         bits = []
         for bit in port_info["bits"]:
             if isinstance(bit, str):
@@ -137,7 +137,7 @@ def _netlist_to_json(netlist: ECP5Netlist) -> dict[str, Any]:
         }
 
     netnames: dict[str, Any] = {}
-    for name, net in netlist.nets.items():
+    for name, net in sorted(netlist.nets.items()):
         netnames[name] = _netname_to_json(net)
 
     # Ensure port netname bits match port declaration bits.

@@ -41,12 +41,12 @@ class _ECP5Mapper:
     def map_module(self, mod: Module) -> None:
         """Map all cells in an IR module to ECP5 cells."""
         self._ir_mod = mod
-        # First pass: create ECP5 nets for all IR nets
-        for net in mod.nets.values():
+        # First pass: create ECP5 nets for all IR nets (sorted for determinism)
+        for net in sorted(mod.nets.values(), key=lambda n: n.name):
             self._get_net(net)
 
-        # Map ports
-        for port_name, port_net in mod.ports.items():
+        # Map ports (sorted for determinism)
+        for port_name, port_net in sorted(mod.ports.items()):
             ecp5_net = self._get_net(port_net)
             # Determine direction from the IR cells
             direction = "input"
@@ -75,8 +75,8 @@ class _ECP5Mapper:
                 "bits": actual_net.bits,
             }
 
-        # Second pass: map each IR cell
-        for cell in mod.cells.values():
+        # Second pass: map each IR cell (sorted for determinism)
+        for cell in sorted(mod.cells.values(), key=lambda c: c.name):
             self._map_cell(cell)
 
         # Note: DCCA insertion disabled — nextpnr promotes fabric clocks

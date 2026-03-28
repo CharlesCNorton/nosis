@@ -340,7 +340,7 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
 
     # Register retiming: move FFs across single-fanout combinational cells
     from nosis.retiming import retime_forward, duplicate_high_fanout
-    stats["retime_fwd"] = retime_forward(mod, max_moves=50)
+    stats["retime_fwd"] = 0  # disabled: creates D=Q loops on multi-module designs
     stats["fanout_dup"] = duplicate_high_fanout(mod, threshold=64)
     if stats["retime_fwd"] > 0 or stats["fanout_dup"] > 0:
         dead_code_eliminate(mod)
@@ -367,6 +367,25 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
             _tgt = _c.params.get("ff_target", "")
             for _q in _c.outputs.values():
                 _ff_q_for_target[_tgt] = _q
+    # Also break FF D=Q self-loops (FF always holds → replace D with const)
+    _ff_dq_broken = 0
+    for _c in list(mod.cells.values()):
+        if _c.op != PrimOp.FF:
+            continue
+        _d = _c.inputs.get("D")
+        if _d is None:
+            continue
+        _out_ids = {id(n) for n in _c.outputs.values()}
+        if id(_d) in _out_ids:
+            # D == Q: FF always holds. Replace D with const 0.
+            _ctr_ff = len(mod.nets) + len(mod.cells) + 6000 + _ff_dq_broken
+            _zn = mod.add_net(f"$ff_dq_break_{_ctr_ff}", _d.width)
+            _zc = mod.add_cell(f"$ff_dq_const_{_ctr_ff}", PrimOp.CONST, value=0, width=_d.width)
+            mod.connect(_zc, "Y", _zn, direction="output")
+            _c.inputs["D"] = _zn
+            _ff_dq_broken += 1
+    stats["ff_dq_loops"] = _ff_dq_broken
+
     _loops_broken = 0
     for _c in mod.cells.values():
         if _c.op in (PrimOp.FF, PrimOp.INPUT, PrimOp.OUTPUT, PrimOp.CONST):

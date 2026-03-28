@@ -161,8 +161,10 @@ class _ECP5Mapper:
             self._map_const(cell)
         elif op == PrimOp.FF:
             self._map_ff(cell)
+        elif op in (PrimOp.EQ, PrimOp.NE):
+            self._map_equality(cell)
         elif op in (PrimOp.AND, PrimOp.OR, PrimOp.XOR, PrimOp.NOT,
-                     PrimOp.MUX, PrimOp.EQ, PrimOp.NE,
+                     PrimOp.MUX,
                      PrimOp.REDUCE_AND, PrimOp.REDUCE_OR, PrimOp.REDUCE_XOR):
             self._map_lut(cell)
         elif op in (PrimOp.ADD, PrimOp.SUB):
@@ -228,6 +230,104 @@ class _ECP5Mapper:
             ff.ports["DI"] = [d_bits[i] if i < len(d_bits) else "0"]
             ff.ports["LSR"] = [rst_bits[0] if rst_bits else "0"]
             ff.ports["Q"] = [q_bits[i] if i < len(q_bits) else self.nl.alloc_bit()]
+
+    def _map_equality(self, cell: Cell) -> None:
+        """Map multi-bit EQ/NE to per-bit XNOR + AND/NAND reduction tree."""
+        a_net = cell.inputs.get("A")
+        b_net = cell.inputs.get("B")
+        out_nets = list(cell.outputs.values())
+        if not a_net or not b_net or not out_nets:
+            self._map_lut(cell)
+            return
+        out_net = out_nets[0]
+        a_bits = self._get_bits(a_net)
+        b_bits = self._get_bits(b_net)
+        out_bits = self._get_bits(out_net)
+        width = max(a_net.width, b_net.width)
+
+        if width <= 1:
+            self._map_lut(cell)
+            return
+
+        # Stage 1: per-bit XNOR (equality per bit)
+        # LUT4 XNOR: INIT = 0x9999 (A XNOR B)
+        eq_bits: list[int | str] = []
+        for i in range(width):
+            a_bit = a_bits[i] if i < len(a_bits) else "0"
+            b_bit = b_bits[i] if i < len(b_bits) else "0"
+            if a_bit == b_bit:
+                eq_bits.append("1")
+                continue
+            if isinstance(a_bit, str) and isinstance(b_bit, str):
+                eq_bits.append("1" if a_bit == b_bit else "0")
+                continue
+            eq_out = self.nl.alloc_bit()
+            lut = self.nl.add_cell(self._fresh_name("lut"), "LUT4")
+            lut.parameters["INIT"] = "1001100110011001"  # XNOR
+            lut.ports["A"] = [a_bit]
+            lut.ports["B"] = [b_bit]
+            lut.ports["C"] = ["0"]
+            lut.ports["D"] = ["0"]
+            lut.ports["Z"] = [eq_out]
+            eq_bits.append(eq_out)
+
+        # Stage 2: AND reduction tree using LUT4 (4-input AND per level)
+        # INIT for 4-input AND: only bit 15 is set = 0x8000
+        current = eq_bits
+        while len(current) > 1:
+            next_level: list[int | str] = []
+            i = 0
+            while i < len(current):
+                chunk = current[i:i + 4]
+                if len(chunk) == 1:
+                    next_level.append(chunk[0])
+                else:
+                    out = self.nl.alloc_bit()
+                    lut = self.nl.add_cell(self._fresh_name("lut"), "LUT4")
+                    if len(chunk) == 2:
+                        lut.parameters["INIT"] = "1000100010001000"  # A AND B
+                        lut.ports["A"] = [chunk[0]]
+                        lut.ports["B"] = [chunk[1]]
+                        lut.ports["C"] = ["0"]
+                        lut.ports["D"] = ["0"]
+                    elif len(chunk) == 3:
+                        lut.parameters["INIT"] = "1000000010000000"  # A AND B AND C
+                        lut.ports["A"] = [chunk[0]]
+                        lut.ports["B"] = [chunk[1]]
+                        lut.ports["C"] = [chunk[2]]
+                        lut.ports["D"] = ["0"]
+                    else:
+                        lut.parameters["INIT"] = "1000000000000000"  # A AND B AND C AND D
+                        lut.ports["A"] = [chunk[0]]
+                        lut.ports["B"] = [chunk[1]]
+                        lut.ports["C"] = [chunk[2]]
+                        lut.ports["D"] = [chunk[3]]
+                    lut.ports["Z"] = [out]
+                    next_level.append(out)
+                i += 4
+            current = next_level
+
+        # Final: for NE, invert the result
+        if cell.op == PrimOp.NE:
+            inv_out = self.nl.alloc_bit()
+            lut = self.nl.add_cell(self._fresh_name("lut"), "LUT4")
+            lut.parameters["INIT"] = "0101010101010101"  # NOT A
+            lut.ports["A"] = [current[0]]
+            lut.ports["B"] = ["0"]
+            lut.ports["C"] = ["0"]
+            lut.ports["D"] = ["0"]
+            lut.ports["Z"] = [inv_out]
+            current = [inv_out]
+
+        # Wire result to output bit
+        if out_bits and current:
+            # Replace the output bit in the ECP5Net so all future
+            # references to this net's bit 0 get the AND tree result.
+            out_bits[0] = current[0]
+            # Also directly set on the ECP5Net object
+            ecp5_out = self._get_net(out_net)
+            if ecp5_out.bits:
+                ecp5_out.bits[0] = current[0]
 
     def _map_lut(self, cell: Cell) -> None:
         """Map a logic operation to LUT4 cells (one per output bit).

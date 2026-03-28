@@ -1373,6 +1373,13 @@ class _Lowerer:
                     # Check if LHS is an array element write (MEMORY cell)
                     if self._try_wire_memory_write(expr):
                         pass  # Memory write handled — no scalar FF needed
+                    elif self._is_dynamic_bitselect_write(expr.left):
+                        # Dynamic bit-select write: data[index] <= rhs
+                        base_net, idx_net = self._get_bitselect_base_and_index(expr.left)
+                        rhs = self.lower_expr(expr.right)
+                        hold = _running.get(base_net.name, base_net) if _running else base_net
+                        mux_out = self._expand_dynamic_bitselect_write(base_net, idx_net, rhs, hold)
+                        results[base_net.name] = mux_out
                     else:
                         lhs = self.lower_expr(expr.left)
                         rhs = self.lower_expr(expr.right)
@@ -1590,6 +1597,66 @@ class _Lowerer:
                 results.update(self._collect_blocking_assignments(child))
 
         return results
+
+    def _is_dynamic_bitselect_write(self, lhs_expr: Any) -> bool:
+        """Check if LHS is a dynamic bit-select (e.g., data[index])."""
+        if str(lhs_expr.kind) != "ExpressionKind.ElementSelect":
+            return False
+        selector = lhs_expr.selector
+        if selector is None:
+            return False
+        sel_const = getattr(selector, "constant", None)
+        if sel_const is not None:
+            return False
+        value_node = lhs_expr.value
+        value_sym = getattr(value_node, "symbol", None)
+        if value_sym is None:
+            return False
+        mem_name = getattr(value_sym, "name", "")
+        for cell in self.mod.cells.values():
+            if cell.op == PrimOp.MEMORY and cell.params.get("mem_name", "").endswith(mem_name):
+                return False
+        return True
+
+    def _get_bitselect_base_and_index(self, lhs_expr: Any) -> tuple[Net, Net]:
+        """Extract the base bitvector net and index net from a dynamic bit-select."""
+        base_net = self.lower_expr(lhs_expr.value)
+        idx_net = self.lower_expr(lhs_expr.selector)
+        return base_net, idx_net
+
+    def _expand_dynamic_bitselect_write(self, base_net: Net, idx_net: Net, rhs: Net, hold: Net) -> Net:
+        """Expand data[index] <= rhs into per-bit MUX tree.
+
+        For each bit i: output[i] = (index == i) ? rhs : hold[i]
+        """
+        width = base_net.width
+        bit_nets: list[Net] = []
+        for i in range(width):
+            const_i = self._fresh_net(f"bsel_c{i}", idx_net.width)
+            const_cell = self._fresh_cell(f"bsel_c{i}", PrimOp.CONST, value=i, width=idx_net.width)
+            self.mod.connect(const_cell, "Y", const_i, direction="output")
+            eq_out = self._fresh_net(f"bsel_eq{i}", 1)
+            eq_cell = self._fresh_cell(f"bsel_eq{i}", PrimOp.EQ)
+            self.mod.connect(eq_cell, "A", idx_net)
+            self.mod.connect(eq_cell, "B", const_i)
+            self.mod.connect(eq_cell, "Y", eq_out, direction="output")
+            hold_bit = self._fresh_net(f"bsel_h{i}", 1)
+            slice_cell = self._fresh_cell(f"bsel_h{i}", PrimOp.SLICE, offset=i, width=1)
+            self.mod.connect(slice_cell, "A", hold)
+            self.mod.connect(slice_cell, "Y", hold_bit, direction="output")
+            mux_out = self._fresh_net(f"bsel_m{i}", 1)
+            mux_cell = self._fresh_cell(f"bsel_m{i}", PrimOp.MUX)
+            self.mod.connect(mux_cell, "S", eq_out)
+            self.mod.connect(mux_cell, "A", hold_bit)
+            self.mod.connect(mux_cell, "B", rhs)
+            self.mod.connect(mux_cell, "Y", mux_out, direction="output")
+            bit_nets.append(mux_out)
+        out = self._fresh_net("bsel_cat", width)
+        cat_cell = self._fresh_cell("bsel_cat", PrimOp.CONCAT, count=width)
+        for i, bn in enumerate(bit_nets):
+            self.mod.connect(cat_cell, f"I{i}", bn)
+        self.mod.connect(cat_cell, "Y", out, direction="output")
+        return out
 
     def _lower_statement(self, stmt: Any) -> None:
         """Lower a statement in combinational context (direct wiring)."""

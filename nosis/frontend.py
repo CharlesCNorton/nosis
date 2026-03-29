@@ -2279,8 +2279,24 @@ class _Lowerer:
         sub_name = inst.name  # instance name (e.g., "RX", "SPI")
         mod_name = sub_body.name  # module name (e.g., "uart_rx")
 
-        # Skip ECP5 vendor primitives — they're black boxes
+        # ECP5 vendor primitives — create a passthrough cell with port wiring
         if mod_name in _VENDOR_PRIMITIVES:
+            cell = self._fresh_cell(f"vendor_{sub_name}", PrimOp.CONST)
+            cell.params = {"_vendor_primitive": mod_name, "value": 0, "width": 1}
+            cell.attributes["keep"] = True
+            for conn in inst.portConnections:
+                port = conn.port
+                port_name = port.name
+                direction = str(port.direction)
+                expr = getattr(conn, "expression", None) or getattr(conn, "internalExpr", None)
+                if expr is None:
+                    continue
+                parent_net = self.lower_expr(expr)
+                is_output = "Out" in direction
+                if is_output:
+                    self.mod.connect(cell, port_name, parent_net, direction="output")
+                else:
+                    self.mod.connect(cell, port_name, parent_net)
             return
 
         # Create a prefix for all nets/cells in this sub-instance
@@ -2359,9 +2375,24 @@ class _Lowerer:
         def _lower_nested(nested_inst, parent_prefix):
             nested_body = nested_inst.body
             nested_mod_name = nested_body.name
+            # Handle vendor primitives at nested level too
             if nested_mod_name in _VENDOR_PRIMITIVES:
+                cell = self._fresh_cell(f"vendor_{nested_inst.name}", PrimOp.CONST)
+                cell.params = {"_vendor_primitive": nested_mod_name, "value": 0, "width": 1}
+                cell.attributes["keep"] = True
+                for conn in nested_inst.portConnections:
+                    port = conn.port
+                    port_name = port.name
+                    direction = str(port.direction)
+                    expr = getattr(conn, "expression", None) or getattr(conn, "internalExpr", None)
+                    if expr is None:
+                        continue
+                    parent_net = self.lower_expr(expr)
+                    if "Out" in direction:
+                        self.mod.connect(cell, port_name, parent_net, direction="output")
+                    else:
+                        self.mod.connect(cell, port_name, parent_net)
                 return
-            # Recursively lower the nested instance with extended prefix
             self._lower_sub_instance(nested_inst)
 
         sub._lower_sub_instance_nested = _lower_nested  # type: ignore[attr-defined]

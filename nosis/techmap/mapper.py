@@ -196,6 +196,16 @@ class _ECP5Mapper:
             self._map_ff(cell)
             return
 
+        # Vendor primitives — pass through as-is
+        vendor = cell.params.get("_vendor_primitive")
+        if vendor:
+            ecp5_cell = self.nl.add_cell(self._fresh_name(vendor.lower()), vendor)
+            for port_name, net in cell.inputs.items():
+                ecp5_cell.ports[port_name] = self._get_bits(net)[:1] if net.width == 1 else self._get_bits(net)
+            for port_name, net in cell.outputs.items():
+                ecp5_cell.ports[port_name] = self._get_bits(net)[:1] if net.width == 1 else self._get_bits(net)
+            return
+
         if op == PrimOp.INPUT or op == PrimOp.OUTPUT:
             # Tri-state buffer inference for inout ports
             if op == PrimOp.INPUT and cell.params.get("inout"):

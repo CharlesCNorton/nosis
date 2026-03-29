@@ -35,8 +35,10 @@ def _format_param(key: str, value: str) -> str:
     String values like "DISABLED", "CLK", "LOGIC" pass through as-is.
     """
     s = str(value)
-    # Hex values: convert to binary
+    # Hex values: convert to binary (but NOT INITVAL — those are wide BRAM data)
     if s.startswith("0x") or s.startswith("0X"):
+        if key.startswith("INITVAL"):
+            return s  # pass BRAM init hex through as-is
         try:
             int_val = int(s, 16)
             if "INIT" in key.upper():

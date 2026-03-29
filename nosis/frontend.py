@@ -1472,20 +1472,7 @@ class _Lowerer:
                         self.mod.connect(mux, "Y", mux_out, direction="output")
                         results[tgt_name] = mux_out
                     elif f_val:
-                        # Only false branch assigns — wrap in MUX with hold for true
-                        if allow_nb:
-                            hold_net = tgt_net
-                        else:
-                            hold_net = self._fresh_net("bmux_dflt", tgt_net.width)
-                            hold_cell = self._fresh_cell("bmux_dflt", PrimOp.CONST, value=0, width=tgt_net.width)
-                            self.mod.connect(hold_cell, "Y", hold_net, direction="output")
-                        mux_out = self._fresh_net("bmux", tgt_net.width)
-                        mux = self._fresh_cell("bmux", PrimOp.MUX)
-                        self.mod.connect(mux, "S", cond_net)
-                        self.mod.connect(mux, "A", f_val)
-                        self.mod.connect(mux, "B", hold_net)
-                        self.mod.connect(mux, "Y", mux_out, direction="output")
-                        results[tgt_name] = mux_out
+                        results[tgt_name] = f_val
 
         elif kind == "StatementKind.Case":
             inner_sel = self.lower_expr(stmt.expr)

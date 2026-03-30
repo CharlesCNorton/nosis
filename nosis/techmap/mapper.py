@@ -1073,7 +1073,7 @@ class _ECP5Mapper:
 
         # Narrow-case optimization: if output is 1-bit and select is ≤2 bits
         # with ≤4 cases, compute a single LUT4 truth table directly.
-        if width == 1 and s_net.width <= 2 and count <= 4:
+        if False and width == 1 and s_net.width <= 2 and count <= 4:
             # Build truth table: inputs are select bits, output is the
             # selected case value (as constant) or the default.
             # Collect case constant values
@@ -1126,9 +1126,10 @@ class _ECP5Mapper:
                 lut.ports["D"] = ["0"]
                 lut.ports["Z"] = [out_bits[0] if out_bits else self.nl.alloc_bit()]
                 return
-        # Wide-output per-bit LUT4: if selector ≤ 4 bits and all case values
-        # are constants, compute one LUT4 truth table per output bit.
-        if s_net.width <= 4 and count >= 2:
+        # Wide-output per-bit LUT4: DISABLED — the PMUX case-to-index
+        # mapping varies between element select and case statement PMUXes.
+        # Use the fallback priority chain instead.
+        if False and s_net.width <= 4 and count >= 2:
             all_const = True
             default_driver = a_net.driver
             default_val = 0
@@ -1189,21 +1190,32 @@ class _ECP5Mapper:
         out_bits = self._get_bits(out_net)
         default_bits = self._get_bits(a_net)
         s_bits = self._get_bits(s_net)
+        is_onehot = (s_net.width == count)
 
-        # For each output bit, build a priority MUX chain.
-        # Case statements produce mutually exclusive selects, so a simple
-        # priority chain (last-match-wins cascaded MUX) is correct and
-        # uses one LUT per case instead of two (MUX + OR-reduce).
         for bit_idx in range(width):
             candidates: list[tuple] = []
-            for sel_idx in range(count):
-                case_net = cell.inputs.get(f"I{sel_idx}")
-                if case_net is None:
-                    continue
-                case_bits = self._get_bits(case_net)
-                case_bit = case_bits[bit_idx] if bit_idx < len(case_bits) else "0"
-                sel_bit = s_bits[sel_idx] if sel_idx < len(s_bits) else "0"
-                candidates.append((sel_bit, case_bit))
+            if is_onehot:
+                # One-hot: each S bit selects one case
+                for sel_idx in range(count):
+                    case_net = cell.inputs.get(f"I{sel_idx}")
+                    if case_net is None:
+                        continue
+                    case_bits = self._get_bits(case_net)
+                    case_bit = case_bits[bit_idx] if bit_idx < len(case_bits) else "0"
+                    sel_bit = s_bits[sel_idx] if sel_idx < len(s_bits) else "0"
+                    candidates.append((sel_bit, case_bit))
+            else:
+                # Binary: build EQ comparison for each case index
+                for sel_idx in range(count):
+                    case_net = cell.inputs.get(f"I{sel_idx}")
+                    if case_net is None:
+                        continue
+                    case_bits = self._get_bits(case_net)
+                    case_bit = case_bits[bit_idx] if bit_idx < len(case_bits) else "0"
+                    # EQ: S == sel_idx
+                    eq_out = self.nl.alloc_bit()
+                    self._build_eq_const(s_bits, sel_idx, eq_out)
+                    candidates.append((eq_out, case_bit))
 
             default_bit = default_bits[bit_idx] if bit_idx < len(default_bits) else "0"
 
@@ -1213,14 +1225,12 @@ class _ECP5Mapper:
                     self._set_bit(out_ecp5.bits, bit_idx, default_bit)
                 continue
 
-            # Priority chain: start from default, each case overrides if selected
             current = default_bit
             for sel_bit, case_bit in candidates:
                 mux_out = self.nl.alloc_bit()
                 lut = self.nl.add_cell(self._fresh_name("pmux"), "LUT4")
                 if cell.src:
                     lut.attributes["src"] = cell.src
-                # MUX: sel=A, false=B (current), true=C (case_bit)
                 lut.parameters["INIT"] = "1100101011001010"
                 lut.ports["A"] = [sel_bit]
                 lut.ports["B"] = [current]
@@ -1245,6 +1255,76 @@ class _ECP5Mapper:
         for i in range(len(out_ecp5.bits)):
             new = a_bits[i % len(a_bits)] if a_bits else "0"
             self._set_bit(out_ecp5.bits, i, new)
+
+    def _build_eq_const(self, signal_bits: list, const_val: int, out_bit: int) -> None:
+        """Build EQ comparison: signal == const_val, result in out_bit."""
+        width = len(signal_bits)
+        # Per-bit XNOR, then AND tree
+        match_bits: list[int | str] = []
+        for i in range(width):
+            expected = (const_val >> i) & 1
+            sig_bit = signal_bits[i] if i < len(signal_bits) else "0"
+            if isinstance(sig_bit, str):
+                # Constant signal bit
+                match_bits.append("1" if (sig_bit == "1") == (expected == 1) else "0")
+            elif expected == 1:
+                match_bits.append(sig_bit)  # XNOR(sig, 1) = sig
+            else:
+                # XNOR(sig, 0) = NOT(sig)
+                inv = self.nl.alloc_bit()
+                lut = self.nl.add_cell(self._fresh_name("eqinv"), "LUT4")
+                lut.parameters["INIT"] = "0101010101010101"
+                lut.ports["A"] = [sig_bit]
+                lut.ports["B"] = ["0"]
+                lut.ports["C"] = ["0"]
+                lut.ports["D"] = ["0"]
+                lut.ports["Z"] = [inv]
+                match_bits.append(inv)
+        # AND reduction
+        while len(match_bits) > 1:
+            nxt: list[int | str] = []
+            for i in range(0, len(match_bits), 4):
+                chunk = match_bits[i:i+4]
+                # Filter out constant "1"s
+                var_bits = [b for b in chunk if b != "1"]
+                if not var_bits:
+                    nxt.append("1")
+                elif len(var_bits) == 1:
+                    nxt.append(var_bits[0])
+                else:
+                    out = self.nl.alloc_bit()
+                    lut = self.nl.add_cell(self._fresh_name("eqand"), "LUT4")
+                    inits = {2: "1000100010001000", 3: "1000000010000000",
+                             4: "1000000000000000"}
+                    lut.parameters["INIT"] = inits[len(var_bits)]
+                    for ci, cb in enumerate(var_bits):
+                        lut.ports["ABCD"[ci]] = [cb]
+                    for ci in range(len(var_bits), 4):
+                        lut.ports["ABCD"[ci]] = ["1"]
+                    lut.ports["Z"] = [out]
+                    nxt.append(out)
+            match_bits = nxt
+        # Final result
+        if match_bits and match_bits[0] != out_bit:
+            if match_bits[0] == "1":
+                # Always true — wire out_bit to VCC
+                # Create a buffer LUT
+                lut = self.nl.add_cell(self._fresh_name("eqtrue"), "LUT4")
+                lut.parameters["INIT"] = "1111111111111111"
+                lut.ports["A"] = ["0"]
+                lut.ports["B"] = ["0"]
+                lut.ports["C"] = ["0"]
+                lut.ports["D"] = ["0"]
+                lut.ports["Z"] = [out_bit]
+            else:
+                # Wire through buffer
+                lut = self.nl.add_cell(self._fresh_name("eqbuf"), "LUT4")
+                lut.parameters["INIT"] = "1010101010101010"
+                lut.ports["A"] = [match_bits[0]]
+                lut.ports["B"] = ["0"]
+                lut.ports["C"] = ["0"]
+                lut.ports["D"] = ["0"]
+                lut.ports["Z"] = [out_bit]
 
     def _map_memory(self, cell: Cell) -> None:
         """Map MEMORY cells to DP16KD when tagged by BRAM inference, else to FFs."""

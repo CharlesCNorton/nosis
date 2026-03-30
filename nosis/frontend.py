@@ -1554,7 +1554,12 @@ class _Lowerer:
                             continue
                         if tn not in inner_running:
                             if allow_nb:
-                                inner_running[tn] = tnet
+                                # Use outer default if it's a constant (safe, no loops)
+                                outer = (_running or {}).get(tn)
+                                if outer is not None and outer.driver is not None and outer.driver.op == PrimOp.CONST:
+                                    inner_running[tn] = outer
+                                else:
+                                    inner_running[tn] = tnet
                             else:
                                 zn = self._fresh_net("bcase_dflt", tnet.width)
                                 zc = self._fresh_cell("bcase_dflt", PrimOp.CONST, value=0, width=tnet.width)

@@ -37,11 +37,16 @@ def merge_mux_chains(mod: Module) -> int:
         b_val = int(b.driver.params.get("value", 0))
         eq_groups[(a.name, b_val)].append(cell)
 
+    # Build consumer index for efficient redirect
+    _consumer_idx: dict[int, list[tuple[Cell, str]]] = {}
+    for cell in mod.cells.values():
+        for pname, pnet in cell.inputs.items():
+            _consumer_idx.setdefault(id(pnet), []).append((cell, pname))
+
     to_remove: set[str] = set()
     for key, cells in eq_groups.items():
         if len(cells) < 2:
             continue
-        # Keep the first, redirect consumers of others to the first's output
         keeper = cells[0]
         keeper_out = list(keeper.outputs.values())
         if not keeper_out:
@@ -53,13 +58,9 @@ def merge_mux_chains(mod: Module) -> int:
             if not dup_out:
                 continue
             dup_out_net = dup_out[0]
-            # Redirect all consumers of dup's output to keeper's output
-            for other in mod.cells.values():
-                if other is dup:
-                    continue
-                for pname, pnet in list(other.inputs.items()):
-                    if pnet is dup_out_net:
-                        other.inputs[pname] = keeper_out_net
+            for consumer, pname in _consumer_idx.get(id(dup_out_net), []):
+                if consumer is not dup:
+                    consumer.inputs[pname] = keeper_out_net
             to_remove.add(dup.name)
             eliminated += 1
 
@@ -79,18 +80,21 @@ def merge_mux_chains(mod: Module) -> int:
             if out_nets:
                 to_bypass.append((cell.name, a_net.name))
 
+    # Rebuild index after EQ dedup (cells changed)
+    _bypass_idx: dict[int, list[tuple[Cell, str]]] = {}
+    for cell in mod.cells.values():
+        for pn, pnet in cell.inputs.items():
+            _bypass_idx.setdefault(id(pnet), []).append((cell, pn))
+
     for cell_name, src_name in to_bypass:
         cell = mod.cells[cell_name]
         src_net = mod.nets.get(src_name)
         if src_net is None:
             continue
         for out_net in list(cell.outputs.values()):
-            for other in mod.cells.values():
-                if other is cell:
-                    continue
-                for pn, pnet in list(other.inputs.items()):
-                    if pnet is out_net:
-                        other.inputs[pn] = src_net
+            for consumer, pn in _bypass_idx.get(id(out_net), []):
+                if consumer is not cell:
+                    consumer.inputs[pn] = src_net
             for port_name, port_net in list(mod.ports.items()):
                 if port_net is out_net:
                     mod.ports[port_name] = src_net

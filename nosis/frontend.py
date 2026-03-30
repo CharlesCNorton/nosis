@@ -995,17 +995,21 @@ class _Lowerer:
             else:
                 nb_map = self._collect_blocking_with_muxes(stmt, allow_nb=True)
 
+            # Build a consumer index: net identity → list of (cell, port)
+            # This avoids O(cells) scans for each FF redirect.
+            _consumer_idx: dict[int, list[tuple]] = {}
+            _name_idx: dict[str, list[tuple]] = {}
+            for _c in self.mod.cells.values():
+                for _pn, _pnet in _c.inputs.items():
+                    _consumer_idx.setdefault(id(_pnet), []).append((_c, _pn))
+                    _name_idx.setdefault(_pnet.name, []).append((_c, _pn))
+
             for lhs_name, rhs_net in nb_map.items():
                 lhs_net = self.mod.nets.get(lhs_name)
                 if lhs_net is None:
                     continue
                 rst_val_net = rst_vals.get(lhs_name)
                 ff_rst = reset_net if async_reset else (reset_net if reset_net else None)
-                # If the target already has a combinational driver (from
-                # always_comb or continuous assign), don't create an FF.
-                # The combinational decode is the primary value; the NB
-                # override only applies conditionally and is already
-                # captured in the guarded MUX chain.
                 if lhs_net.driver is not None and lhs_net.driver.op not in (PrimOp.FF, PrimOp.CONST):
                     continue
 
@@ -1022,30 +1026,21 @@ class _Lowerer:
                     self.mod.connect(ff, "RST", ff_rst)
                 if rst_val_net:
                     self.mod.connect(ff, "RST_VAL", rst_val_net)
-                # Create a fresh Q output net, then redirect all existing
-                # consumers of the target net to read from Q instead.
-                # This ensures the FF output is connected into the logic
-                # graph so DCE does not orphan it.
                 q_net = self._fresh_net(f"ff_q_{lhs_net.name}", lhs_net.width)
                 self.mod.connect(ff, "Q", q_net, direction="output")
-                # Redirect consumers of lhs_net to q_net
-                for other_cell in list(self.mod.cells.values()):
-                    if other_cell is ff:
-                        continue
-                    for pname, pnet in list(other_cell.inputs.items()):
-                        if pnet is lhs_net or pnet.name == lhs_net.name:
-                            other_cell.inputs[pname] = q_net
-                # Update port references
+                # Redirect consumers using the index (O(consumers) not O(cells))
+                for _c, _pn in _consumer_idx.get(id(lhs_net), []):
+                    if _c is not ff:
+                        _c.inputs[_pn] = q_net
+                for _c, _pn in _name_idx.get(lhs_name, []):
+                    if _c is not ff and _c.inputs.get(_pn) is lhs_net:
+                        _c.inputs[_pn] = q_net
                 for pname, pnet in list(self.mod.ports.items()):
                     if pnet is lhs_net:
                         self.mod.ports[pname] = q_net
-                # Also set the original target net's driver to the FF
-                # so hierarchy port wiring can find it when connecting
-                # sub-instance outputs to parent nets.
                 lhs_net.driver = ff
 
-            # Final sweep: replace any remaining reference to a target
-            # net with its FF Q net. Uses both identity and name matching.
+            # Final sweep using the index
             ff_q_map: dict[str, "Net"] = {}
             tgt_nets: dict[str, "Net"] = {}
             for cell in self.mod.cells.values():
@@ -1059,15 +1054,19 @@ class _Lowerer:
 
             for tgt_name, q_net in ff_q_map.items():
                 tnet = tgt_nets[tgt_name]
-                for cell in self.mod.cells.values():
-                    # Skip the FF that owns this Q net (don't redirect its own D input)
-                    if cell.op == PrimOp.FF and cell.params.get("ff_target", "") == tgt_name:
+                for _c, _pn in _consumer_idx.get(id(tnet), []):
+                    if _pn == "CLK":
                         continue
-                    for pn, pnet in list(cell.inputs.items()):
-                        if pn == "CLK":
-                            continue  # never redirect CLK in per-block sweep
-                        if pnet is tnet or (pnet.name == tgt_name and pnet.width == q_net.width):
-                            cell.inputs[pn] = q_net
+                    if _c.op == PrimOp.FF and _c.params.get("ff_target", "") == tgt_name:
+                        continue
+                    _c.inputs[_pn] = q_net
+                for _c, _pn in _name_idx.get(tgt_name, []):
+                    if _pn == "CLK":
+                        continue
+                    if _c.op == PrimOp.FF and _c.params.get("ff_target", "") == tgt_name:
+                        continue
+                    if _c.inputs.get(_pn) is tnet:
+                        _c.inputs[_pn] = q_net
 
     def _lower_initial_block(self, stmt: Any) -> None:
         """Extract blocking assignments from an initial block as net attributes.

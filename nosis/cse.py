@@ -62,6 +62,12 @@ def eliminate_common_subexpressions(mod: Module) -> int:
         else:
             sig_to_cell[sig] = cell
 
+    # Build consumer index: net identity → [(cell, port_name)]
+    _consumer_idx: dict[int, list[tuple[Cell, str]]] = {}
+    for cell in mod.cells.values():
+        for port_name, net in cell.inputs.items():
+            _consumer_idx.setdefault(id(net), []).append((cell, port_name))
+
     # Redirect: for each duplicate, point its output net's driver to the original
     eliminated = 0
     to_remove: set[str] = set()
@@ -74,17 +80,13 @@ def eliminate_common_subexpressions(mod: Module) -> int:
         if dup_outs[0].width != orig_outs[0].width:
             continue
 
-        # Redirect all consumers of dup's output to orig's output
         dup_out = dup_outs[0]
         orig_out = orig_outs[0]
 
-        # Find all cells that use dup_out as input and rewire to orig_out
-        for other_cell in mod.cells.values():
-            if other_cell.name == dup.name:
-                continue
-            for port_name, net in list(other_cell.inputs.items()):
-                if net is dup_out:
-                    other_cell.inputs[port_name] = orig_out
+        # Redirect consumers using the index (O(consumers) not O(cells))
+        for consumer, port_name in _consumer_idx.get(id(dup_out), []):
+            if consumer.name != dup.name:
+                consumer.inputs[port_name] = orig_out
 
         to_remove.add(dup.name)
         eliminated += 1

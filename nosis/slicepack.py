@@ -121,6 +121,22 @@ def deduplicate_luts(netlist: ECP5Netlist) -> int:
     eliminated = 0
     to_remove: set[str] = set()
 
+    # Build bit-to-consumer index: bit → [(cell_name, port_name, bit_index)]
+    _bit_consumers: dict[int | str, list[tuple[str, str, int]]] = {}
+    for cname, cell in netlist.cells.items():
+        for pname, bits in cell.ports.items():
+            for bi, b in enumerate(bits):
+                _bit_consumers.setdefault(b, []).append((cname, pname, bi))
+    # Also index net bits and port bits
+    _bit_nets: dict[int | str, list[tuple[str, int]]] = {}
+    for nname, net in netlist.nets.items():
+        for bi, b in enumerate(net.bits):
+            _bit_nets.setdefault(b, []).append((nname, bi))
+    _bit_ports: dict[int | str, list[tuple[str, int]]] = {}
+    for pname, pinfo in netlist.ports.items():
+        for bi, b in enumerate(pinfo.get("bits", [])):
+            _bit_ports.setdefault(b, []).append((pname, bi))
+
     for sig, cells in sig_groups.items():
         if len(cells) < 2:
             continue
@@ -135,19 +151,23 @@ def deduplicate_luts(netlist: ECP5Netlist) -> int:
                 continue
             old_bit = dup_z[0]
             new_bit = keeper_z[0]
-            for other in netlist.cells.values():
-                if other.name == dup.name:
+            # Replace in cell ports
+            for cname, pname, bi in _bit_consumers.get(old_bit, []):
+                if cname == dup.name:
                     continue
-                for port_name, bits in list(other.ports.items()):
-                    other.ports[port_name] = [
-                        new_bit if b == old_bit else b for b in bits
-                    ]
-            for net in netlist.nets.values():
-                net.bits = [new_bit if b == old_bit else b for b in net.bits]
-            for port_name, port_info in netlist.ports.items():
-                port_info["bits"] = [
-                    new_bit if b == old_bit else b for b in port_info["bits"]
-                ]
+                c = netlist.cells.get(cname)
+                if c and bi < len(c.ports.get(pname, [])):
+                    c.ports[pname][bi] = new_bit
+            # Replace in net bits
+            for nname, bi in _bit_nets.get(old_bit, []):
+                n = netlist.nets.get(nname)
+                if n and bi < len(n.bits):
+                    n.bits[bi] = new_bit
+            # Replace in port bits
+            for pname, bi in _bit_ports.get(old_bit, []):
+                pi = netlist.ports.get(pname)
+                if pi and bi < len(pi.get("bits", [])):
+                    pi["bits"][bi] = new_bit
             to_remove.add(dup.name)
             eliminated += 1
 

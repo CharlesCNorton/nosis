@@ -2067,13 +2067,12 @@ def map_to_ecp5(design: Design) -> ECP5Netlist:
                 if d0 == "1":
                     cell.ports["CIN"] = ["1"]
 
-    # Remove LUT4 cells with constant Z outputs — these are dead and
-    # would conflict with the JSON backend's GND/VCC tie cells.
-    # DISABLED: may remove needed cells during debugging
-    # dead_luts = [name for name, cell in netlist.cells.items()
-    #              if cell.cell_type == "LUT4"
-    #              and all(isinstance(b, str) for b in cell.ports.get("Z", []))]
-    # for name in dead_luts:
-    #     del netlist.cells[name]
+    # Remove LUT4 cells with constant Z outputs — dead cells that
+    # conflict with the JSON backend's GND/VCC tie cells.
+    dead_luts = [name for name, cell in netlist.cells.items()
+                 if cell.cell_type == "LUT4"
+                 and all(isinstance(b, str) for b in cell.ports.get("Z", []))]
+    for name in dead_luts:
+        del netlist.cells[name]
 
     return netlist

@@ -1486,7 +1486,7 @@ class _Lowerer:
                     self.mod.connect(ieqc, "A", inner_sel)
                     self.mod.connect(ieqc, "B", iv)
                     self.mod.connect(ieqc, "Y", ieq, direction="output")
-                    for tn, rv in sorted(inner_map.items()):
+                    for tn, rv in inner_map.items():
                         tnet = self.mod.nets.get(tn)
                         if tnet is None:
                             continue

@@ -672,7 +672,7 @@ def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     s3 = simplify_constant_luts(netlist)
     bl = break_comb_loops(netlist)
     # Item 4: shared-input LUT pairing
-    si = merge_shared_input_luts(netlist)
+    si = 0  # merge_shared_input_luts disabled: deletes cells without preserving outputs
     return {
         "const_lut_simplify": s1 + s2 + s3,
         "lut_dedup": dd,

@@ -84,6 +84,11 @@ def infer_brams(mod: Module) -> int:
         if total_bits < 256:
             continue
 
+        # DP16KD with REGMODE_A="NOREG" provides read data within the
+        # same clock cycle after the address is latched. This supports
+        # combinational read patterns like `assign data = mem[addr]`
+        # as long as the address is stable when the clock edge fires.
+
         fit = _fits_dp16kd(depth, width)
         if fit is not None:
             addr_bits, data_width = fit

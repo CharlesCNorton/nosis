@@ -1228,18 +1228,36 @@ class _ECP5Mapper:
                 for i in range(64):
                     bram.parameters[f"INITVAL_{i:02X}"] = "0x00000000000000000000"
 
-            # Wire address port A (read)
+            # Wire address port A (read) — offset by DATA_WIDTH mode.
+            # DP16KD uses the upper address pins for the row address and
+            # the lower pins for sub-word byte select within wider modes:
+            #   X1:  ADA[13:0] = addr[13:0]   (offset 0)
+            #   X2:  ADA[13:1] = addr[12:0]   (offset 1)
+            #   X4:  ADA[13:2] = addr[11:0]   (offset 2)
+            #   X9:  ADA[13:3] = addr[10:0]   (offset 3)
+            #   X18: ADA[13:4] = addr[9:0]    (offset 4)
+            #   X36: ADA[13:5] = addr[8:0]    (offset 5)
+            _addr_offset = {1: 0, 2: 1, 4: 2, 9: 3, 18: 4, 36: 5}.get(data_width, 4)
+            # The frontend creates numbered RADDR ports (RADDR1, RADDR2, ...)
+            # for multiple read accesses. Use the first available one.
             raddr_net = cell.inputs.get("RADDR")
+            if raddr_net is None:
+                for _rk in sorted(cell.inputs):
+                    if _rk.startswith("RADDR"):
+                        raddr_net = cell.inputs[_rk]
+                        break
             raddr_bits = self._get_bits(raddr_net) if raddr_net else []
             for i in range(14):
-                bit = raddr_bits[i] if i < len(raddr_bits) else "0"
+                logical = i - _addr_offset
+                bit = raddr_bits[logical] if 0 <= logical < len(raddr_bits) else "0"
                 bram.ports[f"ADA{i}"] = [bit]
 
-            # Wire address port B (write)
+            # Wire address port B (write) — same offset
             waddr_net = cell.inputs.get("WADDR")
             waddr_bits = self._get_bits(waddr_net) if waddr_net else []
             for i in range(14):
-                bit = waddr_bits[i] if i < len(waddr_bits) else "0"
+                logical = i - _addr_offset
+                bit = waddr_bits[logical] if 0 <= logical < len(waddr_bits) else "0"
                 bram.ports[f"ADB{i}"] = [bit]
 
             # Wire data input (port B write)
@@ -1294,12 +1312,26 @@ class _ECP5Mapper:
             return
 
         if bram_config == "DP16KD_TILED":
-            # Large memory: tile into DP16KD grid with depth muxing.
-            # Use 18-bit data width (1024 deep per block).
-            tile_data_width = 18
-            tile_depth = 1024
+            # Large memory: tile into DP16KD grid.
+            # Choose the narrowest data width that avoids depth tiling.
+            # X4 mode (4096 deep) is preferred for large arrays like
+            # program memory because it avoids the depth MUX overhead.
             mem_depth = int(cell.params.get("depth", 0))
             mem_width = int(cell.params.get("width", 0))
+            # Pick the widest data width where depth fits in one tile row
+            # (avoids depth MUX). Start wide, stop at first fit.
+            # For 4096×32: X4 mode (4096 deep, 4 wide) → 8 BRAMs, no depth MUX.
+            _dw_configs = [
+                (36, 512), (18, 1024), (9, 2048),
+                (4, 4096), (2, 8192), (1, 16384),
+            ]
+            tile_data_width = 4  # default: X4 is a good compromise
+            tile_depth = 4096
+            for _dw, _dd in _dw_configs:
+                if mem_depth <= _dd:
+                    tile_data_width = _dw
+                    tile_depth = _dd
+                    break
             tiles_wide = (mem_width + tile_data_width - 1) // tile_data_width
             tiles_deep = (mem_depth + tile_depth - 1) // tile_depth
 
@@ -1314,6 +1346,11 @@ class _ECP5Mapper:
                     init_data = parse_readmemb(init_path) if fmt == "bin" else parse_readmemh(init_path)
 
             raddr_net = cell.inputs.get("RADDR")
+            if raddr_net is None:
+                for _rk in sorted(cell.inputs):
+                    if _rk.startswith("RADDR"):
+                        raddr_net = cell.inputs[_rk]
+                        break
             waddr_net = cell.inputs.get("WADDR")
             wdata_net = cell.inputs.get("WDATA")
             we_net = cell.inputs.get("WE")
@@ -1366,11 +1403,14 @@ class _ECP5Mapper:
                     for k, v in initvals.items():
                         bram.parameters[k] = v
 
+                    _tile_addr_offset = {1: 0, 2: 1, 4: 2, 9: 3, 18: 4, 36: 5}.get(tile_data_width, 4)
                     for i in range(14):
-                        bit = raddr_bits[i] if i < len(raddr_bits) else "0"
+                        logical = i - _tile_addr_offset
+                        bit = raddr_bits[logical] if 0 <= logical < len(raddr_bits) else "0"
                         bram.ports[f"ADA{i}"] = [bit]
                     for i in range(14):
-                        bit = waddr_bits[i] if i < len(waddr_bits) else "0"
+                        logical = i - _tile_addr_offset
+                        bit = waddr_bits[logical] if 0 <= logical < len(waddr_bits) else "0"
                         bram.ports[f"ADB{i}"] = [bit]
 
                     for i in range(18):

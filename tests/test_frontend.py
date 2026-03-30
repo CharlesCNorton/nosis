@@ -353,15 +353,19 @@ def test_readmem_to_initvals():
     assert "INITVAL_3F" in initvals  # 64th row
     assert len(initvals) == 64
 
-    # Row 0 should contain our 4 entries
+    # Row 0 should contain our 4 entries in ECP5 physical encoding.
+    # X18 mode: each entry is 20 bits (9 data + 1 parity + 9 data + 1 parity).
+    # _encode_entry(0x3FFFF, 18) = 0x1FF | (0x1FF << 10) = 0x7FC1FF
+    # _encode_entry(0x00001, 18) = 0x001 | (0x000 << 10) = 0x000001
+    # _encode_entry(0x20000, 18) = 0x000 | (0x100 << 10) = 0x040000
+    from nosis.readmem import _encode_entry
     row0 = initvals["INITVAL_00"]
     assert row0.startswith("0x")
-    # The value is a big integer — parse it and check low bits
     val = int(row0, 16)
-    assert (val >> 0) & 0x3FFFF == 0x3FFFF   # addr 0
-    assert (val >> 18) & 0x3FFFF == 0x00001   # addr 1
-    assert (val >> 36) & 0x3FFFF == 0x20000   # addr 2
-    assert (val >> 54) & 0x3FFFF == 0x00000   # addr 3
+    assert (val >> 0) & 0xFFFFF == _encode_entry(0x3FFFF, 18)   # addr 0
+    assert (val >> 20) & 0xFFFFF == _encode_entry(0x00001, 18)   # addr 1
+    assert (val >> 40) & 0xFFFFF == _encode_entry(0x20000, 18)   # addr 2
+    assert (val >> 60) & 0xFFFFF == _encode_entry(0x00000, 18)   # addr 3
 
 
 def test_readmem_to_initvals_empty():

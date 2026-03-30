@@ -871,7 +871,7 @@ class _ECP5Mapper:
                 # INIT for MUX(sel=A, false=B, true=C) = 0xCACA
                 mux_out = self.nl.alloc_bit()
                 lut = self.nl.add_cell(self._fresh_name("shft"), "LUT4")
-                lut.parameters["INIT"] = "1100101011001010"  # MUX
+                lut.parameters["INIT"] = "1110010011100100"  # MUX
                 lut.ports["A"] = [sel_bit]
                 lut.ports["B"] = [current[i]]
                 lut.ports["C"] = [shifted]
@@ -1241,7 +1241,7 @@ class _ECP5Mapper:
                 lut = self.nl.add_cell(self._fresh_name("pmux"), "LUT4")
                 if cell.src:
                     lut.attributes["src"] = cell.src
-                lut.parameters["INIT"] = "1100101011001010"
+                lut.parameters["INIT"] = "1110010011100100"
                 lut.ports["A"] = [sel_bit]
                 lut.ports["B"] = [current]
                 lut.ports["C"] = [case_bit]
@@ -1662,8 +1662,8 @@ class _ECP5Mapper:
                         # INIT: for each (D,C,B,A): output = A if C=0, B if C=1
                         # C=0: output=A -> bits 0,1,4,5 = A pattern = 1010
                         # C=1: output=B -> bits 2,3,6,7 = B pattern = 1100
-                        # INIT = 1100101011001010 = 0xCACA
-                        lut.parameters["INIT"] = "1100101011001010"
+                        # INIT = 1110010011100100 = 0xCACA
+                        lut.parameters["INIT"] = "1110010011100100"
                         lut.ports["A"] = [a_bit]
                         lut.ports["B"] = [b_bit]
                         lut.ports["C"] = [sel]
@@ -1689,7 +1689,7 @@ class _ECP5Mapper:
                         # Level 1: mux01 = sel0 ? tile1 : tile0
                         mux01 = self.nl.alloc_bit()
                         lut1 = self.nl.add_cell(self._fresh_name("lut"), "LUT4")
-                        lut1.parameters["INIT"] = "1100101011001010"
+                        lut1.parameters["INIT"] = "1110010011100100"
                         lut1.ports["A"] = [bits[0]]
                         lut1.ports["B"] = [bits[1]]
                         lut1.ports["C"] = [s0]
@@ -1698,7 +1698,7 @@ class _ECP5Mapper:
                         # Level 1: mux23 = sel0 ? tile3 : tile2
                         mux23 = self.nl.alloc_bit()
                         lut2 = self.nl.add_cell(self._fresh_name("lut"), "LUT4")
-                        lut2.parameters["INIT"] = "1100101011001010"
+                        lut2.parameters["INIT"] = "1110010011100100"
                         lut2.ports["A"] = [bits[2]]
                         lut2.ports["B"] = [bits[3]]
                         lut2.ports["C"] = [s0]
@@ -1706,7 +1706,7 @@ class _ECP5Mapper:
                         lut2.ports["Z"] = [mux23]
                         # Level 2: final = sel1 ? mux23 : mux01
                         lut3 = self.nl.add_cell(self._fresh_name("lut"), "LUT4")
-                        lut3.parameters["INIT"] = "1100101011001010"
+                        lut3.parameters["INIT"] = "1110010011100100"
                         lut3.ports["A"] = [mux01]
                         lut3.ports["B"] = [mux23]
                         lut3.ports["C"] = [s1]
@@ -1834,7 +1834,7 @@ class _ECP5Mapper:
                     wd_bit = wd_bits[b_idx] if b_idx < len(wd_bits) else "0"
                     mux_out = self.nl.alloc_bit()
                     lut = self.nl.add_cell(self._fresh_name("mmux"), "LUT4")
-                    lut.parameters["INIT"] = "1100101011001010"
+                    lut.parameters["INIT"] = "1110010011100100"
                     lut.ports["A"] = [we_bit]
                     lut.ports["B"] = [current_d]
                     lut.ports["C"] = [wd_bit]
@@ -1887,7 +1887,7 @@ class _ECP5Mapper:
                     wd_bit = wd_bits[b_idx] if b_idx < len(wd_bits) else "0"
                     mux_out = self.nl.alloc_bit()
                     lut = self.nl.add_cell(self._fresh_name("mmux"), "LUT4")
-                    lut.parameters["INIT"] = "1100101011001010"
+                    lut.parameters["INIT"] = "1110010011100100"
                     lut.ports["A"] = [wen]
                     lut.ports["B"] = [current_d]
                     lut.ports["C"] = [wd_bit]
@@ -1943,7 +1943,7 @@ class _ECP5Mapper:
                         else:
                             mux_out = self.nl.alloc_bit()
                             lut = self.nl.add_cell(self._fresh_name("mrd"), "LUT4")
-                            lut.parameters["INIT"] = "1100101011001010"
+                            lut.parameters["INIT"] = "1110010011100100"
                             lut.ports["A"] = [sel]
                             lut.ports["B"] = [lo]
                             lut.ports["C"] = [hi]

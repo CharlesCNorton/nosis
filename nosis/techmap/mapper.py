@@ -1730,6 +1730,14 @@ def map_to_ecp5(design: Design) -> ECP5Netlist:
     # ECP5Net.bits in-place, orphaning original allocated bit integers.
     # Replace all orphaned references using the recorded alias map.
     alias = mapper._bit_alias
+    # Add aliases from bit_origin: if an allocated bit's net position
+    # now holds a different value, that's an alias.
+    for orig_bit, (net_name, idx) in netlist._bit_origin.items():
+        if orig_bit in alias:
+            continue
+        net = netlist.nets.get(net_name)
+        if net and idx < len(net.bits) and net.bits[idx] != orig_bit:
+            alias[orig_bit] = net.bits[idx]
     # Resolve transitive aliases (A→B, B→C becomes A→C)
     changed = True
     while changed:
@@ -1790,6 +1798,14 @@ def map_to_ecp5(design: Design) -> ECP5Netlist:
     # get the current driven bit at that position.
     # Resolve orphaned bits using the original allocation record.
     bit_origin = getattr(netlist, '_bit_origin', {})
+    # Build set of IR nets that have live driver cells
+    live_nets: set[str] = set()
+    for cell_obj in mod.cells.values():
+        for out_net in cell_obj.outputs.values():
+            live_nets.add(out_net.name)
+    for pname in mod.ports:
+        live_nets.add(pname)
+
     fixed = 0
     for cell in netlist.cells.values():
         for port, bits in cell.ports.items():
@@ -1797,6 +1813,7 @@ def map_to_ecp5(design: Design) -> ECP5Netlist:
                 continue
             for i, b in enumerate(bits):
                 if isinstance(b, int) and b >= 2 and b not in driven_bits:
+                    resolved = False
                     origin = bit_origin.get(b)
                     if origin:
                         net_name, bit_idx = origin
@@ -1806,6 +1823,11 @@ def map_to_ecp5(design: Design) -> ECP5Netlist:
                             if actual != b:
                                 bits[i] = actual
                                 fixed += 1
+                                resolved = True
+                        if not resolved and net_name not in live_nets:
+                            bits[i] = "0"
+                            fixed += 1
+                            resolved = True
 
     # Fix CCU2C D0/D1/CIN: resolve unresolved integer bits to their
     # current values in the net bit lists.

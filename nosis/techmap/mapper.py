@@ -260,8 +260,6 @@ class _ECP5Mapper:
         if op == PrimOp.INPUT or op == PrimOp.OUTPUT:
             # Tri-state buffer inference for inout ports
             if op == PrimOp.INPUT and cell.params.get("inout"):
-                # Emit a BB (bidirectional buffer) for inout ports.
-                # Look for an OUTPUT cell on the same port to find the drive data.
                 port_name = cell.params.get("port_name", "")
                 drive_bits: list[int | str] = ["0"]
                 tristate_bits: list[int | str] = ["1"]  # default: hi-Z
@@ -278,6 +276,7 @@ class _ECP5Mapper:
                     bb.ports["T"] = tristate_bits[:1]
                     bb.ports["O"] = ecp5_net.bits[:1] if ecp5_net.bits else ["0"]
                     bb.ports["B"] = ecp5_net.bits[:1] if ecp5_net.bits else ["0"]
+            # INPUT cell wiring disabled during debugging
             return  # handled as ports
 
         if op == PrimOp.CONST:
@@ -1030,6 +1029,8 @@ class _ECP5Mapper:
             src_idx = offset + i
             if src_idx < len(a_bits):
                 self._set_bit(out_ecp5.bits, i, a_bits[src_idx])
+            else:
+                self._set_bit(out_ecp5.bits, i, "0")
 
     def _map_extend(self, cell: Cell) -> None:
         """Map zero/sign extension — wiring + constant padding."""
@@ -1667,8 +1668,183 @@ class _ECP5Mapper:
                 dpr.ports["WRE"] = [we_bits[0] if we_bits else "0"]
             return
 
-        # No BRAM/DPR tag — fall back to FF-based mapping (placeholder)
-        self._map_unknown(cell)
+        # No BRAM/DPR tag — FF-based memory (register file).
+        # Compile write ports per element, then build read MUX tree.
+        depth = int(cell.params.get("depth", 0))
+        width = int(cell.params.get("width", 0))
+        if depth == 0 or width == 0:
+            self._map_unknown(cell)
+            return
+
+        # Gather write ports: classify as constant-addr or variable-addr.
+        const_writes: dict[int, list[tuple]] = {}  # {addr: [(wdata_bits, we_bits)]}
+        var_writes: list[tuple] = []  # [(waddr_bits, wdata_bits, we_bits)]
+
+        def _collect_write(wa_net, wd_net, we_net):
+            wa_bits = self._get_bits(wa_net)
+            wd_bits = self._get_bits(wd_net)
+            we_bits = self._get_bits(we_net) if we_net else ["0"]
+            # Check if address is a constant
+            if all(isinstance(b, str) and b in ("0", "1") for b in wa_bits):
+                addr_val = sum((1 if b == "1" else 0) << i for i, b in enumerate(wa_bits))
+                const_writes.setdefault(addr_val, []).append((wd_bits, we_bits))
+            else:
+                var_writes.append((wa_bits, wd_bits, we_bits))
+
+        wa0 = cell.inputs.get("WADDR")
+        wd0 = cell.inputs.get("WDATA")
+        we0 = cell.inputs.get("WE")
+        if wa0 and wd0 and we0:
+            _collect_write(wa0, wd0, we0)
+        for idx in range(500):
+            wa = cell.inputs.get(f"WADDR{idx}")
+            wd = cell.inputs.get(f"WDATA{idx}")
+            if not wa or not wd:
+                if idx > 0:
+                    break
+                continue
+            we_key = f"WE{idx}" if f"WE{idx}" in cell.inputs else "WE"
+            we = cell.inputs.get(we_key)
+            _collect_write(wa, wd, we)
+
+        clk_net = cell.inputs.get("CLK")
+        clk_bits = self._get_bits(clk_net) if clk_net else ["0"]
+
+        # Build per-element D inputs from write ports.
+        # Constant-address writes target specific elements directly.
+        # Variable-address writes add per-element MUX gated by address match.
+        word_q: list[list[int | str]] = []
+        for w_idx in range(depth):
+            q_bits: list[int | str] = []
+            for b_idx in range(width):
+                q_bit = self.nl.alloc_bit()
+                current_d = q_bit  # hold = Q feedback
+
+                # Apply constant-address writes targeting this element
+                for wd_bits, we_bits in const_writes.get(w_idx, []):
+                    we_bit = we_bits[0] if we_bits else "0"
+                    wd_bit = wd_bits[b_idx] if b_idx < len(wd_bits) else "0"
+                    mux_out = self.nl.alloc_bit()
+                    lut = self.nl.add_cell(self._fresh_name("mmux"), "LUT4")
+                    lut.parameters["INIT"] = "1100101011001010"
+                    lut.ports["A"] = [we_bit]
+                    lut.ports["B"] = [current_d]
+                    lut.ports["C"] = [wd_bit]
+                    lut.ports["D"] = ["0"]
+                    lut.ports["Z"] = [mux_out]
+                    current_d = mux_out
+
+                # Apply variable-address writes (need addr comparator)
+                for wa_bits, wd_bits, we_bits in var_writes:
+                    # Build (WE && WADDR==w_idx) using a single LUT4 per addr bit
+                    addr_w = len(wa_bits)
+                    match_bits: list[int | str] = []
+                    for a_i in range(addr_w):
+                        expected = (w_idx >> a_i) & 1
+                        ab = wa_bits[a_i] if a_i < len(wa_bits) else "0"
+                        if expected == 1:
+                            match_bits.append(ab)
+                        else:
+                            inv = self.nl.alloc_bit()
+                            lut = self.nl.add_cell(self._fresh_name("minv"), "LUT4")
+                            lut.parameters["INIT"] = "0101010101010101"
+                            lut.ports["A"] = [ab]
+                            lut.ports["B"] = ["0"]
+                            lut.ports["C"] = ["0"]
+                            lut.ports["D"] = ["0"]
+                            lut.ports["Z"] = [inv]
+                            match_bits.append(inv)
+                    we_bit = we_bits[0] if we_bits else "0"
+                    all_match = [we_bit] + match_bits
+                    while len(all_match) > 1:
+                        nxt: list[int | str] = []
+                        for i in range(0, len(all_match), 4):
+                            chunk = all_match[i:i+4]
+                            if len(chunk) == 1:
+                                nxt.append(chunk[0])
+                            else:
+                                out = self.nl.alloc_bit()
+                                lut = self.nl.add_cell(self._fresh_name("mand"), "LUT4")
+                                inits = {2: "1000100010001000", 3: "1000000010000000",
+                                         4: "1000000000000000"}
+                                lut.parameters["INIT"] = inits[len(chunk)]
+                                for ci, cb in enumerate(chunk):
+                                    lut.ports["ABCD"[ci]] = [cb]
+                                for ci in range(len(chunk), 4):
+                                    lut.ports["ABCD"[ci]] = ["1"]
+                                lut.ports["Z"] = [out]
+                                nxt.append(out)
+                        all_match = nxt
+                    wen = all_match[0]
+                    wd_bit = wd_bits[b_idx] if b_idx < len(wd_bits) else "0"
+                    mux_out = self.nl.alloc_bit()
+                    lut = self.nl.add_cell(self._fresh_name("mmux"), "LUT4")
+                    lut.parameters["INIT"] = "1100101011001010"
+                    lut.ports["A"] = [wen]
+                    lut.ports["B"] = [current_d]
+                    lut.ports["C"] = [wd_bit]
+                    lut.ports["D"] = ["0"]
+                    lut.ports["Z"] = [mux_out]
+                    current_d = mux_out
+
+                ff = self.nl.add_cell(self._fresh_name("mff"), "TRELLIS_FF")
+                ff.parameters["GSR"] = "DISABLED"
+                ff.parameters["CEMUX"] = "1 "
+                ff.parameters["CLKMUX"] = "CLK"
+                ff.parameters["LSRMUX"] = "LSR"
+                ff.parameters["REGSET"] = "RESET"
+                ff.parameters["SRMODE"] = "LSR_OVER_CE"
+                ff.ports["CLK"] = [clk_bits[0] if clk_bits else "0"]
+                ff.ports["DI"] = [current_d]
+                ff.ports["LSR"] = ["0"]
+                ff.ports["Q"] = [q_bit]
+                q_bits.append(q_bit)
+            word_q.append(q_bits)
+
+        # Read logic: binary MUX tree keyed on RADDR
+        for rdata_net in cell.outputs.values():
+            rdata_bits = self._get_bits(rdata_net)
+            rdata_name = None
+            for oname, onet in cell.outputs.items():
+                if onet is rdata_net:
+                    rdata_name = oname
+                    break
+            raddr_key = rdata_name.replace("RDATA", "RADDR") if rdata_name else "RADDR"
+            raddr_net_ir = cell.inputs.get(raddr_key)
+            if raddr_net_ir is None:
+                for rk in sorted(cell.inputs):
+                    if rk.startswith("RADDR"):
+                        raddr_net_ir = cell.inputs[rk]
+                        break
+            raddr_bits = self._get_bits(raddr_net_ir) if raddr_net_ir else []
+            for b_idx in range(width):
+                if b_idx >= len(rdata_bits):
+                    break
+                candidates = [word_q[w][b_idx] if w < len(word_q) else "0" for w in range(depth)]
+                level = candidates
+                for a_i in range(len(raddr_bits)):
+                    if len(level) <= 1:
+                        break
+                    nxt: list[int | str] = []
+                    sel = raddr_bits[a_i] if a_i < len(raddr_bits) else "0"
+                    for j in range(0, len(level), 2):
+                        lo = level[j]
+                        hi = level[j+1] if j+1 < len(level) else lo
+                        if lo == hi:
+                            nxt.append(lo)
+                        else:
+                            mux_out = self.nl.alloc_bit()
+                            lut = self.nl.add_cell(self._fresh_name("mrd"), "LUT4")
+                            lut.parameters["INIT"] = "1100101011001010"
+                            lut.ports["A"] = [sel]
+                            lut.ports["B"] = [lo]
+                            lut.ports["C"] = [hi]
+                            lut.ports["D"] = ["0"]
+                            lut.ports["Z"] = [mux_out]
+                            nxt.append(mux_out)
+                    level = nxt
+                if level:
+                    self._set_bit(rdata_bits, b_idx, level[0])
 
     def _map_unknown(self, cell: Cell) -> None:
         """Emit a placeholder for unsupported operations."""
@@ -1872,5 +2048,14 @@ def map_to_ecp5(design: Design) -> ECP5Netlist:
                 d0 = cell.ports.get("D0", ["0"])[0]
                 if d0 == "1":
                     cell.ports["CIN"] = ["1"]
+
+    # Remove LUT4 cells with constant Z outputs — these are dead and
+    # would conflict with the JSON backend's GND/VCC tie cells.
+    # DISABLED: may remove needed cells during debugging
+    # dead_luts = [name for name, cell in netlist.cells.items()
+    #              if cell.cell_type == "LUT4"
+    #              and all(isinstance(b, str) for b in cell.ports.get("Z", []))]
+    # for name in dead_luts:
+    #     del netlist.cells[name]
 
     return netlist

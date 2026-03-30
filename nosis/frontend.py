@@ -724,6 +724,20 @@ class _Lowerer:
         arr_depth = arr_info[0] if arr_info else 0
         arr_elem_w = arr_info[1] if arr_info else 0
 
+        # Fallback: detect unpacked arrays from pyslang type info.
+        # Only use element-net path when there is NO MEMORY cell backing the array.
+        if arr_depth == 0 and mem_cell is None and value_sym is not None:
+            vtype = getattr(value_sym, "type", None)
+            if vtype is not None and getattr(vtype, "isUnpackedArray", False):
+                fr = getattr(vtype, "fixedRange", None)
+                et = getattr(vtype, "elementType", None)
+                if fr is not None and et is not None:
+                    arr_depth = int(getattr(fr, "width", 0))
+                    arr_elem_w = int(getattr(et, "bitWidth", 0))
+                    if arr_depth > 0 and arr_elem_w > 0 and arr_depth <= 32:
+                        for i in range(arr_depth):
+                            self._get_or_create_net(f"{src_net_name}_{i}", arr_elem_w)
+
         if arr_depth > 0 and arr_elem_w > 0 and selector is not None:
             sel_const = getattr(selector, "constant", None)
             if sel_const is not None:
@@ -1408,6 +1422,35 @@ class _Lowerer:
                         hold = _running.get(base_net.name, base_net) if _running else base_net
                         mux_out = self._expand_dynamic_bitselect_write(base_net, idx_net, rhs, hold)
                         results[base_net.name] = mux_out
+                    elif self._is_unpacked_array_write(expr.left):
+                        arr_name, arr_depth, elem_w, selector = self._get_unpacked_array_write_info(expr.left)
+                        rhs = self.lower_expr(expr.right)
+                        sel_const = getattr(selector, "constant", None) if selector else None
+                        if sel_const is not None:
+                            idx_val = int(str(sel_const))
+                            elem_net = self._get_or_create_net(f"{arr_name}_{idx_val}", elem_w)
+                            results[elem_net.name] = rhs
+                        else:
+                            idx_net = self.lower_expr(selector)
+                            for i in range(arr_depth):
+                                elem_net = self._get_or_create_net(f"{arr_name}_{i}", elem_w)
+                                hold = _running.get(elem_net.name, elem_net) if _running else elem_net
+                                eq_out = self._fresh_net("arrweq", 1)
+                                eq_cell = self._fresh_cell("arrweq", PrimOp.EQ)
+                                ci = self._fresh_net(f"arrwidx_{i}", idx_net.width)
+                                cc = self._fresh_cell(f"arrwidx_{i}", PrimOp.CONST,
+                                                      value=i, width=idx_net.width)
+                                self.mod.connect(cc, "Y", ci, direction="output")
+                                self.mod.connect(eq_cell, "A", idx_net)
+                                self.mod.connect(eq_cell, "B", ci)
+                                self.mod.connect(eq_cell, "Y", eq_out, direction="output")
+                                mux_out = self._fresh_net("arrwmux", elem_w)
+                                mux = self._fresh_cell("arrwmux", PrimOp.MUX)
+                                self.mod.connect(mux, "S", eq_out)
+                                self.mod.connect(mux, "A", hold)
+                                self.mod.connect(mux, "B", rhs)
+                                self.mod.connect(mux, "Y", mux_out, direction="output")
+                                results[elem_net.name] = mux_out
                     else:
                         lhs = self.lower_expr(expr.left)
                         rhs = self.lower_expr(expr.right)
@@ -1627,7 +1670,7 @@ class _Lowerer:
         return results
 
     def _is_dynamic_bitselect_write(self, lhs_expr: Any) -> bool:
-        """Check if LHS is a dynamic bit-select (e.g., data[index])."""
+        """Check if LHS is a dynamic bit-select on a packed bitvector."""
         if str(lhs_expr.kind) != "ExpressionKind.ElementSelect":
             return False
         selector = lhs_expr.selector
@@ -1640,11 +1683,43 @@ class _Lowerer:
         value_sym = getattr(value_node, "symbol", None)
         if value_sym is None:
             return False
+        # Exclude unpacked arrays (handled separately)
+        vtype = getattr(value_sym, "type", None)
+        if vtype is not None and getattr(vtype, "isUnpackedArray", False):
+            return False
         mem_name = getattr(value_sym, "name", "")
         for cell in self.mod.cells.values():
             if cell.op == PrimOp.MEMORY and cell.params.get("mem_name", "").endswith(mem_name):
                 return False
         return True
+
+    def _is_unpacked_array_write(self, lhs_expr: Any) -> bool:
+        """Check if LHS is an ElementSelect on an unpacked array."""
+        if str(lhs_expr.kind) != "ExpressionKind.ElementSelect":
+            return False
+        value_node = lhs_expr.value
+        value_sym = getattr(value_node, "symbol", None)
+        if value_sym is None:
+            return False
+        vtype = getattr(value_sym, "type", None)
+        if vtype is None or not getattr(vtype, "isUnpackedArray", False):
+            return False
+        fr = getattr(vtype, "fixedRange", None)
+        et = getattr(vtype, "elementType", None)
+        if fr is None or et is None:
+            return False
+        depth = int(getattr(fr, "width", 0))
+        elem_w = int(getattr(et, "bitWidth", 0))
+        return depth > 0 and elem_w > 0 and depth <= 32
+
+    def _get_unpacked_array_write_info(self, lhs_expr: Any) -> tuple[str, int, int, Any]:
+        """Extract array name, depth, element width, and selector from an unpacked array write."""
+        value_sym = getattr(lhs_expr.value, "symbol", None)
+        arr_name = getattr(value_sym, "name", "")
+        vtype = value_sym.type
+        depth = int(vtype.fixedRange.width)
+        elem_w = int(vtype.elementType.bitWidth)
+        return arr_name, depth, elem_w, lhs_expr.selector
 
     def _get_bitselect_base_and_index(self, lhs_expr: Any) -> tuple[Net, Net]:
         """Extract the base bitvector net and index net from a dynamic bit-select."""
@@ -2328,13 +2403,21 @@ class _Lowerer:
                     right = getattr(rng, "right", 0)
                     depth = abs(right - left) + 1
                     if depth > 0 and elem_w > 0:
-                        rdata_net = sub._fresh_net(f"mem_{node.name}_rdata", elem_w)
-                        mem_cell = sub._fresh_cell(
-                            f"mem_{node.name}", PrimOp.MEMORY,
-                            depth=depth, width=elem_w, mem_name=f"{prefix}{node.name}",
-                        )
-                        self.mod.connect(mem_cell, "RDATA", rdata_net, direction="output")
-                        sub._get_or_create_net(node.name, elem_w)
+                        if depth <= 32:
+                            for i in range(depth):
+                                sub._get_or_create_net(f"{node.name}_{i}", elem_w)
+                            sub._get_or_create_net(node.name, elem_w)
+                            if not hasattr(sub, '_array_info'):
+                                sub._array_info = {}
+                            sub._array_info[node.name] = (depth, elem_w)
+                        else:
+                            rdata_net = sub._fresh_net(f"mem_{node.name}_rdata", elem_w)
+                            mem_cell = sub._fresh_cell(
+                                f"mem_{node.name}", PrimOp.MEMORY,
+                                depth=depth, width=elem_w, mem_name=f"{prefix}{node.name}",
+                            )
+                            self.mod.connect(mem_cell, "RDATA", rdata_net, direction="output")
+                            sub._get_or_create_net(node.name, elem_w)
                 else:
                     sub._get_or_create_net(node.name, w)
             elif kind == "SymbolKind.Net":

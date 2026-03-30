@@ -46,6 +46,43 @@ class _ECP5Mapper:
         """Get all bit references from an IR net."""
         return self._get_net(ir_net).bits
 
+    @staticmethod
+    def _topo_sort(mod: Module) -> list:
+        """Sort IR cells so producers come before consumers."""
+        from nosis.ir import PrimOp
+        net_driver: dict[str, str] = {}
+        for cell in mod.cells.values():
+            for net in cell.outputs.values():
+                net_driver[net.name] = cell.name
+
+        deps: dict[str, set[str]] = {c.name: set() for c in mod.cells.values()}
+        for cell in mod.cells.values():
+            for net in cell.inputs.values():
+                drv = net_driver.get(net.name)
+                if drv and drv != cell.name:
+                    deps[cell.name].add(drv)
+
+        order = []
+        visited: set[str] = set()
+        temp: set[str] = set()
+
+        def visit(name: str) -> None:
+            if name in visited:
+                return
+            if name in temp:
+                return  # cycle — break it
+            temp.add(name)
+            for dep in sorted(deps.get(name, ())):
+                visit(dep)
+            temp.discard(name)
+            visited.add(name)
+            order.append(name)
+
+        for name in sorted(mod.cells):
+            visit(name)
+
+        return [mod.cells[n] for n in order if n in mod.cells]
+
     def map_module(self, mod: Module) -> None:
         """Map all cells in an IR module to ECP5 cells."""
         self._ir_mod = mod
@@ -1718,5 +1755,53 @@ def map_to_ecp5(design: Design) -> ECP5Netlist:
             for i, b in enumerate(net.bits):
                 if b in alias:
                     net.bits[i] = alias[b]
+
+    # Fix remaining orphaned bits by building a reverse lookup:
+    # for each ECP5Net, map its bit positions to the actual driven bits.
+    driven_bits: set[int] = set()
+    for cell in netlist.cells.values():
+        for port, bits in cell.ports.items():
+            if port in _OUT_PORTS:
+                for b in bits:
+                    if isinstance(b, int):
+                        driven_bits.add(b)
+    for pi in netlist.ports.values():
+        if pi.get("direction") == "input":
+            for b in pi.get("bits", []):
+                if isinstance(b, int):
+                    driven_bits.add(b)
+
+    # Build: for each net, record which bit positions map to which driven bits
+    net_bit_map: dict[str, dict[int, int | str]] = {}
+    for name, net in netlist.nets.items():
+        m = {}
+        for i, b in enumerate(net.bits):
+            m[i] = b
+        net_bit_map[name] = m
+
+    # For each orphaned input bit, find the net it belongs to and
+    # get the current driven bit at that position.
+    ir_net_bits: dict[int, tuple[str, int]] = {}
+    for name, ecp5_net in mapper._net_map.items():
+        for i, b in enumerate(ecp5_net.bits):
+            if isinstance(b, int) and b >= 2:
+                ir_net_bits[b] = (name, i)
+
+    fixed = 0
+    for cell in netlist.cells.values():
+        for port, bits in cell.ports.items():
+            if port in _OUT_PORTS:
+                continue
+            for i, b in enumerate(bits):
+                if isinstance(b, int) and b >= 2 and b not in driven_bits:
+                    info = ir_net_bits.get(b)
+                    if info:
+                        net_name, bit_idx = info
+                        ecp5_net = netlist.nets.get(net_name)
+                        if ecp5_net and bit_idx < len(ecp5_net.bits):
+                            actual = ecp5_net.bits[bit_idx]
+                            if actual != b and (isinstance(actual, str) or actual in driven_bits):
+                                bits[i] = actual
+                                fixed += 1
 
     return netlist

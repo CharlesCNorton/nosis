@@ -656,19 +656,22 @@ def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     # leaving PFUMX with non-LUT inputs that nextpnr rejects.
     # TODO: run PFUMX after chain merge with post-merge pattern detection.
     pf = 0
-    s1 = 0  # simplify_constant_luts disabled during debugging
-    dd = 0  # deduplicate_luts disabled during debugging
-    ab = 0  # absorb_buffers disabled during debugging
-    dl = 0  # _eliminate_dead_luts disabled during debugging
+    s1 = simplify_constant_luts(netlist)
+    dd = deduplicate_luts(netlist)
+    ab = absorb_buffers(netlist)
+    dl = _eliminate_dead_luts(netlist)
     mc = 0
-    # Chain merge disabled: truth table composition produces incorrect logic
-    # for some LUT pairs, breaking the echo design.
-    s2 = 0
-    dl2 = 0
-    s3 = 0
-    bl = 0
-    # Item 4: shared-input LUT pairing
-    si = 0  # merge_shared_input_luts disabled: deletes cells without preserving outputs
+    for _ in range(5):
+        m = merge_lut_chains(netlist)
+        if m == 0:
+            break
+        mc += m
+        simplify_constant_luts(netlist)
+    s2 = simplify_constant_luts(netlist)
+    dl2 = _eliminate_dead_luts(netlist)
+    s3 = simplify_constant_luts(netlist)
+    bl = break_comb_loops(netlist)
+    si = 0  # merge_shared_input_luts disabled
     return {
         "const_lut_simplify": s1 + s2 + s3,
         "lut_dedup": dd,

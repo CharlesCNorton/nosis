@@ -1309,6 +1309,21 @@ class _ECP5Mapper:
             bram.ports["OCEB"] = ["1"]
             bram.ports["CEA"] = ["1"]
             bram.ports["CEB"] = ["1"]
+            # Wire extra RDATA outputs to same DOA bits
+            _extra_rdata = [
+                out for name, out in cell.outputs.items()
+                if name.startswith("RDATA") and out is not rdata_net
+            ]
+            for _extra in _extra_rdata:
+                _ebits = self._get_bits(_extra)
+                for i in range(min(len(_ebits), len(rdata_bits))):
+                    buf = self.nl.add_cell(self._fresh_name("bram_rd"), "LUT4")
+                    buf.parameters["INIT"] = "1010101010101010"
+                    buf.ports["A"] = [rdata_bits[i]]
+                    buf.ports["B"] = ["0"]
+                    buf.ports["C"] = ["0"]
+                    buf.ports["D"] = ["0"]
+                    buf.ports["Z"] = [_ebits[i]]
             return
 
         if bram_config == "DP16KD_TILED":
@@ -1363,6 +1378,14 @@ class _ECP5Mapper:
             we_bits = self._get_bits(we_net) if we_net else ["0"]
             clk_bits = self._get_bits(clk_net) if clk_net else ["0"]
             rdata_bits = self._get_bits(rdata_net) if rdata_net else []
+
+            # Collect ALL RDATA output nets — they all need to read from
+            # the same BRAM DOA. The first one gets the DOA bits directly;
+            # the rest get buffer LUTs connecting to the same bits.
+            _extra_rdata_nets = [
+                out for name, out in cell.outputs.items()
+                if name.startswith("RDATA") and out is not rdata_net
+            ]
 
             # For depth > 1: each depth tile gets separate output nets.
             # A MUX selects the correct tile based on high address bits.
@@ -1542,6 +1565,19 @@ class _ECP5Mapper:
                         lut.ports["C"] = ["0"]
                         lut.ports["D"] = ["0"]
                         lut.ports["Z"] = [rdata_bits[bit_idx]]
+
+            # Wire extra RDATA outputs to the same DOA bits via buffer LUTs.
+            # Multiple read ports all see the same BRAM data.
+            for _extra_net in _extra_rdata_nets:
+                _extra_bits = self._get_bits(_extra_net)
+                for i in range(min(len(_extra_bits), len(rdata_bits))):
+                    buf = self.nl.add_cell(self._fresh_name("bram_rd"), "LUT4")
+                    buf.parameters["INIT"] = "1010101010101010"  # pass-through
+                    buf.ports["A"] = [rdata_bits[i]]
+                    buf.ports["B"] = ["0"]
+                    buf.ports["C"] = ["0"]
+                    buf.ports["D"] = ["0"]
+                    buf.ports["Z"] = [_extra_bits[i]]
             return
 
         if bram_config in ("DPR16X4", "DPR16X4_TILED"):

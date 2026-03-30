@@ -1471,24 +1471,7 @@ class _Lowerer:
                         self.mod.connect(mux, "Y", mux_out, direction="output")
                         results[tgt_name] = mux_out
                     elif f_val:
-                        # Only false branch assigns — hold value when true.
-                        if allow_nb:
-                            _prev_f = (_running or {}).get(tgt_name)
-                            if _prev_f is not None and _prev_f.driver is not None and 'comb_' in _prev_f.driver.name:
-                                hold_net_f = _prev_f
-                            else:
-                                hold_net_f = tgt_net
-                        else:
-                            hold_net_f = self._fresh_net("bmux_dflt", tgt_net.width)
-                            hold_cell_f = self._fresh_cell("bmux_dflt", PrimOp.CONST, value=0, width=tgt_net.width)
-                            self.mod.connect(hold_cell_f, "Y", hold_net_f, direction="output")
-                        mux_out_f = self._fresh_net("bmux", tgt_net.width)
-                        mux_f = self._fresh_cell("bmux", PrimOp.MUX)
-                        self.mod.connect(mux_f, "S", cond_net)
-                        self.mod.connect(mux_f, "A", f_val)       # cond=0 → false branch
-                        self.mod.connect(mux_f, "B", hold_net_f)  # cond=1 → hold
-                        self.mod.connect(mux_f, "Y", mux_out_f, direction="output")
-                        results[tgt_name] = mux_out_f
+                        results[tgt_name] = f_val
 
         elif kind == "StatementKind.Case":
             inner_sel = self.lower_expr(stmt.expr)

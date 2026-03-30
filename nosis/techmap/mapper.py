@@ -276,7 +276,17 @@ class _ECP5Mapper:
                     bb.ports["T"] = tristate_bits[:1]
                     bb.ports["O"] = ecp5_net.bits[:1] if ecp5_net.bits else ["0"]
                     bb.ports["B"] = ecp5_net.bits[:1] if ecp5_net.bits else ["0"]
-            # INPUT cell wiring disabled during debugging
+            elif op == PrimOp.INPUT:
+                # Wire port bits to the INPUT cell's output net.
+                port_name = cell.params.get("port_name", "")
+                port_net_ir = self._ir_mod.ports.get(port_name) if self._ir_mod else None
+                if port_net_ir:
+                    port_ecp5 = self._get_net(port_net_ir)
+                    for out_net in cell.outputs.values():
+                        out_ecp5 = self._get_net(out_net)
+                        if out_ecp5 is not port_ecp5:
+                            for i in range(min(len(out_ecp5.bits), len(port_ecp5.bits))):
+                                self._set_bit(out_ecp5.bits, i, port_ecp5.bits[i])
             return  # handled as ports
 
         if op == PrimOp.CONST:

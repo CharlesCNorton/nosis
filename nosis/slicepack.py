@@ -665,8 +665,8 @@ def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     # for some LUT pairs, breaking the echo design.
     s2 = 0
     dl2 = 0
-    s3 = simplify_constant_luts(netlist)
-    bl = break_comb_loops(netlist)
+    s3 = 0
+    bl = 0
     # Item 4: shared-input LUT pairing
     si = 0  # merge_shared_input_luts disabled: deletes cells without preserving outputs
     return {

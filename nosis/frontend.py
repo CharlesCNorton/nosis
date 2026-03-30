@@ -2595,6 +2595,44 @@ def lower_to_ir(result: ParseResult, *, top: str | None = None) -> Design:
         for cname in to_remove:
             del mod.cells[cname]
 
+    # Remove duplicate MEMORY cells: same pattern as duplicate FFs.
+    # If both "SOC.progmem" (prefixed) and "progmem" (unprefixed)
+    # exist, keep the prefixed one and redirect the unprefixed one's
+    # outputs. This prevents double BRAM allocation.
+    for mod in design.modules.values():
+        prefixed_mems: dict[str, str] = {}  # base_name -> prefixed cell name
+        for cname, cell in mod.cells.items():
+            if cell.op == PrimOp.MEMORY:
+                mn = cell.params.get("mem_name", "")
+                if "." in mn:
+                    base = mn.rsplit(".", 1)[-1]
+                    prefixed_mems[base] = cname
+        if prefixed_mems:
+            to_remove_mem: list[str] = []
+            for cname, cell in mod.cells.items():
+                if cell.op != PrimOp.MEMORY:
+                    continue
+                mn = cell.params.get("mem_name", "")
+                if "." in mn or mn not in prefixed_mems:
+                    continue
+                # Unprefixed duplicate — redirect RDATA consumers
+                pref_cell = mod.cells[prefixed_mems[mn]]
+                for dup_port, dup_net in list(cell.outputs.items()):
+                    # Find matching port on prefixed cell
+                    pref_net = pref_cell.outputs.get(dup_port)
+                    if pref_net is None and pref_cell.outputs:
+                        pref_net = list(pref_cell.outputs.values())[0]
+                    if pref_net:
+                        for c2 in mod.cells.values():
+                            if c2 is cell:
+                                continue
+                            for pn, pnet in list(c2.inputs.items()):
+                                if pnet is dup_net or pnet.name == dup_net.name:
+                                    c2.inputs[pn] = pref_net
+                to_remove_mem.append(cname)
+            for cname in to_remove_mem:
+                del mod.cells[cname]
+
     # Global FF Q-redirect: ensure ALL cells that read a target net
     # (or any net whose driver was set to the same FF) use the Q output.
     # This catches hierarchy-prefixed copies (RX.clk, TX.clk) that

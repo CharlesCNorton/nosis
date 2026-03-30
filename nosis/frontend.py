@@ -1909,9 +1909,27 @@ class _Lowerer:
                 self.mod.connect(cell, "Y", net, direction="output")
 
         # Walk all members
+        _top_hier = getattr(body, "hierarchicalPath", "")
         def walk_member(node: Any) -> None:
             """Process a single member during AST walk."""
             kind = str(node.kind)
+            # Skip nodes from sub-instances (pyslang visit traverses hierarchy).
+            # Only process nodes whose path is the top module itself or
+            # a direct child (top.LEAF with no further dots).
+            node_path = getattr(node, "hierarchicalPath", "")
+            if node_path and _top_hier:
+                if node_path == _top_hier:
+                    pass  # same scope — process it
+                elif node_path.startswith(_top_hier + "."):
+                    leaf = node_path[len(_top_hier) + 1:]
+                    if "." in leaf:
+                        return  # nested in sub-instance
+                    # Direct child — only process Variables, Nets, Params, etc.
+                    # Skip ProceduralBlocks from sub-instances (handled by _lower_sub_instance)
+                    if kind == "SymbolKind.ProceduralBlock":
+                        return
+                else:
+                    return  # completely different scope
 
             if kind == "SymbolKind.Variable":
                 # Reject real/shortreal types
@@ -2513,19 +2531,14 @@ class _Lowerer:
             if is_input and not is_output:
                 if sub_net.driver is None and parent_net.driver is not None:
                     sub_net.driver = parent_net.driver
-                # Record the port alias for post-lowering Q-redirect
-                if '_port_aliases' not in self.mod.ports:
-                    # Abuse a temporary net to store the mapping (cleaned up later)
-                    pass
-                # Store in a module-level dict via a cell parameter hack
-                alias_key = f"__port_alias__{sub_net.name}"
-                # Store mapping as a net attribute
-                sub_net.attributes[alias_key] = parent_net.name
-                # Also redirect cells that read sub_net to read parent_net
-                if parent_net is not sub_net and parent_net.driver is not None:
+                # Redirect cells reading the sub-instance net to read parent net.
+                # Check both prefixed (TX.send) and unprefixed (send) names —
+                # the sub-instance body may create either.
+                unprefixed_net = self.mod.nets.get(port_name)
+                if parent_net is not sub_net:
                     for cell in self.mod.cells.values():
                         for pn, pnet in list(cell.inputs.items()):
-                            if pnet is sub_net:
+                            if pnet is sub_net or (unprefixed_net is not None and pnet is unprefixed_net):
                                 cell.inputs[pn] = parent_net
             elif is_output and not is_input:
                 if sub_net.driver is not None:

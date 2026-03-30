@@ -1788,12 +1788,8 @@ def map_to_ecp5(design: Design) -> ECP5Netlist:
 
     # For each orphaned input bit, find the net it belongs to and
     # get the current driven bit at that position.
-    ir_net_bits: dict[int, tuple[str, int]] = {}
-    for name, ecp5_net in mapper._net_map.items():
-        for i, b in enumerate(ecp5_net.bits):
-            if isinstance(b, int) and b >= 2:
-                ir_net_bits[b] = (name, i)
-
+    # Resolve orphaned bits using the original allocation record.
+    bit_origin = getattr(netlist, '_bit_origin', {})
     fixed = 0
     for cell in netlist.cells.values():
         for port, bits in cell.ports.items():
@@ -1801,13 +1797,13 @@ def map_to_ecp5(design: Design) -> ECP5Netlist:
                 continue
             for i, b in enumerate(bits):
                 if isinstance(b, int) and b >= 2 and b not in driven_bits:
-                    info = ir_net_bits.get(b)
-                    if info:
-                        net_name, bit_idx = info
+                    origin = bit_origin.get(b)
+                    if origin:
+                        net_name, bit_idx = origin
                         ecp5_net = netlist.nets.get(net_name)
                         if ecp5_net and bit_idx < len(ecp5_net.bits):
                             actual = ecp5_net.bits[bit_idx]
-                            if actual != b and (isinstance(actual, str) or actual in driven_bits):
+                            if actual != b:
                                 bits[i] = actual
                                 fixed += 1
 

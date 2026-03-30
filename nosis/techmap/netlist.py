@@ -54,7 +54,8 @@ class ECP5Netlist:
     cells: dict[str, ECP5Cell] = field(default_factory=dict)
     nets: dict[str, ECP5Net] = field(default_factory=dict)
     ports: dict[str, dict[str, Any]] = field(default_factory=dict)
-    _bit_counter: int = 2  # 0 and 1 are reserved for constant 0/1
+    _bit_counter: int = 2
+    _bit_origin: dict[int, tuple[str, int]] = field(default_factory=dict)
 
     def alloc_bit(self) -> int:
         """Allocate a fresh signal bit index. Bits 0/1 are reserved for constants."""
@@ -71,6 +72,8 @@ class ECP5Netlist:
         bits: list[int | str] = list(self.alloc_bits(width))
         net = ECP5Net(name=name, bits=bits)
         self.nets[name] = net
+        for i, b in enumerate(bits):
+            self._bit_origin[b] = (name, i)
         return net
 
     def add_cell(self, name: str, cell_type: str) -> ECP5Cell:

@@ -661,14 +661,10 @@ def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     ab = 0  # absorb_buffers disabled during debugging
     dl = 0  # _eliminate_dead_luts disabled during debugging
     mc = 0
-    for _ in range(5):
-        m = merge_lut_chains(netlist)
-        if m == 0:
-            break
-        mc += m
-        simplify_constant_luts(netlist)
-    s2 = simplify_constant_luts(netlist)
-    dl2 = _eliminate_dead_luts(netlist)
+    # Chain merge disabled: truth table composition produces incorrect logic
+    # for some LUT pairs, breaking the echo design.
+    s2 = 0
+    dl2 = 0
     s3 = simplify_constant_luts(netlist)
     bl = break_comb_loops(netlist)
     # Item 4: shared-input LUT pairing

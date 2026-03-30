@@ -1028,10 +1028,12 @@ class _Lowerer:
                     continue
 
                 ff_rst = reset_net
+                init_val = lhs_net.attributes.get("init_value")
                 ff = self._fresh_cell(
                     f"ff_{lhs_net.name}", PrimOp.FF,
                     ff_target=lhs_net.name,
                     async_reset=async_reset,
+                    **({"init_value": int(init_val)} if init_val is not None else {}),
                 )
                 self.mod.connect(ff, "D", rhs_net)
                 if clock_net:

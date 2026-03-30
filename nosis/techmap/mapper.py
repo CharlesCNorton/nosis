@@ -355,7 +355,12 @@ class _ECP5Mapper:
         lsr_bits = self._get_bits(lsr_net) if lsr_net else ["0"]
         ce_bits = self._get_bits(ce_net) if ce_net else None
 
+        # Check initial value from FF cell params (set during frontend lowering)
+        init_val = int(cell.params.get("init_value", 0))
+
         for i in range(min(width, len(d_bits), len(q_bits))):
+            # Per-bit REGSET: SET if that bit of init_value is 1
+            bit_init = (init_val >> i) & 1
             ff = self.nl.add_cell(self._fresh_name("tff"), "TRELLIS_FF")
             if cell.src:
                 ff.attributes["src"] = cell.src
@@ -364,7 +369,7 @@ class _ECP5Mapper:
             ff.parameters["CEMUX"] = "INV" if ce_invert else ("CE" if ce_bits else "1 ")
             ff.parameters["CLKMUX"] = "CLK"
             ff.parameters["LSRMUX"] = "LSR"
-            ff.parameters["REGSET"] = "RESET"
+            ff.parameters["REGSET"] = "SET" if bit_init else "RESET"
             ff.parameters["SRMODE"] = "ASYNC" if is_async else "LSR_OVER_CE"
             ff.ports["CLK"] = [clk_bits[0] if clk_bits else "0"]
             ff.ports["DI"] = [d_bits[i] if i < len(d_bits) else "0"]

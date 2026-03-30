@@ -176,8 +176,15 @@ class _ECP5Mapper:
                 for ff_name, sel, data, inv in entries:
                     self._ce_candidates[ff_name] = (sel, data, inv)
 
+        # Map CONST cells first so their bit values are available
+        # when other cells read B-operand bits for carry chains.
+        from nosis.ir import PrimOp as _P
         for cell in sorted(mod.cells.values(), key=lambda c: c.name):
-            self._map_cell(cell)
+            if cell.op == _P.CONST:
+                self._map_cell(cell)
+        for cell in sorted(mod.cells.values(), key=lambda c: c.name):
+            if cell.op != _P.CONST:
+                self._map_cell(cell)
 
         # Note: DCCA insertion disabled — nextpnr promotes fabric clocks
         # to the global clock network automatically for small designs.
@@ -1804,18 +1811,48 @@ def map_to_ecp5(design: Design) -> ECP5Netlist:
                                 bits[i] = actual
                                 fixed += 1
 
-    # Fix CCU2C CIN for ADD chains where D0="1" (constant +1 operand).
+    # Fix CCU2C D0/D1/CIN: resolve unresolved integer bits to their
+    # current values in the net bit lists.
+    all_bits: dict[int, int | str] = {}
+    for net in netlist.nets.values():
+        for b in net.bits:
+            if isinstance(b, int) and b >= 2:
+                pass  # signal bit - maps to itself
+            elif isinstance(b, str):
+                pass  # constant
+    # Build: original_allocated_bit -> current_net_value
+    # by scanning all nets for position mappings
+    for name, net in netlist.nets.items():
+        ecp5 = mapper._net_map.get(name)
+        if ecp5 is not net:
+            continue
+        for i, b in enumerate(net.bits):
+            all_bits[i] = b  # not useful without original
+
+    # Simpler: for each CCU2C D/A/B/C port with an undriven integer,
+    # check if it's an orphaned bit and resolve via ir_net_bits.
     for cell in netlist.cells.values():
         if cell.cell_type != "CCU2C":
             continue
+        for port in ("D0", "D1", "A0", "A1", "B0", "B1", "C0", "C1", "CIN"):
+            bits = cell.ports.get(port, [])
+            for i, b in enumerate(bits):
+                if isinstance(b, int) and b >= 2 and b not in driven_bits:
+                    info = ir_net_bits.get(b)
+                    if info:
+                        net_name, bit_idx = info
+                        ecp5_net = netlist.nets.get(net_name)
+                        if ecp5_net and bit_idx < len(ecp5_net.bits):
+                            actual = ecp5_net.bits[bit_idx]
+                            if actual != b:
+                                bits[i] = actual
+        # Fix CIN for first-in-chain ADD cells
         cin = cell.ports.get("CIN", ["0"])[0]
-        if cin != "0":
-            continue
-        init0 = cell.parameters.get("INIT0", "")
-        if init0 != "1001011010101010":
-            continue
-        d0 = cell.ports.get("D0", ["0"])[0]
-        if d0 == "1":
-            cell.ports["CIN"] = ["1"]
+        if cin == "0":
+            init0 = cell.parameters.get("INIT0", "")
+            if init0 == "1001011010101010":
+                d0 = cell.ports.get("D0", ["0"])[0]
+                if d0 == "1":
+                    cell.ports["CIN"] = ["1"]
 
     return netlist

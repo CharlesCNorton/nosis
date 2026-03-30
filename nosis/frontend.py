@@ -1554,7 +1554,7 @@ class _Lowerer:
                             continue
                         if tn not in inner_running:
                             if allow_nb:
-                                inner_running[tn] = (_running or {}).get(tn, tnet)
+                                inner_running[tn] = tnet
                             else:
                                 zn = self._fresh_net("bcase_dflt", tnet.width)
                                 zc = self._fresh_cell("bcase_dflt", PrimOp.CONST, value=0, width=tnet.width)

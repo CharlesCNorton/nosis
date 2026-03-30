@@ -131,9 +131,20 @@ class _ECP5Mapper:
                 for ff_name, sel, data, inv in entries:
                     self._ce_candidates[ff_name] = (sel, data, inv)
 
-        # Second pass: map each IR cell (sorted for determinism)
+        # Map CONST cells first, then all others, then re-run
+        # wiring cells (CONCAT/SLICE/ZEXT/SEXT/REPEAT) to propagate
+        # final constant bit values through the wiring graph.
+        _WIRING_OPS = {PrimOp.CONCAT, PrimOp.SLICE, PrimOp.ZEXT, PrimOp.SEXT, PrimOp.REPEAT}
         for cell in sorted(mod.cells.values(), key=lambda c: c.name):
-            self._map_cell(cell)
+            if cell.op == PrimOp.CONST:
+                self._map_cell(cell)
+        for cell in sorted(mod.cells.values(), key=lambda c: c.name):
+            if cell.op != PrimOp.CONST:
+                self._map_cell(cell)
+        # Re-propagate wiring after all constants are resolved
+        for cell in sorted(mod.cells.values(), key=lambda c: c.name):
+            if cell.op in _WIRING_OPS:
+                self._map_cell(cell)
 
         # Note: DCCA insertion disabled — nextpnr promotes fabric clocks
         # to the global clock network automatically for small designs.

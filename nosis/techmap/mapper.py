@@ -1095,18 +1095,22 @@ class _ECP5Mapper:
                     case_vals.append(None)
 
             if all_const and default_val is not None:
-                # Compute LUT4 INIT from the case table
+                is_onehot = (s_net.width == count)
                 init = 0
                 for idx in range(16):
                     s_val = idx & ((1 << s_net.width) - 1)
-                    # Check which case matches (priority from I0)
                     result = default_val
-                    for ci in range(count):
-                        if (s_val >> ci) & 1 and ci < len(case_vals):
-                            v = case_vals[ci]
-                            if v is not None:
-                                result = v
-                                break
+                    if is_onehot:
+                        for ci in range(count):
+                            if (s_val >> ci) & 1 and ci < len(case_vals):
+                                v = case_vals[ci]
+                                if v is not None:
+                                    result = v
+                                    break
+                    else:
+                        ci = s_val - 1
+                        if 0 <= ci < len(case_vals) and case_vals[ci] is not None:
+                            result = case_vals[ci]
                     if result:
                         init |= (1 << idx)
 
@@ -1145,15 +1149,24 @@ class _ECP5Mapper:
             if all_const:
                 out_bits = self._get_bits(out_net)
                 s_bits = self._get_bits(s_net)
+                # Detect encoding: one-hot if S width == count, binary otherwise
+                is_onehot = (s_net.width == count)
                 for bit_idx in range(width):
                     init = 0
                     for sel_val in range(16):
                         sv = sel_val & ((1 << s_net.width) - 1)
                         result = (default_val >> bit_idx) & 1
-                        for ci in range(count):
-                            if (sv >> ci) & 1 and ci < len(case_values):
+                        if is_onehot:
+                            for ci in range(count):
+                                if (sv >> ci) & 1 and ci < len(case_values):
+                                    result = (case_values[ci] >> bit_idx) & 1
+                                    break
+                        else:
+                            # Binary select: case I_i corresponds to select value (i+1)
+                            # (default A covers select value 0)
+                            ci = sv - 1
+                            if 0 <= ci < len(case_values):
                                 result = (case_values[ci] >> bit_idx) & 1
-                                break
                         if result:
                             init |= (1 << sel_val)
                     lut = self.nl.add_cell(self._fresh_name("pmux_wlut"), "LUT4")

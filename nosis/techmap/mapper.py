@@ -1804,4 +1804,18 @@ def map_to_ecp5(design: Design) -> ECP5Netlist:
                                 bits[i] = actual
                                 fixed += 1
 
+    # Fix CCU2C CIN for ADD chains where D0="1" (constant +1 operand).
+    for cell in netlist.cells.values():
+        if cell.cell_type != "CCU2C":
+            continue
+        cin = cell.ports.get("CIN", ["0"])[0]
+        if cin != "0":
+            continue
+        init0 = cell.parameters.get("INIT0", "")
+        if init0 != "1001011010101010":
+            continue
+        d0 = cell.ports.get("D0", ["0"])[0]
+        if d0 == "1":
+            cell.ports["CIN"] = ["1"]
+
     return netlist

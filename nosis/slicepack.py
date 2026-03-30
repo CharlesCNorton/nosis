@@ -550,8 +550,111 @@ def merge_shared_input_luts(netlist: ECP5Netlist) -> int:
     return merged
 
 
+def pack_pfumx(netlist: ECP5Netlist) -> int:
+    """Replace MUX-of-two-LUTs patterns with PFUMX cells.
+
+    When a LUT4 computes MUX(sel, lut_a_out, lut_b_out) and both lut_a
+    and lut_b are single-fanout LUT4s, the three LUTs can be replaced
+    with two LUT4s (computing the A/B functions) plus one PFUMX (the
+    5th-input MUX). This saves one LUT4 per pattern.
+
+    ECP5 PFUMX: ALUT (from F0) and BLUT (from F1) are muxed by PFUMX
+    input C0, producing OFX0. The two LUTs and PFUMX share a slice.
+    """
+    # Build bit → source LUT4 map and fanout count
+    bit_to_lut: dict[int, str] = {}
+    bit_fanout: dict[int, int] = {}
+    for name, cell in netlist.cells.items():
+        if cell.cell_type != "LUT4":
+            continue
+        z = cell.ports.get("Z", [])
+        if z and isinstance(z[0], int) and z[0] >= 2:
+            bit_to_lut[z[0]] = name
+    for cell in netlist.cells.values():
+        for pname, bits in cell.ports.items():
+            if pname in ("Z", "Q", "COUT", "S0", "S1", "OFX0", "F0", "F1"):
+                continue  # output ports
+            for b in bits:
+                if isinstance(b, int) and b >= 2:
+                    bit_fanout[b] = bit_fanout.get(b, 0) + 1
+
+    packed = 0
+    used: set[str] = set()
+
+    for name, cell in list(netlist.cells.items()):
+        if cell.cell_type != "LUT4" or name in used:
+            continue
+        init = _get_init(cell)
+        if init is None:
+            continue
+
+        # Detect MUX pattern: INIT where one input selects between two others.
+        # The canonical MUX LUT: sel=A, false=B, true=C → INIT=0xCACA
+        # or sel=A, false=C, true=B → INIT=0xACAC
+        # Check if the function depends on exactly 3 inputs and one is a MUX select.
+        z = cell.ports.get("Z", [])
+        if not z or not isinstance(z[0], int):
+            continue
+
+        # Check if inputs B and C come from single-fanout LUT4s
+        b_bits = cell.ports.get("B", ["0"])
+        c_bits = cell.ports.get("C", ["0"])
+        a_bits = cell.ports.get("A", ["0"])
+
+        b_bit = b_bits[0] if b_bits else "0"
+        c_bit = c_bits[0] if c_bits else "0"
+        a_bit = a_bits[0] if a_bits else "0"
+
+        # Need: B and C come from LUT4 outputs, A is any signal
+        if not (isinstance(b_bit, int) and b_bit >= 2 and
+                isinstance(c_bit, int) and c_bit >= 2):
+            continue
+
+        # Check INIT is a MUX: for all (D,C,B,A), result = C if A else B
+        is_mux = True
+        for i in range(16):
+            a = (i >> 0) & 1
+            b = (i >> 1) & 1
+            c = (i >> 2) & 1
+            expected = c if a else b
+            if ((init >> i) & 1) != expected:
+                is_mux = False
+                break
+
+        if not is_mux:
+            continue
+
+        # B and C must come from single-fanout LUT4s
+        b_src = bit_to_lut.get(b_bit)
+        c_src = bit_to_lut.get(c_bit)
+        if not b_src or not c_src or b_src in used or c_src in used:
+            continue
+        if bit_fanout.get(b_bit, 0) != 1 or bit_fanout.get(c_bit, 0) != 1:
+            continue
+
+        # Pack: keep b_src and c_src as LUT4s, replace the MUX LUT with PFUMX
+        pfumx = netlist.add_cell(f"$pfumx_{packed}", "PFUMX")
+        pfumx.ports["ALUT"] = [b_bit]   # F0 output (false path)
+        pfumx.ports["BLUT"] = [c_bit]   # F1 output (true path)
+        pfumx.ports["C0"] = [a_bit]     # select
+        pfumx.ports["Z"] = z            # output
+
+        # Remove the MUX LUT
+        used.add(name)
+        packed += 1
+
+    for name in used:
+        if name in netlist.cells:
+            del netlist.cells[name]
+
+    return packed
+
+
 def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     """Run all LUT optimization passes. Returns counts."""
+    # PFUMX packing FIRST — catch MUX patterns before simplification
+    # transforms their INIT values
+    pf = pack_pfumx(netlist)
     s1 = simplify_constant_luts(netlist)
     dd = deduplicate_luts(netlist)
     ab = absorb_buffers(netlist)
@@ -576,5 +679,6 @@ def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
         "dead_lut": dl + dl2,
         "chain_merge": mc,
         "loops_broken": bl,
+        "pfumx_pack": pf,
         "shared_input_merge": si,
     }

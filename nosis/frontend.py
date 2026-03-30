@@ -1432,7 +1432,7 @@ class _Lowerer:
                 false_map = self._collect_blocking_with_muxes(stmt.ifFalse, allow_nb=allow_nb, _running=_running) if stmt.ifFalse else {}
                 if stmt.ifFalse:
                     self._condition_stack.pop()
-                all_targets = set(true_map) | set(false_map)
+                all_targets = sorted(set(true_map) | set(false_map))
                 for tgt_name in all_targets:
                     tgt_net = self.mod.nets.get(tgt_name)
                     if tgt_net is None:
@@ -1487,7 +1487,7 @@ class _Lowerer:
                     self.mod.connect(ieqc, "A", inner_sel)
                     self.mod.connect(ieqc, "B", iv)
                     self.mod.connect(ieqc, "Y", ieq, direction="output")
-                    for tn, rv in inner_map.items():
+                    for tn, rv in sorted(inner_map.items()):
                         tnet = self.mod.nets.get(tn)
                         if tnet is None:
                             continue
@@ -1703,7 +1703,7 @@ class _Lowerer:
             true_map = self._collect_blocking_with_muxes(stmt.ifTrue)
             false_map = self._collect_blocking_with_muxes(stmt.ifFalse) if stmt.ifFalse else {}
 
-            all_targets = set(true_map) | set(false_map)
+            all_targets = sorted(set(true_map) | set(false_map))
             for tgt_name in all_targets:
                 tgt_net = self.mod.nets.get(tgt_name)
                 if tgt_net is None:

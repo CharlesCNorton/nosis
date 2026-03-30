@@ -655,11 +655,11 @@ def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     # PFUMX packing disabled — feeder LUTs get absorbed by chain merge,
     # leaving PFUMX with non-LUT inputs that nextpnr rejects.
     # TODO: run PFUMX after chain merge with post-merge pattern detection.
-    pf = 0  # pack_pfumx(netlist)
-    s1 = simplify_constant_luts(netlist)
-    dd = deduplicate_luts(netlist)
-    ab = absorb_buffers(netlist)
-    dl = _eliminate_dead_luts(netlist)
+    pf = 0
+    s1 = 0  # simplify_constant_luts disabled during debugging
+    dd = 0  # deduplicate_luts disabled during debugging
+    ab = 0  # absorb_buffers disabled during debugging
+    dl = 0  # _eliminate_dead_luts disabled during debugging
     mc = 0
     for _ in range(5):
         m = merge_lut_chains(netlist)

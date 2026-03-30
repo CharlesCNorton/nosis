@@ -11,8 +11,16 @@ class _ECP5Mapper:
     def __init__(self, netlist: ECP5Netlist) -> None:
         self.nl = netlist
         self._cell_counter = 0
+        self._bit_alias: dict[int, int | str] = {}
         self._net_map: dict[str, ECP5Net] = {}
         self._ir_mod: Module | None = None
+
+    def _set_bit(self, bits: list, idx: int, new_val: int | str) -> None:
+        """Set bits[idx] = new_val, recording alias if it replaces an allocated bit."""
+        old = bits[idx]
+        bits[idx] = new_val
+        if isinstance(old, int) and old >= 2 and old != new_val:
+            self._bit_alias[old] = new_val
 
     def _fresh_name(self, prefix: str) -> str:
         name = f"${prefix}_{self._cell_counter}"
@@ -131,20 +139,8 @@ class _ECP5Mapper:
                 for ff_name, sel, data, inv in entries:
                     self._ce_candidates[ff_name] = (sel, data, inv)
 
-        # Map CONST cells first, then all others, then re-run
-        # wiring cells (CONCAT/SLICE/ZEXT/SEXT/REPEAT) to propagate
-        # final constant bit values through the wiring graph.
-        _WIRING_OPS = {PrimOp.CONCAT, PrimOp.SLICE, PrimOp.ZEXT, PrimOp.SEXT, PrimOp.REPEAT}
         for cell in sorted(mod.cells.values(), key=lambda c: c.name):
-            if cell.op == PrimOp.CONST:
-                self._map_cell(cell)
-        for cell in sorted(mod.cells.values(), key=lambda c: c.name):
-            if cell.op != PrimOp.CONST:
-                self._map_cell(cell)
-        # Re-propagate wiring after all constants are resolved
-        for cell in sorted(mod.cells.values(), key=lambda c: c.name):
-            if cell.op in _WIRING_OPS:
-                self._map_cell(cell)
+            self._map_cell(cell)
 
         # Note: DCCA insertion disabled — nextpnr promotes fabric clocks
         # to the global clock network automatically for small designs.
@@ -279,9 +275,9 @@ class _ECP5Mapper:
         width = int(cell.params.get("width", 1))
         for port_name, out_net in cell.outputs.items():
             ecp5_net = self._get_net(out_net)
-            # Override bits with constant values (in-place to preserve port refs)
             new_bits = _const_bits(value, width)
-            ecp5_net.bits[:] = new_bits[:len(ecp5_net.bits)]
+            for i in range(min(len(ecp5_net.bits), len(new_bits))):
+                self._set_bit(ecp5_net.bits, i, new_bits[i])
 
     def _map_ff(self, cell: Cell) -> None:
         """Map an IR FF to TRELLIS_FF cells (one per bit)."""
@@ -424,13 +420,10 @@ class _ECP5Mapper:
 
         # Wire result to output bit
         if out_bits and current:
-            # Replace the output bit in the ECP5Net so all future
-            # references to this net's bit 0 get the AND tree result.
-            out_bits[0] = current[0]
-            # Also directly set on the ECP5Net object
+            self._set_bit(out_bits, 0, current[0])
             ecp5_out = self._get_net(out_net)
             if ecp5_out.bits:
-                ecp5_out.bits[0] = current[0]
+                self._set_bit(ecp5_out.bits, 0, current[0])
 
     def _map_lut(self, cell: Cell) -> None:
         """Map a logic operation to LUT4 cells (one per output bit).
@@ -735,11 +728,11 @@ class _ECP5Mapper:
                             # a / 2^n = a >> n (wiring only)
                             for i in range(out_net.width):
                                 src = i + shift
-                                out_ecp5.bits[i] = a_bits[src] if src < len(a_bits) else "0"
+                                self._set_bit(out_ecp5.bits, i, a_bits[src] if src < len(a_bits) else "0")
                         else:
                             # a % 2^n = a & (2^n - 1) (keep lower n bits)
                             for i in range(out_net.width):
-                                out_ecp5.bits[i] = a_bits[i] if i < shift and i < len(a_bits) else "0"
+                                self._set_bit(out_ecp5.bits, i, a_bits[i] if i < shift and i < len(a_bits) else "0")
                     return
 
             # Non-power-of-2 or variable divisor: cannot implement in LUTs
@@ -754,7 +747,7 @@ class _ECP5Mapper:
             if out_nets:
                 out_ecp5 = self._get_net(out_nets[0])
                 for i in range(out_nets[0].width):
-                    out_ecp5.bits[i] = "0"
+                    self._set_bit(out_ecp5.bits, i, "0")
             return
         self._map_lut(cell)
 
@@ -832,7 +825,7 @@ class _ECP5Mapper:
         # Wire final stage to output
         out_ecp5 = self._get_net(out_net)
         for i in range(min(width, len(current))):
-            out_ecp5.bits[i] = current[i]
+            self._set_bit(out_ecp5.bits, i, current[i])
 
     def _map_compare(self, cell: Cell) -> None:
         """Map comparison operations (LT, LE, GT, GE) to a bit-serial comparator.
@@ -859,9 +852,9 @@ class _ECP5Mapper:
             # Zero-width: comparison is always false (LT/GT) or true (LE/GE)
             out_ecp5 = self._get_net(out_net)
             if cell.op in (PrimOp.LE, PrimOp.GE):
-                out_ecp5.bits[0] = 1  # constant 1
+                self._set_bit(out_ecp5.bits, 0, 1)
             else:
-                out_ecp5.bits[0] = "0"
+                self._set_bit(out_ecp5.bits, 0, "0")
             return
 
         # Determine if we swap A/B (GT/GE are LT/LE with swapped operands)
@@ -945,16 +938,16 @@ class _ECP5Mapper:
             or_lut.ports["C"] = ["0"]
             or_lut.ports["D"] = ["0"]
             or_lut.ports["Z"] = [final_bit]
-            out_ecp5.bits[0] = final_bit
+            self._set_bit(out_ecp5.bits, 0, final_bit)
         else:
             # LT/GT: borrow chain output is already wired to out_net
             out_ecp5 = self._get_net(out_net)
-            out_ecp5.bits[0] = borrow
+            self._set_bit(out_ecp5.bits, 0, borrow)
 
         # Zero remaining output bits (comparison is 1-bit result)
         out_ecp5 = self._get_net(out_net)
         for i in range(1, out_net.width):
-            out_ecp5.bits[i] = "0"
+            self._set_bit(out_ecp5.bits, i, "0")
 
     def _map_concat(self, cell: Cell) -> None:
         """Map concatenation — pure wiring, no physical cells."""
@@ -974,10 +967,9 @@ class _ECP5Mapper:
             else:
                 gathered.append("0")
 
-        # Assign bits to output (truncate or pad)
         for i in range(len(out_ecp5.bits)):
             if i < len(gathered):
-                out_ecp5.bits[i] = gathered[i]
+                self._set_bit(out_ecp5.bits, i, gathered[i])
 
     def _map_slice(self, cell: Cell) -> None:
         """Map bit slice — pure wiring."""
@@ -993,7 +985,7 @@ class _ECP5Mapper:
         for i in range(min(width, len(out_ecp5.bits))):
             src_idx = offset + i
             if src_idx < len(a_bits):
-                out_ecp5.bits[i] = a_bits[src_idx]
+                self._set_bit(out_ecp5.bits, i, a_bits[src_idx])
 
     def _map_extend(self, cell: Cell) -> None:
         """Map zero/sign extension — wiring + constant padding."""
@@ -1006,11 +998,11 @@ class _ECP5Mapper:
         out_ecp5 = self._get_net(out_net)
         for i in range(len(out_ecp5.bits)):
             if i < len(a_bits):
-                out_ecp5.bits[i] = a_bits[i]
+                self._set_bit(out_ecp5.bits, i, a_bits[i])
             elif cell.op == PrimOp.SEXT and a_bits:
-                out_ecp5.bits[i] = a_bits[-1]  # sign bit
+                self._set_bit(out_ecp5.bits, i, a_bits[-1])
             else:
-                out_ecp5.bits[i] = "0"
+                self._set_bit(out_ecp5.bits, i, "0")
 
     def _map_pmux(self, cell: Cell) -> None:
         """Map parallel MUX to ECP5 LUTs.
@@ -1155,7 +1147,7 @@ class _ECP5Mapper:
             if not candidates:
                 if bit_idx < len(out_bits):
                     out_ecp5 = self._get_net(out_net)
-                    out_ecp5.bits[bit_idx] = default_bit
+                    self._set_bit(out_ecp5.bits, bit_idx, default_bit)
                 continue
 
             # Priority chain: start from default, each case overrides if selected
@@ -1176,7 +1168,7 @@ class _ECP5Mapper:
 
             if bit_idx < len(out_bits):
                 out_ecp5 = self._get_net(out_net)
-                out_ecp5.bits[bit_idx] = current
+                self._set_bit(out_ecp5.bits, bit_idx, current)
 
     def _map_repeat(self, cell: Cell) -> None:
         """Map repeat — wiring."""
@@ -1188,7 +1180,8 @@ class _ECP5Mapper:
         a_bits = self._get_bits(a_net)
         out_ecp5 = self._get_net(out_net)
         for i in range(len(out_ecp5.bits)):
-            out_ecp5.bits[i] = a_bits[i % len(a_bits)] if a_bits else "0"
+            new = a_bits[i % len(a_bits)] if a_bits else "0"
+            self._set_bit(out_ecp5.bits, i, new)
 
     def _map_memory(self, cell: Cell) -> None:
         """Map MEMORY cells to DP16KD when tagged by BRAM inference, else to FFs."""
@@ -1688,5 +1681,42 @@ def map_to_ecp5(design: Design) -> ECP5Netlist:
     netlist = ECP5Netlist(top=mod.name)
     mapper = _ECP5Mapper(netlist)
     mapper.map_module(mod)
-    _dead_cell_eliminate(netlist)
+
+    # Apply wiring aliases: wiring cells (CONCAT/SLICE/etc) overwrote
+    # ECP5Net.bits in-place, orphaning original allocated bit integers.
+    # Replace all orphaned references using the recorded alias map.
+    alias = mapper._bit_alias
+    # Resolve transitive aliases (A→B, B→C becomes A→C)
+    changed = True
+    while changed:
+        changed = False
+        for k, v in list(alias.items()):
+            if v in alias:
+                alias[k] = alias[v]
+                changed = True
+    _OUT_PORTS = {"Z", "Q", "S0", "S1", "COUT", "F", "F0", "F1", "OFX0", "OFX1",
+                  "PPOUT", "CO", "CDIVX", "DCSOUT", "CLKO"}
+    _OUT_PORTS.update(f"DOA{i}" for i in range(18))
+    _OUT_PORTS.update(f"DOB{i}" for i in range(18))
+    _OUT_PORTS.update(f"DO{i}" for i in range(4))
+    _OUT_PORTS.update(f"P{i}" for i in range(36))
+    _OUT_PORTS.update(f"R{i}" for i in range(54))
+    if alias:
+        for cell in netlist.cells.values():
+            for port, bits in cell.ports.items():
+                if port in _OUT_PORTS:
+                    continue
+                for i, b in enumerate(bits):
+                    if b in alias:
+                        bits[i] = alias[b]
+        for pi in netlist.ports.values():
+            bits = pi.get("bits", [])
+            for i, b in enumerate(bits):
+                if b in alias:
+                    bits[i] = alias[b]
+        for net in netlist.nets.values():
+            for i, b in enumerate(net.bits):
+                if b in alias:
+                    net.bits[i] = alias[b]
+
     return netlist

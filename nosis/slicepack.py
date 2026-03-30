@@ -652,9 +652,10 @@ def pack_pfumx(netlist: ECP5Netlist) -> int:
 
 def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     """Run all LUT optimization passes. Returns counts."""
-    # PFUMX packing FIRST — catch MUX patterns before simplification
-    # transforms their INIT values
-    pf = pack_pfumx(netlist)
+    # PFUMX packing disabled — feeder LUTs get absorbed by chain merge,
+    # leaving PFUMX with non-LUT inputs that nextpnr rejects.
+    # TODO: run PFUMX after chain merge with post-merge pattern detection.
+    pf = 0  # pack_pfumx(netlist)
     s1 = simplify_constant_luts(netlist)
     dd = deduplicate_luts(netlist)
     ab = absorb_buffers(netlist)

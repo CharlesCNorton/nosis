@@ -80,8 +80,9 @@ def infer_brams(mod: Module) -> int:
         # (depth <= 16) map to DP16KD instead if they meet the minimum
         # size, or fall through to FF-based mapping.
 
-        # Below 256 bits: leave as LUT-based FFs
-        if total_bits < 256:
+        import os
+        _bram_threshold = int(os.environ.get("NOSIS_BRAM_THRESHOLD", "256"))
+        if total_bits < _bram_threshold:
             continue
 
         # DP16KD with REGMODE_A="NOREG" provides read data within the

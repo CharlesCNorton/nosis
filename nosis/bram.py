@@ -25,21 +25,33 @@ def _compile_multi_write(mod: Module, cell) -> None:
     """Compile multiple WADDR/WDATA/WE ports into a single effective port.
 
     Multi-write MEMORY cells have separate (WADDR_i, WDATA_i, WE_i) for
-    each case branch write. DPR16X4 accepts only one write port. This
-    pass MUXes the addresses and data into one effective triple using
-    the per-write WE signals as select conditions.
+    each case branch write. DP16KD/DPR16X4 accept only one write port.
+    This pass MUXes the addresses and data into one effective triple
+    using the per-write WE signals as select conditions.
+
+    Port naming convention (from frontend.py):
+      WADDR  / WDATA  / WE1   — first write port
+      WADDR1 / WDATA1 / WE2   — second write port
+      WADDR2 / WDATA2 / WE3   — third write port
+      WE (bare)                — global OR of all per-port WEs
 
     Priority: later writes (higher index) override earlier ones.
     """
-    # Collect all write ports
+    # Collect all write ports with correct WE key mapping
+    # WADDR → WE1, WADDR1 → WE2, WADDR2 → WE3, ...
     ports: list[tuple] = []  # [(waddr_key, wdata_key, we_key)]
-    for i in range(500):
-        wak = f"WADDR{i}" if i > 0 else "WADDR"
-        wdk = f"WDATA{i}" if i > 0 else "WDATA"
-        wek = f"WE{i}" if i > 0 else "WE"
+    max_idx = max((int(k[5:]) for k in cell.inputs
+                   if k.startswith("WADDR") and k[5:].isdigit()), default=0)
+    # First port: WADDR/WDATA/WE1
+    if "WADDR" in cell.inputs:
+        we_key = "WE1" if "WE1" in cell.inputs else "WE"
+        ports.append(("WADDR", "WDATA", we_key))
+    # Subsequent ports: WADDR1/WDATA1/WE2, WADDR2/WDATA2/WE3, ...
+    for i in range(1, max_idx + 1):
+        wak = f"WADDR{i}"
+        wdk = f"WDATA{i}"
+        wek = f"WE{i + 1}" if f"WE{i + 1}" in cell.inputs else f"WE{i}"
         if wak not in cell.inputs:
-            if i > 1:
-                break
             continue
         ports.append((wak, wdk, wek))
 
@@ -52,8 +64,6 @@ def _compile_multi_write(mod: Module, cell) -> None:
     first_wd = cell.inputs[ports[0][1]]
     cur_addr = first_wa
     cur_data = first_wd
-
-    from nosis.ir import Net
 
     for wak, wdk, wek in ports[1:]:
         wa = cell.inputs.get(wak)
@@ -81,18 +91,19 @@ def _compile_multi_write(mod: Module, cell) -> None:
         cur_addr = mux_addr
         cur_data = mux_data
 
-    # Replace all WADDR/WDATA ports with the single compiled port
+    # Remove individual ports, keep global OR at "WE"
     for wak, wdk, wek in ports:
         if wak in cell.inputs:
             del cell.inputs[wak]
         if wdk in cell.inputs:
             del cell.inputs[wdk]
+        # Delete per-port WEs but keep global OR
         if wek in cell.inputs and wek != "WE":
             del cell.inputs[wek]
 
     cell.inputs["WADDR"] = cur_addr
     cell.inputs["WDATA"] = cur_data
-    # WE stays as the OR of all conditions (already computed)
+    # "WE" (global OR) stays — used as DPR16X4 WRE / DP16KD WE
 
 
 def _fits_dp16kd(depth: int, width: int) -> tuple[int, int] | None:
@@ -171,10 +182,25 @@ def infer_brams(mod: Module) -> int:
         # combinational read patterns like `assign data = mem[addr]`
         # as long as the address is stable when the clock edge fires.
 
-        # DP16KD has one write port — skip for multi-write arrays
+        # DP16KD has one write port.  Compile mutually exclusive writes.
+        # Skip arrays where MANY WEs are shared — those have simultaneous
+        # writes to different addresses (e.g. resp[0..2] in one case
+        # branch).  A few shared WEs (e.g. reset clearing two registers)
+        # are acceptable; the MUX compilation handles them correctly as
+        # long as the addresses are variable (not constant-indexed).
         waddr_count = sum(1 for k in cell.inputs if k.startswith("WADDR"))
         if waddr_count > 1:
-            continue  # fall through to FF-based mapping
+            from collections import Counter as _Ctr
+            we_counts = _Ctr(id(cell.inputs[k])
+                             for k in cell.inputs
+                             if k.startswith("WE") and k != "WE")
+            n_shared = sum(cnt for cnt in we_counts.values() if cnt > 1)
+            if n_shared > waddr_count // 4:
+                continue  # too many simultaneous writes — FF-based only
+            _compile_multi_write(mod, cell)
+            waddr_count = sum(1 for k in cell.inputs if k.startswith("WADDR"))
+        if waddr_count > 1:
+            continue
 
         fit = _fits_dp16kd(depth, width)
         if fit is not None:

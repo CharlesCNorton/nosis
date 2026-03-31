@@ -2500,17 +2500,21 @@ class _Lowerer:
                     right = getattr(rng, "right", 0)
                     depth = abs(right - left) + 1
                     if depth > 0 and elem_w > 0:
-                        # Sub-instance arrays: use MEMORY cells.
-                        # Small single-write arrays get DPR16X4 (cross-block safe).
-                        # Multi-write arrays fall through to FF-based mapping
-                        # which handles multiple simultaneous writes correctly.
-                        rdata_net = sub._fresh_net(f"mem_{node.name}_rdata", elem_w)
-                        mem_cell = sub._fresh_cell(
-                            f"mem_{node.name}", PrimOp.MEMORY,
-                            depth=depth, width=elem_w, mem_name=f"{prefix}{node.name}",
-                        )
-                        self.mod.connect(mem_cell, "RDATA", rdata_net, direction="output")
-                        sub._get_or_create_net(node.name, elem_w)
+                        if depth <= 32:
+                            for i in range(depth):
+                                sub._get_or_create_net(f"{node.name}_{i}", elem_w)
+                            sub._get_or_create_net(node.name, elem_w)
+                            if not hasattr(sub, '_array_info'):
+                                sub._array_info = {}
+                            sub._array_info[node.name] = (depth, elem_w)
+                        else:
+                            rdata_net = sub._fresh_net(f"mem_{node.name}_rdata", elem_w)
+                            mem_cell = sub._fresh_cell(
+                                f"mem_{node.name}", PrimOp.MEMORY,
+                                depth=depth, width=elem_w, mem_name=f"{prefix}{node.name}",
+                            )
+                            self.mod.connect(mem_cell, "RDATA", rdata_net, direction="output")
+                            sub._get_or_create_net(node.name, elem_w)
                 else:
                     sub._get_or_create_net(node.name, w)
             elif kind == "SymbolKind.Net":

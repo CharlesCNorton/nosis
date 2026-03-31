@@ -2658,14 +2658,11 @@ def lower_to_ir(result: ParseResult, *, top: str | None = None) -> Design:
                     cell.params["init_file"] = file_str
                     cell.params["init_format"] = fmt
 
-    # Remove duplicate FFs: sub-instance lowering with a prefix may
-    # also create unprefixed FFs for the same targets (from pyslang
-    # AST shadowing).  If both "TX.state" and "state" exist as FF
-    # targets, the unprefixed one is a duplicate — remove it.
-    # Also redirect any cells that consumed the duplicate's outputs
-    # to the prefixed FF's outputs, and repair net drivers.
+    # Remove duplicate FFs from pyslang AST shadowing.
+    # Only remove unprefixed FFs that have NO corresponding top-level
+    # variable (i.e., the unprefixed net was created by the scope leak,
+    # not by a legitimate top-level declaration).
     for mod in design.modules.values():
-        # Map: base_name -> prefixed FF cell name
         prefixed_ffs: dict[str, str] = {}
         for cname, cell in mod.cells.items():
             if cell.op == PrimOp.FF:
@@ -2682,7 +2679,14 @@ def lower_to_ir(result: ParseResult, *, top: str | None = None) -> Design:
             tgt = cell.params.get("ff_target", "")
             if "." in tgt or tgt not in prefixed_ffs:
                 continue
-            # This is a duplicate — redirect consumers to the prefixed FF's Q
+            # Check: does this FF have actual consumers? If so, it's
+            # a legitimate top-level FF, not a duplicate.
+            dup_q = list(cell.outputs.values())[0] if cell.outputs else None
+            if dup_q:
+                consumer_count = sum(1 for c2 in mod.cells.values() if c2 is not cell
+                                     for pn, pnet in c2.inputs.items() if pnet is dup_q)
+                if consumer_count > 0:
+                    continue  # has consumers — real FF, skip
             prefixed_cell = mod.cells[prefixed_ffs[tgt]]
             pref_q = list(prefixed_cell.outputs.values())[0] if prefixed_cell.outputs else None
             dup_q = list(cell.outputs.values())[0] if cell.outputs else None

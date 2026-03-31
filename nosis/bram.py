@@ -154,7 +154,7 @@ def infer_brams(mod: Module) -> int:
         # These fall through to FF-based mapping below.
         if depth <= 16:
             waddr_count = sum(1 for k in cell.inputs if k.startswith("WADDR"))
-            if waddr_count == 1:
+            if waddr_count <= 1:
                 tiles = (width + 3) // 4
                 cell.params["bram_config"] = "DPR16X4"
                 cell.params["bram_count"] = tiles

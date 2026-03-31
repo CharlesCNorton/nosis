@@ -2280,6 +2280,25 @@ class _Lowerer:
                 if tgt:
                     for o in cell.outputs.values():
                         _ff_q_map[tgt] = o
+        # Global Q-redirect: cells created by LATER always_ff blocks may
+        # reference element nets that were Q-redirected by EARLIER blocks.
+        # The per-block redirect only catches cells that existed at FF creation.
+        # This pass catches all remaining references.
+        if _ff_q_map:
+            _net_to_q: dict[int, "Net"] = {}  # net_id -> Q net
+            for tgt_name, q_net in _ff_q_map.items():
+                raw_net = self.mod.nets.get(tgt_name)
+                if raw_net and raw_net is not q_net:
+                    _net_to_q[id(raw_net)] = q_net
+            if _net_to_q:
+                for cell in self.mod.cells.values():
+                    if cell.op == PrimOp.FF:
+                        continue  # don't redirect FF's own references
+                    for pn, pnet in list(cell.inputs.items()):
+                        q = _net_to_q.get(id(pnet))
+                        if q is not None:
+                            cell.inputs[pn] = q
+
         # Patch cells in always_comb output cones that reference raw FF
         # target nets. Walk backward from each combinationally-redirected
         # target net to find all cells in its cone, then patch their

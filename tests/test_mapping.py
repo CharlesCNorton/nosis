@@ -665,7 +665,7 @@ def test_skip_tiny_array():
     mod.connect(cell, "RDATA", net, direction="output")
 
     tagged = infer_brams(mod)
-    assert tagged == 0  # 4 bits total, too small for any RAM
+    assert tagged == 1  # depth<=16 → DPR16X4
 
 
 # ---------------------------------------------------------------------------
@@ -681,21 +681,21 @@ def test_dpr16x4_disabled():
     mod.connect(mem, "RDATA", rdata, direction="output")
 
     tagged = infer_brams(mod)
-    # 16x4 = 64 bits < 256 threshold — should NOT be tagged for BRAM
-    assert tagged == 0
-    assert "bram_config" not in mem.params
+    # depth<=16 → DPR16X4 regardless of bit threshold
+    assert tagged == 1
+    assert mem.params.get("bram_config") == "DPR16X4"
 
 
 def test_small_array_ff_fallback():
-    """A 16x8 array (128 bits < 256) must fall through to FF-based mapping."""
+    """A 16x8 array (128 bits < 256) maps to DPR16X4."""
     mod = Module(name="dpr_wide")
     rdata = mod.add_net("rdata", 8)
     mem = mod.add_cell("mem0", PrimOp.MEMORY, depth=16, width=8, mem_name="wide_fifo")
     mod.connect(mem, "RDATA", rdata, direction="output")
 
     tagged = infer_brams(mod)
-    assert tagged == 0
-    assert "bram_config" not in mem.params
+    assert tagged == 1
+    assert mem.params.get("bram_config") == "DPR16X4"
 
 
 def test_memory_port_inference():

@@ -774,16 +774,19 @@ class _Lowerer:
             elem_w = int(mem_cell.params.get("width", w))
             sel_const = getattr(selector, "constant", None)
             if sel_const is not None:
+                # Constant-index read from MEMORY: wire constant RADDR
                 idx_val = int(str(sel_const))
-                src = self.lower_expr(expr.value)
-                out = self._fresh_net("esel", elem_w)
-                cell = self._fresh_cell("esel", PrimOp.SLICE,
-                                        offset=idx_val * elem_w, width=elem_w)
-                self.mod.connect(cell, "A", src)
-                self.mod.connect(cell, "Y", out, direction="output")
-                return out
+                depth = int(mem_cell.params.get("depth", 1))
+                addr_w = max(1, (depth - 1).bit_length())
+                const_addr = self._fresh_net(f"memrd_c{idx_val}_{mem_name}", addr_w)
+                const_cell = self._fresh_cell(f"memrd_c{idx_val}_{mem_name}",
+                                              PrimOp.CONST, value=idx_val, width=addr_w)
+                self.mod.connect(const_cell, "Y", const_addr, direction="output")
 
-            idx_net = self.lower_expr(selector)
+            else:
+                const_addr = None
+
+            idx_net = const_addr if const_addr is not None else self.lower_expr(selector)
             port_id = len([k for k in mem_cell.outputs if k.startswith("RDATA")])
             raddr_name = f"RADDR{port_id}" if port_id > 0 else "RADDR"
             rdata_name = f"RDATA{port_id}" if port_id > 0 else "RDATA"
@@ -1581,9 +1584,6 @@ class _Lowerer:
                 if case_eqs:
                     self._condition_stack.pop()
                 for ieq in case_eqs:
-                    self.mod.connect(ieqc, "A", inner_sel)
-                    self.mod.connect(ieqc, "B", iv)
-                    self.mod.connect(ieqc, "Y", ieq, direction="output")
                     for tn, rv in inner_map.items():
                         tnet = self.mod.nets.get(tn)
                         if tnet is None:
@@ -2056,30 +2056,19 @@ class _Lowerer:
                     right = getattr(rng, "right", 0)
                     depth = abs(right - left) + 1
                     if depth > 0 and elem_w > 0:
-                        if depth <= 32:
-                            # Small array: create individual nets per element.
-                            # Variable-indexed reads build a PMUX from these.
-                            # Per-element writes (case statements) naturally
-                            # target individual element nets.
-                            for i in range(depth):
-                                self._get_or_create_net(f"{node.name}_{i}", elem_w)
-                            # Also create the array name net (for fallback)
-                            self._get_or_create_net(node.name, elem_w)
-                            if not hasattr(self, '_array_info'):
-                                self._array_info: dict[str, tuple[int, int]] = {}
-                            self._array_info[node.name] = (depth, elem_w)
-                        else:
-                            # Large array: use MEMORY cell
-                            rdata_net = self._fresh_net(f"mem_{node.name}_rdata", elem_w)
-                            mem_cell = self._fresh_cell(
-                                f"mem_{node.name}",
-                                PrimOp.MEMORY,
-                                depth=depth,
-                                width=elem_w,
-                                mem_name=node.name,
-                            )
-                            self.mod.connect(mem_cell, "RDATA", rdata_net, direction="output")
-                            self._get_or_create_net(node.name, elem_w)
+                        # All unpacked arrays: use MEMORY cell.
+                        # BRAM inference routes depth<=16 to DPR16X4,
+                        # larger to DP16KD, and untagged to FF-based.
+                        rdata_net = self._fresh_net(f"mem_{node.name}_rdata", elem_w)
+                        mem_cell = self._fresh_cell(
+                            f"mem_{node.name}",
+                            PrimOp.MEMORY,
+                            depth=depth,
+                            width=elem_w,
+                            mem_name=node.name,
+                        )
+                        self.mod.connect(mem_cell, "RDATA", rdata_net, direction="output")
+                        self._get_or_create_net(node.name, elem_w)
                 else:
                     self._get_or_create_net(node.name, w)
                 if not is_array and node.initializer is not None:
@@ -2500,21 +2489,13 @@ class _Lowerer:
                     right = getattr(rng, "right", 0)
                     depth = abs(right - left) + 1
                     if depth > 0 and elem_w > 0:
-                        if depth <= 32:
-                            for i in range(depth):
-                                sub._get_or_create_net(f"{node.name}_{i}", elem_w)
-                            sub._get_or_create_net(node.name, elem_w)
-                            if not hasattr(sub, '_array_info'):
-                                sub._array_info = {}
-                            sub._array_info[node.name] = (depth, elem_w)
-                        else:
-                            rdata_net = sub._fresh_net(f"mem_{node.name}_rdata", elem_w)
-                            mem_cell = sub._fresh_cell(
-                                f"mem_{node.name}", PrimOp.MEMORY,
-                                depth=depth, width=elem_w, mem_name=f"{prefix}{node.name}",
-                            )
-                            self.mod.connect(mem_cell, "RDATA", rdata_net, direction="output")
-                            sub._get_or_create_net(node.name, elem_w)
+                        rdata_net = sub._fresh_net(f"mem_{node.name}_rdata", elem_w)
+                        mem_cell = sub._fresh_cell(
+                            f"mem_{node.name}", PrimOp.MEMORY,
+                            depth=depth, width=elem_w, mem_name=f"{prefix}{node.name}",
+                        )
+                        self.mod.connect(mem_cell, "RDATA", rdata_net, direction="output")
+                        sub._get_or_create_net(node.name, elem_w)
                 else:
                     sub._get_or_create_net(node.name, w)
             elif kind == "SymbolKind.Net":

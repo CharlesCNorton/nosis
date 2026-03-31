@@ -151,6 +151,9 @@ def infer_brams(mod: Module) -> int:
         # Multi-write arrays get their write ports compiled into one.
         if depth <= 16:
             waddr_count = sum(1 for k in cell.inputs if k.startswith("WADDR"))
+            if waddr_count > 1:
+                _compile_multi_write(mod, cell)
+                waddr_count = sum(1 for k in cell.inputs if k.startswith("WADDR"))
             if waddr_count <= 2:  # only single-write for DPR16X4
                 tiles = (width + 3) // 4
                 cell.params["bram_config"] = "DPR16X4"

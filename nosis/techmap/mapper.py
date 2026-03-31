@@ -1745,7 +1745,11 @@ class _ECP5Mapper:
             # Distributed RAM: TRELLIS_DPR16X4 (16 entries, 4 bits each)
             dpr_count = int(cell.params.get("bram_count", 1))
             int(cell.params.get("width", 4))
-            rdata_net = list(cell.outputs.values())[0] if cell.outputs else None
+            # Collect ALL RDATA outputs and their corresponding RADDR inputs.
+            # DPR16X4 has one physical read port; all RDATA share it.
+            all_rdata_nets = [onet for oname, onet in cell.outputs.items()
+                              if oname.startswith("RDATA")]
+            rdata_net = all_rdata_nets[0] if all_rdata_nets else None
             rdata_bits = self._get_bits(rdata_net) if rdata_net else []
 
             raddr_net = cell.inputs.get("RADDR")
@@ -1796,6 +1800,21 @@ class _ECP5Mapper:
                 dpr.ports["DO"] = do_bits
                 dpr.ports["WCK"] = [clk_bits[0] if clk_bits else "0"]
                 dpr.ports["WRE"] = [we_bits[0] if we_bits else "0"]
+            # Alias ALL other RDATA outputs to the same DO bits so
+            # downstream cells that read from RDATA1, RDATA2, etc.
+            # pick up the DPR read output.
+            for extra_rdata in all_rdata_nets[1:]:
+                extra_bits = self._get_bits(extra_rdata)
+                for i in range(min(len(extra_bits), len(rdata_bits))):
+                    if extra_bits[i] != rdata_bits[i]:
+                        self._set_bit(extra_bits, i, rdata_bits[i])
+            # Also alias RADDR inputs beyond the first to the same bits
+            for _rk in sorted(cell.inputs):
+                if _rk.startswith("RADDR") and _rk != "RADDR":
+                    extra_raddr = cell.inputs[_rk]
+                    extra_bits = self._get_bits(extra_raddr)
+                    for i in range(min(len(extra_bits), len(raddr_bits))):
+                        pass  # RADDR aliasing not needed — they share nets
             return
 
         # No BRAM/DPR tag — FF-based memory (register file).

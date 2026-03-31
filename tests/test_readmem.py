@@ -73,9 +73,9 @@ endmodule
         design = lower_to_ir(result, top="small_mem")
         mod = design.top_module()
 
-        # Small arrays produce MUX trees, not MEMORY cells
+        # All unpacked arrays produce MEMORY cells
         ops = {c.op for c in mod.cells.values()}
-        assert PrimOp.MUX in ops, f"expected MUX cells, got ops: {ops}"
+        assert PrimOp.MEMORY in ops, f"expected MEMORY cells, got ops: {ops}"
         # The design should have input/output ports intact
         assert "clk" in mod.ports
         assert "rdata" in mod.ports

@@ -1749,6 +1749,11 @@ class _ECP5Mapper:
             rdata_bits = self._get_bits(rdata_net) if rdata_net else []
 
             raddr_net = cell.inputs.get("RADDR")
+            if raddr_net is None:
+                for _rk in sorted(cell.inputs):
+                    if _rk.startswith("RADDR"):
+                        raddr_net = cell.inputs[_rk]
+                        break
             waddr_net = cell.inputs.get("WADDR")
             wdata_net = cell.inputs.get("WDATA")
             we_net = cell.inputs.get("WE")
@@ -1766,16 +1771,19 @@ class _ECP5Mapper:
                     dpr.attributes["src"] = cell.src
                 dpr.parameters["WCKMUX"] = "WCK"
                 dpr.parameters["WREMUX"] = "WRE"
-                # Address ports (4 bits each for 16 entries)
-                for i in range(4):
-                    dpr.ports[f"RAD{i}"] = [raddr_bits[i] if i < len(raddr_bits) else "0"]
-                    dpr.ports[f"WAD{i}"] = [waddr_bits[i] if i < len(waddr_bits) else "0"]
-                # Data ports (4 bits)
+                # Address ports (multi-bit arrays as nextpnr expects)
+                dpr.ports["RAD"] = [raddr_bits[i] if i < len(raddr_bits) else "0" for i in range(4)]
+                dpr.ports["WAD"] = [waddr_bits[i] if i < len(waddr_bits) else "0" for i in range(4)]
+                # Data ports (4 bits per tile)
+                di_bits = []
+                do_bits = []
                 for i in range(4):
                     bit_idx = d * 4 + i
-                    dpr.ports[f"DI{i}"] = [wdata_bits[bit_idx] if bit_idx < len(wdata_bits) else "0"]
+                    di_bits.append(wdata_bits[bit_idx] if bit_idx < len(wdata_bits) else "0")
                     out_bit = rdata_bits[bit_idx] if bit_idx < len(rdata_bits) else self.nl.alloc_bit()
-                    dpr.ports[f"DO{i}"] = [out_bit]
+                    do_bits.append(out_bit)
+                dpr.ports["DI"] = di_bits
+                dpr.ports["DO"] = do_bits
                 dpr.ports["WCK"] = [clk_bits[0] if clk_bits else "0"]
                 dpr.ports["WRE"] = [we_bits[0] if we_bits else "0"]
             return

@@ -652,27 +652,29 @@ def pack_pfumx(netlist: ECP5Netlist) -> int:
 
 def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     """Run all LUT optimization passes. Returns counts."""
-    # PFUMX packing disabled — feeder LUTs get absorbed by chain merge,
-    # leaving PFUMX with non-LUT inputs that nextpnr rejects.
-    # TODO: run PFUMX after chain merge with post-merge pattern detection.
-    pf = 0
-    s1 = 0
-    dd = 0
-    ab = 0
-    dl = 0
-    mc = 0
-    s2 = 0
-    dl2 = 0
-    s3 = 0
-    bl = 0
-    si = 0  # merge_shared_input_luts disabled
+    # Phase 1: simplify constants → eliminate dead → repeat
+    s1 = simplify_constant_luts(netlist)
+    dl = _eliminate_dead_luts(netlist)
+    s2 = simplify_constant_luts(netlist)
+    dl2 = _eliminate_dead_luts(netlist)
+
+    # Phase 2: merge chained LUT pairs (biggest win)
+    bl = break_comb_loops(netlist)
+    mc = merge_lut_chains(netlist)
+
+    # Phase 3: clean up after merge
+    s3 = simplify_constant_luts(netlist)
+    dl3 = _eliminate_dead_luts(netlist)
+    dd = 0  # deduplicate_luts disabled — leaves orphaned bits
+    dl4 = 0
+
     return {
         "const_lut_simplify": s1 + s2 + s3,
         "lut_dedup": dd,
-        "buffer_absorb": ab,
-        "dead_lut": dl + dl2,
+        "buffer_absorb": 0,
+        "dead_lut": dl + dl2 + dl3 + dl4,
         "chain_merge": mc,
         "loops_broken": bl,
-        "pfumx_pack": pf,
-        "shared_input_merge": si,
+        "pfumx_pack": 0,
+        "shared_input_merge": 0,
     }

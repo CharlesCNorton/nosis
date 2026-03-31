@@ -73,12 +73,16 @@ def infer_brams(mod: Module) -> int:
 
         total_bits = depth * width
 
-        # DPR16X4 (distributed RAM) is disabled for now.
-        # nextpnr's ECP5 packer has issues when DPR16X4 cells share
-        # constant nets with CCU2C carry chain cells — they get packed
-        # into the same TRELLIS_SLICE which is invalid.  Small arrays
-        # (depth <= 16) map to DP16KD instead if they meet the minimum
-        # size, or fall through to FF-based mapping.
+        # DPR16X4 for small arrays (depth <= 16) with simple write patterns.
+        # Only use DPR for arrays with 1-2 write ports (not multi-write).
+        if depth <= 16:
+            waddr_count = sum(1 for k in cell.inputs if k.startswith("WADDR"))
+            if waddr_count <= 2:  # only simple single-write arrays
+                tiles = (width + 3) // 4
+                cell.params["bram_config"] = "DPR16X4"
+                cell.params["bram_count"] = tiles
+                tagged += 1
+                continue
 
         import os
         _bram_threshold = int(os.environ.get("NOSIS_BRAM_THRESHOLD", "256"))

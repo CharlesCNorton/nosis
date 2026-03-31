@@ -1754,8 +1754,18 @@ class _ECP5Mapper:
                     if _rk.startswith("RADDR"):
                         raddr_net = cell.inputs[_rk]
                         break
-            waddr_net = cell.inputs.get("WADDR")
-            wdata_net = cell.inputs.get("WDATA")
+            # Use LAST WADDR/WDATA for multi-write (highest case priority)
+            waddr_net = None
+            wdata_net = None
+            for _wk in sorted(cell.inputs, reverse=True):
+                if _wk.startswith("WADDR") and waddr_net is None:
+                    waddr_net = cell.inputs[_wk]
+                if _wk.startswith("WDATA") and wdata_net is None:
+                    wdata_net = cell.inputs[_wk]
+            if waddr_net is None:
+                waddr_net = cell.inputs.get("WADDR")
+            if wdata_net is None:
+                wdata_net = cell.inputs.get("WDATA")
             we_net = cell.inputs.get("WE")
             clk_net = cell.inputs.get("CLK")
 
@@ -1814,17 +1824,15 @@ class _ECP5Mapper:
         wa0 = cell.inputs.get("WADDR")
         wd0 = cell.inputs.get("WDATA")
         we0 = cell.inputs.get("WE")
-        if wa0 and wd0 and we0:
+        if wa0 and wd0:
             _collect_write(wa0, wd0, we0)
-        for idx in range(500):
+        for idx in range(2, 500):
             wa = cell.inputs.get(f"WADDR{idx}")
             wd = cell.inputs.get(f"WDATA{idx}")
             if not wa or not wd:
-                if idx > 0:
-                    break
-                continue
-            we_key = f"WE{idx}" if f"WE{idx}" in cell.inputs else "WE"
-            we = cell.inputs.get(we_key)
+                break
+            # Use per-write WE if available, fall back to global WE
+            we = cell.inputs.get(f"WE{idx}") or cell.inputs.get("WE")
             _collect_write(wa, wd, we)
 
         clk_net = cell.inputs.get("CLK")

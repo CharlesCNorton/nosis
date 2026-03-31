@@ -1358,35 +1358,35 @@ class _Lowerer:
             wport_id = len([k for k in mem_cell.inputs if k.startswith("WDATA")])
             self.mod.connect(mem_cell, f"WDATA{wport_id}", wdata_net)
 
-        # WE (write enable) — AND of all enclosing conditions from the
-        # condition stack. If no conditions, WE=1 (always write).
-        if "WE" not in mem_cell.inputs:
-            if self._condition_stack:
-                # AND all conditions together
-                we_net = self._condition_stack[0]
-                for cond in self._condition_stack[1:]:
-                    and_out = self._fresh_net(f"memwe_and_{mem_name}", 1)
-                    and_cell = self._fresh_cell(f"memwe_and_{mem_name}", PrimOp.AND)
-                    self.mod.connect(and_cell, "A", we_net)
-                    self.mod.connect(and_cell, "B", cond)
-                    self.mod.connect(and_cell, "Y", and_out, direction="output")
-                    we_net = and_out
-            else:
-                we_net = self._fresh_net(f"memwe_{mem_name}", 1)
-                we_cell = self._fresh_cell(f"memwe_{mem_name}", PrimOp.CONST, value=1, width=1)
-                self.mod.connect(we_cell, "Y", we_net, direction="output")
-            self.mod.connect(mem_cell, "WE", we_net)
+        # Per-write WE — AND of all enclosing conditions from the stack.
+        # Each write port gets its own WE signal so the FF-based mapper
+        # can distinguish which write fires on each cycle.
+        if self._condition_stack:
+            we_net = self._condition_stack[0]
+            for cond in self._condition_stack[1:]:
+                and_out = self._fresh_net(f"memwe_and_{mem_name}", 1)
+                and_cell = self._fresh_cell(f"memwe_and_{mem_name}", PrimOp.AND)
+                self.mod.connect(and_cell, "A", we_net)
+                self.mod.connect(and_cell, "B", cond)
+                self.mod.connect(and_cell, "Y", and_out, direction="output")
+                we_net = and_out
         else:
-            # WE already wired — OR with new condition for multiple write sites
-            if self._condition_stack:
-                existing_we = mem_cell.inputs["WE"]
-                cond = self._condition_stack[-1]
-                or_out = self._fresh_net(f"memwe_or_{mem_name}", 1)
-                or_cell = self._fresh_cell(f"memwe_or_{mem_name}", PrimOp.OR)
-                self.mod.connect(or_cell, "A", existing_we)
-                self.mod.connect(or_cell, "B", cond)
-                self.mod.connect(or_cell, "Y", or_out, direction="output")
-                mem_cell.inputs["WE"] = or_out
+            we_net = self._fresh_net(f"memwe_{mem_name}", 1)
+            we_cell = self._fresh_cell(f"memwe_{mem_name}", PrimOp.CONST, value=1, width=1)
+            self.mod.connect(we_cell, "Y", we_net, direction="output")
+        # Store per-write WE on numbered port matching the WADDR/WDATA
+        wport_id = sum(1 for k in mem_cell.inputs if k.startswith("WADDR"))
+        we_key = f"WE{wport_id}" if wport_id > 1 else "WE"
+        self.mod.connect(mem_cell, we_key, we_net)
+        # Also maintain the global OR for DPR16X4 (which has a single WRE)
+        if "WE" in mem_cell.inputs and we_key != "WE":
+            existing_we = mem_cell.inputs["WE"]
+            or_out = self._fresh_net(f"memwe_or_{mem_name}", 1)
+            or_cell = self._fresh_cell(f"memwe_or_{mem_name}", PrimOp.OR)
+            self.mod.connect(or_cell, "A", existing_we)
+            self.mod.connect(or_cell, "B", we_net)
+            self.mod.connect(or_cell, "Y", or_out, direction="output")
+            mem_cell.inputs["WE"] = or_out
 
         # CLK — find the clock net from the enclosing always_ff block.
         # The clock net is stored on self._current_clock_net by lower_procedural_block.
@@ -1540,11 +1540,24 @@ class _Lowerer:
             inner_default = self._collect_blocking_with_muxes(stmt.defaultCase, allow_nb=allow_nb, _running=_running) if stmt.defaultCase else {}
             inner_running: dict[str, Net] = dict(inner_default)
             for inner_item in stmt.items:
-                inner_map = self._collect_blocking_with_muxes(inner_item.stmt, allow_nb=allow_nb, _running=_running)
+                # Create case EQ condition BEFORE processing the body
+                # so that MEMORY write WE captures the correct case branch.
+                case_eqs: list[Net] = []
                 for inner_expr in inner_item.expressions:
                     iv = self.lower_expr(inner_expr)
                     ieq = self._fresh_net("bcase_eq", 1)
                     ieqc = self._fresh_cell("bcase_eq", PrimOp.EQ)
+                    self.mod.connect(ieqc, "A", inner_sel)
+                    self.mod.connect(ieqc, "B", iv)
+                    self.mod.connect(ieqc, "Y", ieq, direction="output")
+                    case_eqs.append(ieq)
+                # Push case condition to stack for MEMORY write WE
+                if case_eqs:
+                    self._condition_stack.append(case_eqs[0])
+                inner_map = self._collect_blocking_with_muxes(inner_item.stmt, allow_nb=allow_nb, _running=_running)
+                if case_eqs:
+                    self._condition_stack.pop()
+                for ieq in case_eqs:
                     self.mod.connect(ieqc, "A", inner_sel)
                     self.mod.connect(ieqc, "B", iv)
                     self.mod.connect(ieqc, "Y", ieq, direction="output")
@@ -2464,21 +2477,19 @@ class _Lowerer:
                     right = getattr(rng, "right", 0)
                     depth = abs(right - left) + 1
                     if depth > 0 and elem_w > 0:
-                        if depth <= 32:
-                            for i in range(depth):
-                                sub._get_or_create_net(f"{node.name}_{i}", elem_w)
-                            sub._get_or_create_net(node.name, elem_w)
-                            if not hasattr(sub, '_array_info'):
-                                sub._array_info = {}
-                            sub._array_info[node.name] = (depth, elem_w)
-                        else:
-                            rdata_net = sub._fresh_net(f"mem_{node.name}_rdata", elem_w)
-                            mem_cell = sub._fresh_cell(
-                                f"mem_{node.name}", PrimOp.MEMORY,
-                                depth=depth, width=elem_w, mem_name=f"{prefix}{node.name}",
-                            )
-                            self.mod.connect(mem_cell, "RDATA", rdata_net, direction="output")
-                            sub._get_or_create_net(node.name, elem_w)
+                        # Use MEMORY cells for sub-instance arrays.
+                        # Arrays with simple write patterns (variable-indexed,
+                        # single write port) use DPR16X4 distributed RAM for
+                        # correct cross-always_ff access. Arrays with complex
+                        # write patterns (constant-indexed, multiple ports)
+                        # also use MEMORY but fall back to FF-based mapping.
+                        rdata_net = sub._fresh_net(f"mem_{node.name}_rdata", elem_w)
+                        mem_cell = sub._fresh_cell(
+                            f"mem_{node.name}", PrimOp.MEMORY,
+                            depth=depth, width=elem_w, mem_name=f"{prefix}{node.name}",
+                        )
+                        self.mod.connect(mem_cell, "RDATA", rdata_net, direction="output")
+                        sub._get_or_create_net(node.name, elem_w)
                 else:
                     sub._get_or_create_net(node.name, w)
             elif kind == "SymbolKind.Net":

@@ -652,21 +652,13 @@ def pack_pfumx(netlist: ECP5Netlist) -> int:
 
 def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     """Run all LUT optimization passes. Returns counts."""
-    # Phase 1: simplify constants → eliminate dead → repeat
-    s1 = simplify_constant_luts(netlist)
-    dl = _eliminate_dead_luts(netlist)
-    s2 = simplify_constant_luts(netlist)
-    dl2 = _eliminate_dead_luts(netlist)
-
-    # Phase 2: merge chained LUT pairs (biggest win)
-    bl = break_comb_loops(netlist)
-    mc = merge_lut_chains(netlist)
-
-    # Phase 3: clean up after merge
-    s3 = simplify_constant_luts(netlist)
-    dl3 = _eliminate_dead_luts(netlist)
-    dd = 0  # deduplicate_luts disabled — leaves orphaned bits
-    dl4 = 0
+    # All post-mapping optimization passes DISABLED.
+    # merge_lut_chains computes wrong composed truth tables for certain
+    # LUT configurations, producing silent silicon failures.  Do not
+    # re-enable any pass without in-silicon verification on the full
+    # Thaw service (VERSION 00 05 01, PING 01 AC, JEDEC 74 00 00 00).
+    s1 = 0; dl = 0; s2 = 0; dl2 = 0; bl = 0; mc = 0; s3 = 0
+    dl3 = 0; dd = 0; dl4 = 0
 
     return {
         "const_lut_simplify": s1 + s2 + s3,

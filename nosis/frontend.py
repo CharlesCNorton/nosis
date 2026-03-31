@@ -526,17 +526,22 @@ class _Lowerer:
         net = self._get_or_create_net(name, w)
         # If the net has no driver, check whether the symbol resolves to
         # a constant value (enum member, localparam, parameter).
+        # Do NOT treat variables as constants — their expr.constant reflects
+        # the initialization value, not the runtime value.  Variables get
+        # their drivers from always_ff/always_comb blocks processed later.
         if net.driver is None:
-            const_val = getattr(expr, "constant", None)
-            if const_val is None:
-                # Check the symbol itself (EnumValue, Parameter)
-                sym_val = getattr(sym, "value", None)
-                if sym_val is not None:
-                    const_val = sym_val
-            if const_val is not None:
-                int_val = _svint_to_int(const_val)
-                cell = self._fresh_cell(f"const_{name}", PrimOp.CONST, value=int_val, width=w)
-                self.mod.connect(cell, "Y", net, direction="output")
+            sym_kind = str(getattr(sym, "kind", ""))
+            is_variable = "Variable" in sym_kind
+            if not is_variable:
+                const_val = getattr(expr, "constant", None)
+                if const_val is None:
+                    sym_val = getattr(sym, "value", None)
+                    if sym_val is not None:
+                        const_val = sym_val
+                if const_val is not None:
+                    int_val = _svint_to_int(const_val)
+                    cell = self._fresh_cell(f"const_{name}", PrimOp.CONST, value=int_val, width=w)
+                    self.mod.connect(cell, "Y", net, direction="output")
         return net
 
     def _lower_binary(self, expr: Any) -> Net:
@@ -1377,12 +1382,13 @@ class _Lowerer:
             we_net = self._fresh_net(f"memwe_{mem_name}", 1)
             we_cell = self._fresh_cell(f"memwe_{mem_name}", PrimOp.CONST, value=1, width=1)
             self.mod.connect(we_cell, "Y", we_net, direction="output")
-        # Store per-write WE on numbered port matching the WADDR/WDATA
+        # Store per-write WE on numbered port (WE1, WE2, WE3, ...).
+        # "WE" (bare) is reserved for the global OR used by DPR16X4 WRE.
         wport_id = sum(1 for k in mem_cell.inputs if k.startswith("WADDR"))
-        we_key = f"WE{wport_id}" if wport_id > 1 else "WE"
+        we_key = f"WE{wport_id}"
         self.mod.connect(mem_cell, we_key, we_net)
-        # Also maintain the global OR for DPR16X4 (which has a single WRE)
-        if "WE" in mem_cell.inputs and we_key != "WE":
+        # Maintain the global OR at "WE" for DPR16X4 (single WRE port)
+        if "WE" in mem_cell.inputs:
             existing_we = mem_cell.inputs["WE"]
             or_out = self._fresh_net(f"memwe_or_{mem_name}", 1)
             or_cell = self._fresh_cell(f"memwe_or_{mem_name}", PrimOp.OR)
@@ -1390,6 +1396,9 @@ class _Lowerer:
             self.mod.connect(or_cell, "B", we_net)
             self.mod.connect(or_cell, "Y", or_out, direction="output")
             mem_cell.inputs["WE"] = or_out
+        else:
+            # First write: initialize global OR as a copy of this WE
+            mem_cell.inputs["WE"] = we_net
 
         # CLK — find the clock net from the enclosing always_ff block.
         # The clock net is stored on self._current_clock_net by lower_procedural_block.
@@ -1658,7 +1667,7 @@ class _Lowerer:
                                         continue
                                     d = net.driver
                                     for pn, pnet in list(d.inputs.items()):
-                                        if pnet is tgt_net or pnet.name == tgt_name:
+                                        if pnet is tgt_net:
                                             d.inputs[pn] = prev
                                         elif pnet.name not in visited:
                                             work.append(pnet)

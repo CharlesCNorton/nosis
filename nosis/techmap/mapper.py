@@ -1840,20 +1840,20 @@ class _ECP5Mapper:
             else:
                 var_writes.append((wa_bits, wd_bits, we_bits))
 
+        # Collect all write ports. Port numbering:
+        # WADDR/WDATA with WE1, WADDR1/WDATA1 with WE2, WADDR2/WDATA2 with WE3, ...
+        # "WE" (bare) is the global OR for DPR16X4 WRE — NOT a per-port WE.
         wa0 = cell.inputs.get("WADDR")
         wd0 = cell.inputs.get("WDATA")
-        we0 = cell.inputs.get("WE")
+        we0 = cell.inputs.get("WE1") or cell.inputs.get("WE")
         if wa0 and wd0:
             _collect_write(wa0, wd0, we0)
-        # Collect all numbered write ports: WADDR1/WDATA1, WADDR2/WDATA2, ...
-        # WE numbering is offset: WADDR1→WE2, WADDR2→WE3, etc.
-        for idx in range(1, 500):
+        max_waddr_idx = max((int(k[5:]) for k in cell.inputs if k.startswith("WADDR") and k[5:].isdigit()), default=0)
+        for idx in range(1, max_waddr_idx + 1):
             wa = cell.inputs.get(f"WADDR{idx}")
             wd = cell.inputs.get(f"WDATA{idx}")
             if not wa or not wd:
-                if idx <= max((int(k[5:]) for k in cell.inputs if k.startswith("WADDR") and k[5:].isdigit()), default=0):
-                    continue
-                break
+                continue
             we = cell.inputs.get(f"WE{idx + 1}") or cell.inputs.get(f"WE{idx}") or cell.inputs.get("WE")
             _collect_write(wa, wd, we)
 

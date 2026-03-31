@@ -256,3 +256,90 @@ def merge_lut_chains_safe(netlist: ECP5Netlist) -> int:
             del netlist.cells[src_name]
 
     return merged
+
+
+def deduplicate_luts_safe(netlist: ECP5Netlist) -> int:
+    """Eliminate duplicate LUT4 cells with identical INIT and inputs.
+
+    Two LUTs with the same truth table and same input signals produce
+    identical outputs.  Replace all references to the duplicate's Z
+    with the canonical Z, updating ALL cell types (not just LUT4).
+    """
+    _OUTPUT_PORTS = {"Z", "Q", "S0", "S1", "COUT", "DO", "F", "F0", "F1",
+                     "OFX0", "OFX1"}
+
+    # Build signature -> first cell
+    sig_map: dict[tuple, str] = {}
+    replacements: dict[int, int] = {}  # old_z -> canonical_z
+
+    for name, cell in netlist.cells.items():
+        if cell.cell_type != "LUT4":
+            continue
+        init = cell.parameters.get("INIT", "")
+        inputs = tuple(cell.ports.get(p, ["0"])[0] for p in "ABCD")
+        sig = (init, inputs)
+        z = cell.ports.get("Z", [None])[0]
+        if not isinstance(z, int) or z < 2:
+            continue
+
+        if sig in sig_map:
+            canonical = netlist.cells.get(sig_map[sig])
+            if canonical is None:
+                sig_map[sig] = name
+                continue
+            canon_z = canonical.ports.get("Z", [None])[0]
+            if isinstance(canon_z, int) and canon_z >= 2 and canon_z != z:
+                replacements[z] = canon_z
+        else:
+            sig_map[sig] = name
+
+    if not replacements:
+        return 0
+
+    # Apply replacements to ALL cell inputs (every cell type)
+    for cell in netlist.cells.values():
+        for port_name, bits in cell.ports.items():
+            if port_name in _OUTPUT_PORTS:
+                continue
+            for i, b in enumerate(bits):
+                if b in replacements:
+                    bits[i] = replacements[b]
+
+    # Apply to module port bits
+    for pi in netlist.ports.values():
+        bits = pi.get("bits", [])
+        for i, b in enumerate(bits):
+            if b in replacements:
+                bits[i] = replacements[b]
+
+    # Delete duplicates whose Z is now unreferenced
+    to_delete = []
+    for name, cell in netlist.cells.items():
+        if cell.cell_type != "LUT4":
+            continue
+        z = cell.ports.get("Z", [None])[0]
+        if not isinstance(z, int) or z not in replacements:
+            continue
+        # Scan: is this Z still referenced anywhere?
+        still_used = False
+        for other in netlist.cells.values():
+            for pn, bits in other.ports.items():
+                if pn in _OUTPUT_PORTS:
+                    continue
+                if z in bits:
+                    still_used = True
+                    break
+            if still_used:
+                break
+        if not still_used:
+            for pi in netlist.ports.values():
+                if z in pi.get("bits", []):
+                    still_used = True
+                    break
+        if not still_used:
+            to_delete.append(name)
+
+    for name in to_delete:
+        del netlist.cells[name]
+
+    return len(to_delete)

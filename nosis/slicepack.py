@@ -655,14 +655,16 @@ def pack_pfumx(netlist: ECP5Netlist) -> int:
 
 def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     """Run all LUT optimization passes. Returns counts."""
-    from nosis.slicepack_merge import merge_lut_chains_safe
+    from nosis.slicepack_merge import merge_lut_chains_safe, deduplicate_luts_safe
     s1 = simplify_constant_luts(netlist)
     dl = _eliminate_dead_luts(netlist)
     bl = break_comb_loops(netlist)
     mc = merge_lut_chains_safe(netlist)
     s2 = simplify_constant_luts(netlist)
     dl2 = _eliminate_dead_luts(netlist)
-    s3 = 0; dl3 = 0; dd = 0; dl4 = 0
+    dd = deduplicate_luts_safe(netlist)
+    dl3 = _eliminate_dead_luts(netlist)
+    s3 = 0; dl4 = 0
 
     return {
         "const_lut_simplify": s1 + s2 + s3,

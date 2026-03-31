@@ -1653,25 +1653,23 @@ class _Lowerer:
                             rhs_is_comb = (rhs_net.driver is not None and
                                            'comb_' in rhs_net.driver.name)
                             if not rhs_is_comb:
-                                # Walk the cone of rhs_net and replace references
-                                # to tgt_net with prev. Handles chained assignments
-                                # from unrolled for-loops within the same always_ff.
-                                visited: set[str] = set()
-                                work = [rhs_net]
-                                while work:
-                                    net = work.pop()
-                                    if net.name in visited:
-                                        continue
-                                    visited.add(net.name)
-                                    if net.driver is None:
-                                        continue
-                                    d = net.driver
-                                    for pn, pnet in list(d.inputs.items()):
-                                        if pnet is tgt_net:
-                                            d.inputs[pn] = prev
-                                        elif pnet.name not in visited:
-                                            work.append(pnet)
-                                    if len(visited) > 500:
+                                # Walk the MUX hold-chain of rhs_net and replace
+                                # references to tgt_net with prev.  Only follow
+                                # the A (false/hold) input of MUX cells — this is
+                                # where chained assignments place the hold value.
+                                # Avoids walking into cells from other always_ff
+                                # blocks that happen to share the same Net object.
+                                cur = rhs_net
+                                for _ in range(200):
+                                    if cur.driver is None or cur.driver.op != PrimOp.MUX:
+                                        break
+                                    mux_cell = cur.driver
+                                    a_net = mux_cell.inputs.get("A")
+                                    if a_net is tgt_net:
+                                        mux_cell.inputs["A"] = prev
+                                        break
+                                    cur = a_net if a_net else cur
+                                    if cur is rhs_net:
                                         break
                     results[tgt_name] = rhs_net
 

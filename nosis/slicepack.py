@@ -655,11 +655,14 @@ def pack_pfumx(netlist: ECP5Netlist) -> int:
 
 def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     """Run all LUT optimization passes. Returns counts."""
-    # merge_lut_chains disabled — composed truth tables are wrong.
-    # The const-1 mask fix is necessary but not sufficient.
-    # Needs formal verification of the composition algorithm.
-    mc = 0
-    s1 = 0; dl = 0; s2 = 0; dl2 = 0; bl = 0; s3 = 0; dl3 = 0; dd = 0; dl4 = 0
+    from nosis.slicepack_merge import merge_lut_chains_safe
+    s1 = simplify_constant_luts(netlist)
+    dl = _eliminate_dead_luts(netlist)
+    bl = break_comb_loops(netlist)
+    mc = merge_lut_chains_safe(netlist)
+    s2 = simplify_constant_luts(netlist)
+    dl2 = _eliminate_dead_luts(netlist)
+    s3 = 0; dl3 = 0; dd = 0; dl4 = 0
 
     return {
         "const_lut_simplify": s1 + s2 + s3,

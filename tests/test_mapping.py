@@ -483,7 +483,8 @@ def test_chain_merge_two_luts():
     b.ports["D"] = ["0"]
     b.ports["Z"] = [11]
     nl.ports["out"] = {"direction": "output", "bits": [11]}
-    mc = merge_lut_chains(nl)
+    from nosis.slicepack_merge import merge_lut_chains_safe
+    mc = merge_lut_chains_safe(nl)
     assert mc >= 1
 
 

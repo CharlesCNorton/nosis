@@ -171,14 +171,10 @@ def infer_brams(mod: Module) -> int:
         # combinational read patterns like `assign data = mem[addr]`
         # as long as the address is stable when the clock edge fires.
 
-        # DP16KD has one write port.  Try to compile multiple write ports
-        # into one (they are usually mutually exclusive case branches).
+        # DP16KD has one write port — skip for multi-write arrays
         waddr_count = sum(1 for k in cell.inputs if k.startswith("WADDR"))
         if waddr_count > 1:
-            _compile_multi_write(mod, cell)
-            waddr_count = sum(1 for k in cell.inputs if k.startswith("WADDR"))
-        if waddr_count > 1:
-            continue  # truly simultaneous writes — FF-based only
+            continue  # fall through to FF-based mapping
 
         fit = _fits_dp16kd(depth, width)
         if fit is not None:

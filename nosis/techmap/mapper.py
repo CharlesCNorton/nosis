@@ -176,19 +176,21 @@ class _ECP5Mapper:
                 for ff_name, sel, data, inv in entries:
                     self._ce_candidates[ff_name] = (sel, data, inv)
 
-        # Map CONST cells first so their bit values are available
-        # when other cells read B-operand bits for carry chains.
+        # Map in priority order: CONST first (for carry chain D ports),
+        # then non-CONST/non-FF (MUX chains, logic), then FF last
+        # (so FF DI ports see the final MUX chain outputs).
         from nosis.ir import PrimOp as _P
         for cell in sorted(mod.cells.values(), key=lambda c: c.name):
             if cell.op == _P.CONST:
                 self._map_cell(cell)
         for cell in sorted(mod.cells.values(), key=lambda c: c.name):
-            if cell.op != _P.CONST:
+            if cell.op not in (_P.CONST, _P.FF):
+                self._map_cell(cell)
+        for cell in sorted(mod.cells.values(), key=lambda c: c.name):
+            if cell.op == _P.FF:
                 self._map_cell(cell)
 
-        # Note: DCCA insertion disabled — nextpnr promotes fabric clocks
-        # to the global clock network automatically for small designs.
-        # self._insert_dcca_buffers()
+        # Note: FF DI re-resolution moved to map_to_ecp5 (after alias pass)
 
     def _insert_dcca_buffers(self) -> None:
         """Insert DCCA buffers for fabric-generated clocks.
@@ -2158,6 +2160,25 @@ def map_to_ecp5(design: Design) -> ECP5Netlist:
                 d0 = cell.ports.get("D0", ["0"])[0]
                 if d0 == "1":
                     cell.ports["CIN"] = ["1"]
+
+    # Re-resolve FF DI ports: FFs mapped before their D-input MUX cells
+    # reference stale bits from the original net allocation. Update DI
+    # to the current net bit value using bit_origin.
+    for cell in netlist.cells.values():
+        if cell.cell_type != "TRELLIS_FF":
+            continue
+        di_bits = cell.ports.get("DI", [])
+        for i, b in enumerate(di_bits):
+            if isinstance(b, int) and b >= 2:
+                origin = netlist._bit_origin.get(b)
+                if origin:
+                    net_name, idx = origin
+                    net = netlist.nets.get(net_name)
+                    if net and idx < len(net.bits) and net.bits[idx] != b:
+                        di_bits[i] = net.bits[idx]
+                # Also check alias map
+                if b in alias:
+                    di_bits[i] = alias[b]
 
     # Remove LUT4 cells with constant Z outputs — dead cells that
     # conflict with the JSON backend's GND/VCC tie cells.

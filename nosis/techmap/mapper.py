@@ -2161,24 +2161,29 @@ def map_to_ecp5(design: Design) -> ECP5Netlist:
                 if d0 == "1":
                     cell.ports["CIN"] = ["1"]
 
-    # Re-resolve FF DI ports: FFs mapped before their D-input MUX cells
-    # reference stale bits from the original net allocation. Update DI
-    # to the current net bit value using bit_origin.
+    # Re-resolve FF DI/CLK/LSR ports: cells mapped before their input
+    # MUX chain cells reference stale bits from original net allocation.
+    # Build a comprehensive stale→current map from all nets.
+    stale_to_current: dict[int, int | str] = {}
+    for net in netlist.nets.values():
+        for orig_bit, (net_name, idx) in netlist._bit_origin.items():
+            if net_name == net.name and idx < len(net.bits):
+                cur = net.bits[idx]
+                if cur != orig_bit:
+                    stale_to_current[orig_bit] = cur
+    # Add alias entries
+    for k, v in alias.items():
+        if isinstance(k, int) and k >= 2:
+            stale_to_current[k] = v
+    # Apply to ALL FF input ports (DI, CLK, LSR, CE)
     for cell in netlist.cells.values():
         if cell.cell_type != "TRELLIS_FF":
             continue
-        di_bits = cell.ports.get("DI", [])
-        for i, b in enumerate(di_bits):
-            if isinstance(b, int) and b >= 2:
-                origin = netlist._bit_origin.get(b)
-                if origin:
-                    net_name, idx = origin
-                    net = netlist.nets.get(net_name)
-                    if net and idx < len(net.bits) and net.bits[idx] != b:
-                        di_bits[i] = net.bits[idx]
-                # Also check alias map
-                if b in alias:
-                    di_bits[i] = alias[b]
+        for port_name in ("DI", "CLK", "LSR", "CE"):
+            bits = cell.ports.get(port_name, [])
+            for i, b in enumerate(bits):
+                if isinstance(b, int) and b in stale_to_current:
+                    bits[i] = stale_to_current[b]
 
     # Remove LUT4 cells with constant Z outputs — dead cells that
     # conflict with the JSON backend's GND/VCC tie cells.

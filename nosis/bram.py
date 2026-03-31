@@ -147,14 +147,14 @@ def infer_brams(mod: Module) -> int:
 
         total_bits = depth * width
 
-        # DPR16X4 for small arrays (depth <= 16).
-        # Multi-write arrays get their write ports compiled into one.
+        # DPR16X4 for small arrays (depth <= 16) with ONE write port.
+        # Arrays with multiple constant-address writes (resp[0]=X,
+        # resp[1]=Y in one cycle) cannot use DPR16X4 — it has one
+        # write port and can only write one address per clock.
+        # These fall through to FF-based mapping below.
         if depth <= 16:
             waddr_count = sum(1 for k in cell.inputs if k.startswith("WADDR"))
-            if waddr_count > 1:
-                _compile_multi_write(mod, cell)
-                waddr_count = sum(1 for k in cell.inputs if k.startswith("WADDR"))
-            if waddr_count <= 2:  # only single-write for DPR16X4
+            if waddr_count == 1:
                 tiles = (width + 3) // 4
                 cell.params["bram_config"] = "DPR16X4"
                 cell.params["bram_count"] = tiles

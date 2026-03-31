@@ -2499,7 +2499,16 @@ class _Lowerer:
                 else:
                     sub._get_or_create_net(node.name, w)
             elif kind == "SymbolKind.Net":
-                sub._get_or_create_net(node.name, sub._bit_width(node))
+                w = sub._bit_width(node)
+                net = sub._get_or_create_net(node.name, w)
+                if node.initializer is not None and net.driver is None:
+                    rhs = sub.lower_expr(node.initializer)
+                    if rhs.driver is not None and net.driver is None:
+                        net.driver = rhs.driver
+                        for pn, pnet in list(rhs.driver.outputs.items()):
+                            if pnet is rhs:
+                                rhs.driver.outputs[pn] = net
+                                break
             elif kind == "SymbolKind.Parameter":
                 w = sub._bit_width(node)
                 if node.value is not None:

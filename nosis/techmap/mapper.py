@@ -1845,13 +1845,16 @@ class _ECP5Mapper:
         we0 = cell.inputs.get("WE")
         if wa0 and wd0:
             _collect_write(wa0, wd0, we0)
-        for idx in range(2, 500):
+        # Collect all numbered write ports: WADDR1/WDATA1, WADDR2/WDATA2, ...
+        # WE numbering is offset: WADDR1→WE2, WADDR2→WE3, etc.
+        for idx in range(1, 500):
             wa = cell.inputs.get(f"WADDR{idx}")
             wd = cell.inputs.get(f"WDATA{idx}")
             if not wa or not wd:
+                if idx <= max((int(k[5:]) for k in cell.inputs if k.startswith("WADDR") and k[5:].isdigit()), default=0):
+                    continue
                 break
-            # Use per-write WE if available, fall back to global WE
-            we = cell.inputs.get(f"WE{idx}") or cell.inputs.get("WE")
+            we = cell.inputs.get(f"WE{idx + 1}") or cell.inputs.get(f"WE{idx}") or cell.inputs.get("WE")
             _collect_write(wa, wd, we)
 
         clk_net = cell.inputs.get("CLK")

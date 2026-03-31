@@ -569,8 +569,10 @@ class _ECP5Mapper:
         # uses the yosys convention exactly.
         is_sub = (cell.op == PrimOp.SUB)
 
-        # Standard INIT for ADD: 0x96AA.  For SUB: 0x6996 (inverted).
-        std_init = 0x6996 if is_sub else 0x96AA
+        # Standard INIT for ADD/SUB: 0x96AA.
+        # SUB a-b is computed as a + ~b + 1 by the carry chain with CIN=1
+        # and D="1" (the LUT inverts B when D=1).
+        std_init = 0x96AA
         lut_init = format(std_init, "016b")
 
         packed_init = cell.params.get("packed_lut_init")

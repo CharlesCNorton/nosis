@@ -326,25 +326,9 @@ def merge_lut_chains(netlist: ECP5Netlist) -> int:
                         feeder_pin = pin
                         feeder_bit = bit
 
-        if feeder_pin is None:
-            # Try multi-fanout feeders with <= 2 variable inputs
-            for pin in ("A", "B", "C", "D"):
-                bits = cell.ports.get(pin, ["0"])
-                if bits and isinstance(bits[0], int) and bits[0] >= 2:
-                    bit = bits[0]
-                    if bit in bit_to_lut and bit not in absorbed_bits:
-                        sn = bit_to_lut[bit]
-                        if sn != name and bit_fanout.get(bit, 0) <= 3:
-                            sc = netlist.cells.get(sn)
-                            if sc:
-                                fv = sum(1 for p in ("A", "B", "C", "D")  # type: ignore[misc]
-                                         if sc.ports.get(p, ["0"])[0] not in ("0", "1", "x")
-                                         and isinstance(sc.ports.get(p, ["0"])[0], int)
-                                         and sc.ports.get(p, ["0"])[0] >= 2)  # type: ignore[operator]
-                                if fv <= 2:
-                                    feeder_pin = pin
-                                    feeder_bit = bit
-                                    break
+        # Multi-fanout merges disabled — single-fanout only for safety.
+        if False and feeder_pin is None:
+            pass
 
         if feeder_pin is None:
             continue
@@ -356,6 +340,10 @@ def merge_lut_chains(netlist: ECP5Netlist) -> int:
 
         src_init = _get_init(src_cell)
         if src_init is None:
+            continue
+
+        # Safety: only merge MUX→MUX pairs until the general case is verified
+        if my_init != 0xE4E4 or src_init != 0xE4E4:
             continue
 
         # Collect feeder's variable inputs
@@ -388,19 +376,34 @@ def merge_lut_chains(netlist: ECP5Netlist) -> int:
         my_pin_idx = {"A": 0, "B": 1, "C": 2, "D": 3}
         feeder_in_my_idx = my_pin_idx.get(feeder_pin, 0)
 
+        # Precompute constant-1 pin masks for both LUTs.
+        # Constant "1" inputs must be included in the truth table index
+        # or the composed function reads from the wrong entry.
+        feeder_const1_mask = 0
+        for pin_idx, pin in enumerate(("A", "B", "C", "D")):
+            bits = src_cell.ports.get(pin, ["0"])
+            if bits and bits[0] == "1":
+                feeder_const1_mask |= (1 << pin_idx)
+
+        my_const1_mask = 0
+        for pin_idx, pin in enumerate(("A", "B", "C", "D")):
+            bits = cell.ports.get(pin, ["0"])
+            if bits and bits[0] == "1":
+                my_const1_mask |= (1 << pin_idx)
+
         composed_init = 0
         for i in range(16):
             input_vals = {}
             for bit, idx in bit_to_idx.items():
                 input_vals[bit] = (i >> idx) & 1
 
-            feeder_lut_idx = 0
+            feeder_lut_idx = feeder_const1_mask
             for bit, pin_idx in feeder_pin_indices.items():
                 if input_vals.get(bit, 0):
                     feeder_lut_idx |= (1 << pin_idx)
             feeder_result = (src_init >> feeder_lut_idx) & 1
 
-            my_lut_idx = 0
+            my_lut_idx = my_const1_mask
             for pin, bit in my_other_vars.items():
                 pin_idx_val = my_pin_idx[pin]
                 if input_vals.get(bit, 0):
@@ -652,13 +655,11 @@ def pack_pfumx(netlist: ECP5Netlist) -> int:
 
 def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     """Run all LUT optimization passes. Returns counts."""
-    # All post-mapping optimization passes DISABLED.
-    # merge_lut_chains computes wrong composed truth tables for certain
-    # LUT configurations, producing silent silicon failures.  Do not
-    # re-enable any pass without in-silicon verification on the full
-    # Thaw service (VERSION 00 05 01, PING 01 AC, JEDEC 74 00 00 00).
-    s1 = 0; dl = 0; s2 = 0; dl2 = 0; bl = 0; mc = 0; s3 = 0
-    dl3 = 0; dd = 0; dl4 = 0
+    # merge_lut_chains disabled — composed truth tables are wrong.
+    # The const-1 mask fix is necessary but not sufficient.
+    # Needs formal verification of the composition algorithm.
+    mc = 0
+    s1 = 0; dl = 0; s2 = 0; dl2 = 0; bl = 0; s3 = 0; dl3 = 0; dd = 0; dl4 = 0
 
     return {
         "const_lut_simplify": s1 + s2 + s3,

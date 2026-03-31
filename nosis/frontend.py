@@ -1537,12 +1537,9 @@ class _Lowerer:
 
         elif kind == "StatementKind.Case":
             inner_sel = self.lower_expr(stmt.expr)
-            inner_default = self._collect_blocking_with_muxes(stmt.defaultCase, allow_nb=allow_nb, _running=_running) if stmt.defaultCase else {}
-            inner_running: dict[str, Net] = dict(inner_default)
+            # Pre-compute ALL case EQ conditions for the default WE gate
+            all_case_eqs: list[Net] = []
             for inner_item in stmt.items:
-                # Create case EQ condition BEFORE processing the body
-                # so that MEMORY write WE captures the correct case branch.
-                case_eqs: list[Net] = []
                 for inner_expr in inner_item.expressions:
                     iv = self.lower_expr(inner_expr)
                     ieq = self._fresh_net("bcase_eq", 1)
@@ -1550,6 +1547,32 @@ class _Lowerer:
                     self.mod.connect(ieqc, "A", inner_sel)
                     self.mod.connect(ieqc, "B", iv)
                     self.mod.connect(ieqc, "Y", ieq, direction="output")
+                    all_case_eqs.append(ieq)
+            # Build NOT(any_case_match) for default case WE
+            if stmt.defaultCase and all_case_eqs:
+                any_match = all_case_eqs[0]
+                for eq in all_case_eqs[1:]:
+                    or_out = self._fresh_net("bcase_any", 1)
+                    or_cell = self._fresh_cell("bcase_any", PrimOp.OR)
+                    self.mod.connect(or_cell, "A", any_match)
+                    self.mod.connect(or_cell, "B", eq)
+                    self.mod.connect(or_cell, "Y", or_out, direction="output")
+                    any_match = or_out
+                no_match = self._fresh_net("bcase_dflt_cond", 1)
+                not_cell = self._fresh_cell("bcase_dflt_cond", PrimOp.NOT)
+                self.mod.connect(not_cell, "A", any_match)
+                self.mod.connect(not_cell, "Y", no_match, direction="output")
+                self._condition_stack.append(no_match)
+            inner_default = self._collect_blocking_with_muxes(stmt.defaultCase, allow_nb=allow_nb, _running=_running) if stmt.defaultCase else {}
+            if stmt.defaultCase and all_case_eqs:
+                self._condition_stack.pop()
+            inner_running: dict[str, Net] = dict(inner_default)
+            eq_idx = 0
+            for inner_item in stmt.items:
+                case_eqs: list[Net] = []
+                for inner_expr in inner_item.expressions:
+                    ieq = all_case_eqs[eq_idx]
+                    eq_idx += 1
                     case_eqs.append(ieq)
                 # Push case condition to stack for MEMORY write WE
                 if case_eqs:
@@ -2477,12 +2500,10 @@ class _Lowerer:
                     right = getattr(rng, "right", 0)
                     depth = abs(right - left) + 1
                     if depth > 0 and elem_w > 0:
-                        # Use MEMORY cells for sub-instance arrays.
-                        # Arrays with simple write patterns (variable-indexed,
-                        # single write port) use DPR16X4 distributed RAM for
-                        # correct cross-always_ff access. Arrays with complex
-                        # write patterns (constant-indexed, multiple ports)
-                        # also use MEMORY but fall back to FF-based mapping.
+                        # Sub-instance arrays: use MEMORY cells.
+                        # Small single-write arrays get DPR16X4 (cross-block safe).
+                        # Multi-write arrays fall through to FF-based mapping
+                        # which handles multiple simultaneous writes correctly.
                         rdata_net = sub._fresh_net(f"mem_{node.name}_rdata", elem_w)
                         mem_cell = sub._fresh_cell(
                             f"mem_{node.name}", PrimOp.MEMORY,

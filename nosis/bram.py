@@ -21,6 +21,80 @@ __all__ = [
 ]
 
 
+def _compile_multi_write(mod: Module, cell) -> None:
+    """Compile multiple WADDR/WDATA/WE ports into a single effective port.
+
+    Multi-write MEMORY cells have separate (WADDR_i, WDATA_i, WE_i) for
+    each case branch write. DPR16X4 accepts only one write port. This
+    pass MUXes the addresses and data into one effective triple using
+    the per-write WE signals as select conditions.
+
+    Priority: later writes (higher index) override earlier ones.
+    """
+    # Collect all write ports
+    ports: list[tuple] = []  # [(waddr_key, wdata_key, we_key)]
+    for i in range(500):
+        wak = f"WADDR{i}" if i > 0 else "WADDR"
+        wdk = f"WDATA{i}" if i > 0 else "WDATA"
+        wek = f"WE{i}" if i > 0 else "WE"
+        if wak not in cell.inputs:
+            if i > 1:
+                break
+            continue
+        ports.append((wak, wdk, wek))
+
+    if len(ports) <= 1:
+        return  # nothing to compile
+
+    # Build MUX chain: start from first port, each subsequent overrides
+    width = int(cell.params.get("width", 8))
+    first_wa = cell.inputs[ports[0][0]]
+    first_wd = cell.inputs[ports[0][1]]
+    cur_addr = first_wa
+    cur_data = first_wd
+
+    from nosis.ir import Net
+
+    for wak, wdk, wek in ports[1:]:
+        wa = cell.inputs.get(wak)
+        wd = cell.inputs.get(wdk)
+        we = cell.inputs.get(wek)
+        if not wa or not wd or not we:
+            continue
+
+        # MUX: if WE_i active, use this port's addr/data, else keep previous
+        addr_w = max(wa.width, cur_addr.width)
+        mux_addr = mod.add_net(f"_mwmux_a_{cell.name}_{wak}", addr_w)
+        mux_a = mod.add_cell(f"_mwmux_a_{cell.name}_{wak}", PrimOp.MUX)
+        mod.connect(mux_a, "S", we)
+        mod.connect(mux_a, "A", cur_addr)
+        mod.connect(mux_a, "B", wa)
+        mod.connect(mux_a, "Y", mux_addr, direction="output")
+
+        mux_data = mod.add_net(f"_mwmux_d_{cell.name}_{wdk}", width)
+        mux_d = mod.add_cell(f"_mwmux_d_{cell.name}_{wdk}", PrimOp.MUX)
+        mod.connect(mux_d, "S", we)
+        mod.connect(mux_d, "A", cur_data)
+        mod.connect(mux_d, "B", wd)
+        mod.connect(mux_d, "Y", mux_data, direction="output")
+
+        cur_addr = mux_addr
+        cur_data = mux_data
+
+    # Replace all WADDR/WDATA ports with the single compiled port
+    for wak, wdk, wek in ports:
+        if wak in cell.inputs:
+            del cell.inputs[wak]
+        if wdk in cell.inputs:
+            del cell.inputs[wdk]
+        if wek in cell.inputs and wek != "WE":
+            del cell.inputs[wek]
+
+    cell.inputs["WADDR"] = cur_addr
+    cell.inputs["WDATA"] = cur_data
+    # WE stays as the OR of all conditions (already computed)
+
+
 def _fits_dp16kd(depth: int, width: int) -> tuple[int, int] | None:
     """Check if array dimensions fit a DP16KD configuration.
 
@@ -61,7 +135,7 @@ def infer_brams(mod: Module) -> int:
     """
     tagged = 0
 
-    for cell in mod.cells.values():
+    for cell in list(mod.cells.values()):
         if cell.op != PrimOp.MEMORY:
             continue
 
@@ -73,11 +147,11 @@ def infer_brams(mod: Module) -> int:
 
         total_bits = depth * width
 
-        # DPR16X4 for small arrays (depth <= 16) with simple write patterns.
-        # Only use DPR for arrays with 1-2 write ports (not multi-write).
+        # DPR16X4 for small arrays (depth <= 16).
+        # Multi-write arrays get their write ports compiled into one.
         if depth <= 16:
             waddr_count = sum(1 for k in cell.inputs if k.startswith("WADDR"))
-            if waddr_count <= 2:  # only simple single-write arrays
+            if waddr_count <= 2:  # only single-write for DPR16X4
                 tiles = (width + 3) // 4
                 cell.params["bram_config"] = "DPR16X4"
                 cell.params["bram_count"] = tiles

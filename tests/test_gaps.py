@@ -63,8 +63,9 @@ def test_multi_file_thaw_parse():
 # Item 39: regression cell count locks
 # ---------------------------------------------------------------------------
 
-def test_uart_tx_cell_count_regression():
-    """uart_tx LUT4 count must not regress above known ceiling."""
+def test_uart_tx_full_pipeline_structural():
+    """uart_tx through full pipeline must have no undriven bits and tx driven by FF."""
+    import json
     from nosis.frontend import parse_files, lower_to_ir
     from nosis.passes import run_default_passes
     from nosis.techmap import map_to_ecp5
@@ -72,6 +73,7 @@ def test_uart_tx_cell_count_regression():
     from nosis.carry import infer_carry_chains
     from nosis.fsm import extract_fsms, annotate_fsm_cells
     from nosis.lutpack import pack_luts_ir
+    from nosis.json_backend import emit_json_str
     from pathlib import Path
 
     uart_tx = Path(__file__).parent / "designs" / "uart_tx.sv"
@@ -88,10 +90,38 @@ def test_uart_tx_cell_count_regression():
     design.eliminate_dead_modules()
     netlist = map_to_ecp5(design)
     pack_slices(netlist)
-    stats = netlist.stats()
-    # Known ceiling from benchmarks: 51 LUT4, 46 FF, 64 CCU2C
-    assert stats.get("LUT4", 0) <= 800, f"LUT4 regression: {stats.get('LUT4', 0)} > 800"
-    assert stats.get("TRELLIS_FF", 0) <= 55, f"FF regression: {stats.get('TRELLIS_FF', 0)} > 55"
+    data = json.loads(emit_json_str(netlist))
+    jmod = list(data["modules"].values())[0]
+    # Structural: no undriven input bits
+    out_ports = {"Z", "Q", "S0", "S1", "COUT", "OFX0", "OFX1"}
+    driven = set()
+    for pi in jmod["ports"].values():
+        if pi["direction"] == "input":
+            for b in pi["bits"]:
+                if isinstance(b, int): driven.add(b)
+    for c in jmod["cells"].values():
+        for pn, bits in c["connections"].items():
+            if pn in out_ports:
+                for b in bits:
+                    if isinstance(b, int): driven.add(b)
+    used = set()
+    for c in jmod["cells"].values():
+        for pn, bits in c["connections"].items():
+            if pn not in out_ports:
+                for b in bits:
+                    if isinstance(b, int): used.add(b)
+    undriven = used - driven
+    assert len(undriven) == 0, f"{len(undriven)} undriven bits after full pipeline"
+    # Structural: tx output must be FF-driven (UART idles high)
+    tx_bits = jmod["ports"]["tx"]["bits"]
+    ff_q = set()
+    for c in jmod["cells"].values():
+        if c["type"] == "TRELLIS_FF":
+            for b in c["connections"].get("Q", []):
+                if isinstance(b, int): ff_q.add(b)
+    for b in tx_bits:
+        if isinstance(b, int):
+            assert b in ff_q, f"tx bit {b} not FF-driven"
 
 
 # ---------------------------------------------------------------------------

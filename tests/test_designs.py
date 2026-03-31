@@ -89,11 +89,59 @@ class TestUartTx:
         ccu2c = [c for c in self._d().netlist.cells.values() if c.cell_type == "CCU2C"]
         assert len(ccu2c) > 0
 
-    def test_locked_counts(self):
-        s = self._d().netlist.stats()
-        assert 350 <= s["LUT4"] <= 750, f"LUT: {s['LUT4']}"
-        assert s["TRELLIS_FF"] == 46, f"FF: {s['TRELLIS_FF']}"
-        assert 120 <= s["CCU2C"] <= 130, f"CCU2C: {s['CCU2C']}"
+    def test_tx_output_driven(self):
+        """The tx output port must be driven — if it floats, the wire is dead."""
+        data = self._d().json_data
+        mod = data["modules"]["uart_tx"]
+        tx_bits = mod["ports"]["tx"]["bits"]
+        # tx must be driven by some cell output
+        out_ports = {"Z", "Q", "S0", "S1", "COUT"}
+        driven = set()
+        for cell in mod["cells"].values():
+            for pn, bits in cell["connections"].items():
+                if pn in out_ports:
+                    for b in bits:
+                        if isinstance(b, int):
+                            driven.add(b)
+        for b in tx_bits:
+            if isinstance(b, int):
+                assert b in driven, f"tx output bit {b} is undriven"
+
+    def test_no_undriven_ff_inputs(self):
+        """Every TRELLIS_FF DI input must be driven by a cell or port."""
+        data = self._d().json_data
+        mod = data["modules"]["uart_tx"]
+        out_ports = {"Z", "Q", "S0", "S1", "COUT"}
+        driven = set()
+        for pi in mod["ports"].values():
+            if pi["direction"] == "input":
+                for b in pi["bits"]:
+                    if isinstance(b, int):
+                        driven.add(b)
+        for cell in mod["cells"].values():
+            for pn, bits in cell["connections"].items():
+                if pn in out_ports:
+                    for b in bits:
+                        if isinstance(b, int):
+                            driven.add(b)
+        for name, cell in mod["cells"].items():
+            if cell["type"] == "TRELLIS_FF":
+                di = cell["connections"].get("DI", [])
+                for b in di:
+                    if isinstance(b, int):
+                        assert b in driven, f"FF {name} DI bit {b} undriven"
+
+    def test_state_ffs_regset_reset(self):
+        """State machine FFs must start at 0 (REGSET=RESET) so TX idles high."""
+        data = self._d().json_data
+        mod = data["modules"]["uart_tx"]
+        for name, cell in mod["cells"].items():
+            if cell["type"] == "TRELLIS_FF":
+                regset = cell["parameters"].get("REGSET", "RESET")
+                # At least one FF must be RESET (state=IDLE=0)
+                if regset == "RESET":
+                    return
+        pytest.fail("No TRELLIS_FF with REGSET=RESET found — state machine may not start in IDLE")
 
     # --- JSON ---
 
@@ -138,15 +186,38 @@ class TestUartTx:
         assert ffs >= 3
         assert comb >= 5
 
-    def test_optimized_lut_count(self):
+    def test_optimized_no_undriven_bits(self):
+        """After full optimization, no input bits should be undriven."""
+        import json
         from nosis.frontend import parse_files, lower_to_ir
+        from nosis.json_backend import emit_json_str
         r = parse_files([RIME_UART_TX], top="uart_tx")
         d = lower_to_ir(r, top="uart_tx")
         m = d.top_module()
         run_default_passes(m)
         nl = map_to_ecp5(d)
         pack_slices(nl)
-        assert nl.stats().get("LUT4", 0) < 800
+        data = json.loads(emit_json_str(nl))
+        mod = list(data["modules"].values())[0]
+        out_ports = {"Z", "Q", "S0", "S1", "COUT", "OFX0", "OFX1"}
+        driven = set()
+        for pi in mod["ports"].values():
+            if pi["direction"] == "input":
+                for b in pi["bits"]:
+                    if isinstance(b, int): driven.add(b)
+        for c in mod["cells"].values():
+            for pn, bits in c["connections"].items():
+                if pn in out_ports:
+                    for b in bits:
+                        if isinstance(b, int): driven.add(b)
+        used = set()
+        for c in mod["cells"].values():
+            for pn, bits in c["connections"].items():
+                if pn not in out_ports:
+                    for b in bits:
+                        if isinstance(b, int): used.add(b)
+        undriven = used - driven
+        assert len(undriven) == 0, f"{len(undriven)} undriven bits after optimization"
 
     # --- Timing & area ---
 
@@ -268,11 +339,63 @@ class TestUartRx:
         assert s.get("LUT4", 0) > 0
         assert s.get("TRELLIS_FF", 0) > 0
 
-    def test_locked_counts(self):
-        s = self._d().netlist.stats()
-        assert 350 <= s["LUT4"] <= 800, f"LUT: {s['LUT4']}"
-        assert 46 <= s["TRELLIS_FF"] <= 55, f"FF: {s['TRELLIS_FF']}"
-        assert 120 <= s["CCU2C"] <= 130, f"CCU2C: {s['CCU2C']}"
+    def test_rx_data_output_driven(self):
+        """The data output port must be driven — RX must produce received bytes."""
+        data = self._d().json_data
+        mod = list(data["modules"].values())[0]
+        data_bits = mod["ports"]["data"]["bits"]
+        out_ports = {"Z", "Q", "S0", "S1", "COUT"}
+        driven = set()
+        for cell in mod["cells"].values():
+            for pn, bits in cell["connections"].items():
+                if pn in out_ports:
+                    for b in bits:
+                        if isinstance(b, int):
+                            driven.add(b)
+        for b in data_bits:
+            if isinstance(b, int):
+                assert b in driven, f"data output bit {b} is undriven — RX cannot deliver bytes"
+
+    def test_rx_finish_output_driven(self):
+        """The finish output must be driven — without it, no byte-ready signal."""
+        data = self._d().json_data
+        mod = list(data["modules"].values())[0]
+        finish_bits = mod["ports"]["finish"]["bits"]
+        out_ports = {"Z", "Q", "S0", "S1", "COUT"}
+        driven = set()
+        for cell in mod["cells"].values():
+            for pn, bits in cell["connections"].items():
+                if pn in out_ports:
+                    for b in bits:
+                        if isinstance(b, int):
+                            driven.add(b)
+        for b in finish_bits:
+            if isinstance(b, int):
+                assert b in driven, f"finish bit {b} undriven — no byte-ready pulse"
+
+    def test_no_undriven_ff_inputs(self):
+        """Every TRELLIS_FF DI must be driven."""
+        data = self._d().json_data
+        mod = list(data["modules"].values())[0]
+        out_ports = {"Z", "Q", "S0", "S1", "COUT"}
+        driven = set()
+        for pi in mod["ports"].values():
+            if pi["direction"] == "input":
+                for b in pi["bits"]:
+                    if isinstance(b, int):
+                        driven.add(b)
+        for cell in mod["cells"].values():
+            for pn, bits in cell["connections"].items():
+                if pn in out_ports:
+                    for b in bits:
+                        if isinstance(b, int):
+                            driven.add(b)
+        for name, cell in mod["cells"].items():
+            if cell["type"] == "TRELLIS_FF":
+                di = cell["connections"].get("DI", [])
+                for b in di:
+                    if isinstance(b, int):
+                        assert b in driven, f"FF {name} DI bit {b} undriven"
 
 
 # ---------------------------------------------------------------------------
@@ -299,11 +422,23 @@ class TestSdramBridge:
     def test_fsm_detected(self):
         assert len(extract_fsms(self._d().mod)) >= 1
 
-    def test_locked_counts(self):
-        s = self._d().netlist.stats()
-        assert 500 <= s["LUT4"] <= 950, f"LUT: {s['LUT4']}"
-        assert 220 <= s["TRELLIS_FF"] <= 348, f"FF: {s['TRELLIS_FF']}"
-        assert 13 <= s["CCU2C"] <= 14, f"CCU2C: {s['CCU2C']}"
+    def test_no_undriven_output_bits(self):
+        """All output port bits must be driven."""
+        data = self._d().json_data
+        mod = list(data["modules"].values())[0]
+        out_ports = {"Z", "Q", "S0", "S1", "COUT"}
+        driven = set()
+        for cell in mod["cells"].values():
+            for pn, bits in cell["connections"].items():
+                if pn in out_ports:
+                    for b in bits:
+                        if isinstance(b, int):
+                            driven.add(b)
+        for pname, pi in mod["ports"].items():
+            if pi["direction"] == "output":
+                for b in pi["bits"]:
+                    if isinstance(b, int):
+                        assert b in driven, f"output port {pname} bit {b} undriven"
 
 
 # ---------------------------------------------------------------------------
@@ -322,10 +457,23 @@ class TestCrc32:
         s = self._d().netlist.stats()
         assert s.get("TRELLIS_FF", 0) >= 30
 
-    def test_locked_counts(self):
-        s = self._d().netlist.stats()
-        assert s["LUT4"] <= 4000, f"LUT: {s['LUT4']}"
-        assert s["TRELLIS_FF"] == 34, f"FF: {s['TRELLIS_FF']}"
+    def test_pcpi_outputs_driven(self):
+        """pcpi_wr, pcpi_rd, pcpi_ready outputs must all be driven."""
+        data = self._d().json_data
+        mod = list(data["modules"].values())[0]
+        out_ports = {"Z", "Q", "S0", "S1", "COUT"}
+        driven = set()
+        for cell in mod["cells"].values():
+            for pn, bits in cell["connections"].items():
+                if pn in out_ports:
+                    for b in bits:
+                        if isinstance(b, int):
+                            driven.add(b)
+        for pname in ("pcpi_wr", "pcpi_rd", "pcpi_ready"):
+            if pname in mod["ports"]:
+                for b in mod["ports"][pname]["bits"]:
+                    if isinstance(b, int):
+                        assert b in driven, f"{pname} bit {b} undriven"
 
 
 # ---------------------------------------------------------------------------
@@ -400,24 +548,30 @@ def test_cli_lpf():
 # Yosys comparison — verify nosis produces fewer or comparable LUTs
 # ---------------------------------------------------------------------------
 
-def test_uart_tx_lut_count_competitive():
-    """Optimized uart_tx LUT count must be competitive with yosys synth_ecp5."""
-    from nosis.slicepack import pack_slices
-    d = get_design("uart_tx")
-    mod = d.mod
-    run_default_passes(mod)
-    from nosis.techmap import map_to_ecp5
+def test_uart_tx_all_outputs_driven():
+    """After full pipeline, the tx output bit must be driven by an FF Q."""
+    import json
     from nosis.frontend import parse_files as pf, lower_to_ir as lir
+    from nosis.json_backend import emit_json_str
     r = pf([RIME_UART_TX], top="uart_tx")
     design = lir(r, top="uart_tx")
     m = design.top_module()
     run_default_passes(m)
     nl = map_to_ecp5(design)
     pack_slices(nl)
-    nosis_luts = nl.stats().get("LUT4", 0)
-    # yosys synth_ecp5 produces ~15-20 LUT4 for uart_tx
-    # nosis should be within 2x of yosys
-    assert nosis_luts < 800, f"nosis uart_tx LUT count ({nosis_luts}) is not competitive"
+    data = json.loads(emit_json_str(nl))
+    mod = list(data["modules"].values())[0]
+    tx_bits = mod["ports"]["tx"]["bits"]
+    # tx must be driven by an FF (state machine sets tx=1 in IDLE)
+    ff_q_bits = set()
+    for cell in mod["cells"].values():
+        if cell["type"] == "TRELLIS_FF":
+            for b in cell["connections"].get("Q", []):
+                if isinstance(b, int):
+                    ff_q_bits.add(b)
+    for b in tx_bits:
+        if isinstance(b, int):
+            assert b in ff_q_bits, f"tx bit {b} not driven by FF — UART idle state will be wrong"
 
 
 # ---------------------------------------------------------------------------

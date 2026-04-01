@@ -1541,13 +1541,12 @@ class _Lowerer:
                     elif t_val:
                         # Only true branch assigns — hold value when false.
                         # For always_ff: use running value from prior assignment
-                        # ONLY if it's a cross-block combinational value.
-                        # Otherwise use the target net (FF Q will replace it).
+                        # if it's a constant (safe, no loops). Otherwise use
+                        # the target net (FF Q will replace it later).
                         # For always_comb: use CONST(0).
                         if allow_nb:
                             _prev = (_running or {}).get(tgt_name)
-                            # Use _prev only if it's from an always_comb block
-                            if _prev is not None and _prev.driver is not None and 'comb_' in _prev.driver.name:
+                            if _prev is not None and _prev.driver is not None and _prev.driver.op == PrimOp.CONST:
                                 hold_net = _prev
                             else:
                                 hold_net = tgt_net
@@ -1566,7 +1565,7 @@ class _Lowerer:
                         # Only false branch assigns — hold when true.
                         if allow_nb:
                             _prev = (_running or {}).get(tgt_name)
-                            if _prev is not None and _prev.driver is not None and 'comb_' in _prev.driver.name:
+                            if _prev is not None and _prev.driver is not None and _prev.driver.op == PrimOp.CONST:
                                 hold_net = _prev
                             else:
                                 hold_net = tgt_net

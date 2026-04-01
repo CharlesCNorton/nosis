@@ -1535,12 +1535,28 @@ class _ECP5Mapper:
                     fmt = cell.params.get("init_format", "hex")
                     init_data = parse_readmemb(init_path) if fmt == "bin" else parse_readmemh(init_path)
 
-            raddr_net = cell.inputs.get("RADDR")
-            if raddr_net is None:
-                for _rk in sorted(cell.inputs):
-                    if _rk.startswith("RADDR"):
-                        raddr_net = cell.inputs[_rk]
-                        break
+            # Collect all RADDR ports. DP16KD has two read ports (A and B).
+            # Port A (ADA/DOA): primary read. Port B (ADB/DOB): secondary
+            # read, shared with write port. Prefer combinational addresses
+            # for port A (instruction fetch needs every-cycle access).
+            _raddr_all = []
+            if cell.inputs.get("RADDR"):
+                _raddr_all.append(cell.inputs["RADDR"])
+            for _rk in sorted(cell.inputs):
+                if _rk.startswith("RADDR") and _rk != "RADDR":
+                    _raddr_all.append(cell.inputs[_rk])
+            # Port A: prefer non-FF non-CONST (combinational instruction fetch)
+            raddr_net = _raddr_all[0] if _raddr_all else None
+            for _rc in _raddr_all:
+                if _rc.driver and _rc.driver.op not in (PrimOp.FF, PrimOp.CONST):
+                    raddr_net = _rc
+                    break
+            # Port B read address: pick a different RADDR (if available)
+            raddr_b_net = None
+            for _rc in _raddr_all:
+                if _rc is not raddr_net:
+                    raddr_b_net = _rc
+                    break
             waddr_net = cell.inputs.get("WADDR")
             wdata_net = cell.inputs.get("WDATA")
             we_net = cell.inputs.get("WE")
@@ -1576,8 +1592,10 @@ class _ECP5Mapper:
             addr_bits_per_tile = int(math.log2(tile_depth)) if tile_depth > 1 else 0
             tile_outputs: list[list[int | str]] = []
 
+            tile_outputs_b: list[list[int | str]] = []  # port B read outputs
             for drow in range(tiles_deep):
                 row_outputs: list[int | str] = []
+                row_outputs_b: list[int | str] = []
                 for wcol in range(tiles_wide):
                     bram = self.nl.add_cell(self._fresh_name("bram"), "DP16KD")
                     if cell.src:
@@ -1613,10 +1631,30 @@ class _ECP5Mapper:
                         logical = i - _tile_addr_offset
                         bit = raddr_bits[logical] if 0 <= logical < len(raddr_bits) else "0"
                         bram.ports[f"ADA{i}"] = [bit]
+                    # Port B address: second RADDR for dual-port read, or
+                    # MUX of WADDR + RADDR_B when both exist.
+                    _raddr_b_bits = self._get_bits(raddr_b_net) if raddr_b_net else []
                     for i in range(14):
                         logical = i - _tile_addr_offset
-                        bit = waddr_bits[logical] if 0 <= logical < len(waddr_bits) else "0"
-                        bram.ports[f"ADB{i}"] = [bit]
+                        w_bit = waddr_bits[logical] if 0 <= logical < len(waddr_bits) else "0"
+                        r_bit = _raddr_b_bits[logical] if 0 <= logical < len(_raddr_b_bits) else "0"
+                        if _raddr_b_bits and waddr_net:
+                            # Both write and second read: MUX on WE
+                            mux_out = self.nl.alloc_bit()
+                            mux_lut = self.nl.add_cell(self._fresh_name("bram_amux"), "LUT4")
+                            mux_lut.parameters["INIT"] = "1110010011100100"
+                            mux_lut.ports["A"] = [we_bits[0] if we_bits else "0"]
+                            mux_lut.ports["B"] = [r_bit]
+                            mux_lut.ports["C"] = [w_bit]
+                            mux_lut.ports["D"] = ["0"]
+                            mux_lut.ports["Z"] = [mux_out]
+                            bram.ports[f"ADB{i}"] = [mux_out]
+                        elif _raddr_b_bits:
+                            # Second read only, no write: direct RADDR_B
+                            bram.ports[f"ADB{i}"] = [r_bit]
+                        else:
+                            # Write only or no port B usage
+                            bram.ports[f"ADB{i}"] = [w_bit]
 
                     for i in range(18):
                         global_bit = wcol * tile_data_width + i
@@ -1625,18 +1663,28 @@ class _ECP5Mapper:
                     for i in range(18):
                         bram.ports[f"DIA{i}"] = ["0"]
 
-                    # Each tile gets its own output bits
+                    # Each tile gets its own output bits (port A = primary read)
                     tile_out_bits: list[int | str] = []
                     for i in range(tile_data_width):
                         b = self.nl.alloc_bit()
                         tile_out_bits.append(b)
                     for i in range(18):
                         bram.ports[f"DOA{i}"] = [tile_out_bits[i] if i < len(tile_out_bits) else self.nl.alloc_bit()]
-                    for i in range(18):
-                        bram.ports[f"DOB{i}"] = [self.nl.alloc_bit()]
+                    # Port B read output (for second RADDR)
+                    tile_out_b_bits: list[int | str] = []
+                    if raddr_b_net:
+                        for i in range(tile_data_width):
+                            b = self.nl.alloc_bit()
+                            tile_out_b_bits.append(b)
+                        for i in range(18):
+                            bram.ports[f"DOB{i}"] = [tile_out_b_bits[i] if i < len(tile_out_b_bits) else self.nl.alloc_bit()]
+                    else:
+                        for i in range(18):
+                            bram.ports[f"DOB{i}"] = [self.nl.alloc_bit()]
 
                     # Extend row_outputs with this tile's bits
                     row_outputs.extend(tile_out_bits)
+                    row_outputs_b.extend(tile_out_b_bits)
 
                     bram.ports["CLKA"] = [clk_bits[0] if clk_bits else "0"]
                     bram.ports["CLKB"] = [clk_bits[0] if clk_bits else "0"]
@@ -1656,6 +1704,7 @@ class _ECP5Mapper:
                     bram.ports["CEB"] = ["1"]
 
                 tile_outputs.append(row_outputs)
+                tile_outputs_b.append(row_outputs_b)
 
             # Wire final outputs: if only 1 depth tile, connect directly.
             # If multiple depth tiles, add LUT-based mux on high address bits.
@@ -1748,14 +1797,24 @@ class _ECP5Mapper:
                         lut.ports["D"] = ["0"]
                         lut.ports["Z"] = [rdata_bits[bit_idx]]
 
-            # Wire extra RDATA outputs to the same DOA bits via buffer LUTs.
-            # Multiple read ports all see the same BRAM data.
+            # Wire extra RDATA outputs. If port B has its own read address,
+            # the first extra RDATA uses DOB bits; remaining extras share DOA.
+            _rdata_b_bits: list[int | str] = []
+            if raddr_b_net and tiles_deep == 1 and tile_outputs_b and tile_outputs_b[0]:
+                _rdata_b_row = tile_outputs_b[0]
+                for i in range(min(len(rdata_bits), len(_rdata_b_row))):
+                    _rdata_b_bits.append(_rdata_b_row[i])
+            _used_port_b = False
             for _extra_net in _extra_rdata_nets:
                 _extra_bits = self._get_bits(_extra_net)
-                for i in range(min(len(_extra_bits), len(rdata_bits))):
+                # Use DOB for the first extra if port B is available
+                _src = _rdata_b_bits if _rdata_b_bits and not _used_port_b else rdata_bits
+                if _src is _rdata_b_bits:
+                    _used_port_b = True
+                for i in range(min(len(_extra_bits), len(_src))):
                     buf = self.nl.add_cell(self._fresh_name("bram_rd"), "LUT4")
                     buf.parameters["INIT"] = "1010101010101010"  # pass-through
-                    buf.ports["A"] = [rdata_bits[i]]
+                    buf.ports["A"] = [_src[i]]
                     buf.ports["B"] = ["0"]
                     buf.ports["C"] = ["0"]
                     buf.ports["D"] = ["0"]

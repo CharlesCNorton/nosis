@@ -46,7 +46,8 @@ def _format_param(key: str, value: str) -> str:
             return format(int_val, "032b")
         except ValueError:
             return s
-    # DP16KD numeric parameters: DATA_WIDTH needs 32-bit binary encoding
+    # DP16KD numeric parameters: DATA_WIDTH needs 32-bit binary encoding.
+    # Note: only DATA_WIDTH needs this; other DP16KD params pass as strings.
     if key in ("DATA_WIDTH_A", "DATA_WIDTH_B"):
         try:
             return format(int(s), "032b")

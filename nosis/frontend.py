@@ -2608,8 +2608,12 @@ class _Lowerer:
                     leaf = node_path[len(_sub_hier) + 1:]
                     if "." in leaf:
                         return  # nested deeper — skip
+                    # Direct child scope: block ProceduralBlocks from nested
+                    # instances (they get their own _lower_sub_instance).
+                    # Allow Variables/Nets — these are this sub-instance's
+                    # own members, not leaks.
                     if kind == "SymbolKind.ProceduralBlock":
-                        return  # nested instance's procedural block
+                        return
                 elif not node_path.startswith(_sub_hier):
                     return  # different scope entirely
             if kind == "SymbolKind.Variable":

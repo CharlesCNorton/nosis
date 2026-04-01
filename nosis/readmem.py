@@ -75,7 +75,7 @@ def _physical_entry_width(data_width: int) -> int:
         return 20
     if data_width >= 9:
         return 10
-    return data_width  # X1, X2, X4 — no parity bits
+    return data_width  # X1, X2, X4 — no per-entry parity
 
 
 def _encode_entry(value: int, data_width: int) -> int:

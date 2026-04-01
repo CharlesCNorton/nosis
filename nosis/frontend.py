@@ -452,19 +452,45 @@ class _Lowerer:
             sub = getattr(expr, "subroutine", None)
             if sub and hasattr(sub, "body") and sub.body is not None:
                 args_list = list(getattr(expr, "arguments", []))
+                # Bind formal parameters to actual arguments before inlining.
+                # Each formal argument becomes a net driven by the actual arg.
+                formals = list(getattr(sub, "arguments", []))
+                for formal, actual in zip(formals, args_list):
+                    param_name = formal.name
+                    param_w = int(getattr(formal.type, "bitWidth", 0)) if hasattr(formal, "type") else 0
+                    if param_w <= 0:
+                        param_w = self._bit_width(actual)
+                    actual_net = self.lower_expr(actual)
+                    param_net = self._get_or_create_net(param_name, param_w)
+                    if param_net.driver is None:
+                        param_net.driver = actual_net.driver
+                        if actual_net.driver is not None:
+                            for _pn, _pnet in list(actual_net.driver.outputs.items()):
+                                if _pnet is actual_net:
+                                    actual_net.driver.outputs[_pn] = param_net
+                                    break
+                        elif actual_net.width == param_net.width:
+                            # No driver yet — wire directly
+                            for cell in self.mod.cells.values():
+                                for _pn, _pnet in list(cell.inputs.items()):
+                                    if _pnet is param_net:
+                                        cell.inputs[_pn] = actual_net
                 # Process function body as combinational statements
                 self._lower_statement(sub.body)
-                # The return value is the last expression in the body
-                # For simple functions, the return net is the function's
-                # return variable. Try to find it.
+                # The return value is the function's return variable
                 ret_name = getattr(sub, "name", "")
                 ret_net = self.mod.nets.get(ret_name)
+                if ret_net is not None:
+                    if ret_net.driver is None:
+                        # Check prefixed version
+                        pfx = getattr(self, "_prefix", "")
+                        pref_ret = self.mod.nets.get(f"{pfx}{ret_name}")
+                        if pref_ret and pref_ret.driver is not None:
+                            ret_net = pref_ret
                 if ret_net and ret_net.driver is not None:
                     return ret_net
                 # Fallback: check for a return type width
                 w = self._bit_width(expr)
-                # Look for any net that was just created with matching width
-                # This is a heuristic — proper inlining needs parameter binding
                 for n in reversed(list(self.mod.nets.values())):
                     if n.width == w and n.driver is not None:
                         return n
@@ -1632,7 +1658,70 @@ class _Lowerer:
         elif kind == "StatementKind.ForLoop":
             body = getattr(stmt, "body", None)
             if body is not None:
-                child_map = self._collect_blocking_with_muxes(body, allow_nb=allow_nb, _running=_running)
+                # Try to unroll: extract loop variable, bounds, and iterate.
+                lvars = list(getattr(stmt, "loopVars", []))
+                stop_expr = getattr(stmt, "stopExpr", None)
+                lvar_name = lvars[0].name if lvars else None
+                lvar_init = None
+                lvar_stop = None
+                lvar_down = False  # True if counting down (i >= 0)
+                if lvar_name and lvars:
+                    lv_init_expr = getattr(lvars[0], "initializer", None)
+                    if lv_init_expr:
+                        ic = getattr(lv_init_expr, "constant", None)
+                        if ic is not None:
+                            lvar_init = _svint_to_int(ic)
+                        elif hasattr(lv_init_expr, "value"):
+                            lvar_init = _svint_to_int(lv_init_expr.value)
+                if stop_expr and hasattr(stop_expr, "right"):
+                    sc = getattr(stop_expr.right, "constant", None)
+                    if sc is not None:
+                        lvar_stop = _svint_to_int(sc)
+                    elif hasattr(stop_expr.right, "value"):
+                        lvar_stop = _svint_to_int(stop_expr.right.value)
+                    stop_op = str(getattr(stop_expr, "op", ""))
+                    if "GreaterThan" in stop_op:
+                        lvar_down = True
+
+                if lvar_name and lvar_init is not None and lvar_stop is not None:
+                    if lvar_down:
+                        iter_range = range(lvar_init, lvar_stop - 1, -1)
+                    else:
+                        iter_range = range(lvar_init, lvar_stop)
+                    n_iters = len(list(iter_range))
+                else:
+                    iter_range = None
+                    n_iters = 0
+
+                if iter_range is not None and 0 < n_iters <= 64:
+                    # Unroll: process body N times with loop var = constant.
+                    # Temporarily replace the loop variable net in the module
+                    # so all references during this iteration resolve to
+                    # the constant value.
+                    lvar_w = 32
+                    lvar_net = self._get_or_create_net(lvar_name, lvar_w)
+                    # Determine the actual net dict key (may be prefixed)
+                    pfx = getattr(self, "_prefix", "")
+                    lvar_key = f"{pfx}{lvar_name}" if pfx else lvar_name
+                    child_map: dict[str, Net] = {}
+                    for iter_val in iter_range:
+                        # Create constant net for this iteration value
+                        iter_net = self._fresh_net(f"loop_{lvar_name}_{iter_val}", lvar_w)
+                        iter_cell = self._fresh_cell(f"loop_{lvar_name}_{iter_val}", PrimOp.CONST,
+                                                     value=iter_val, width=lvar_w)
+                        self.mod.connect(iter_cell, "Y", iter_net, direction="output")
+                        # Swap into module net dict
+                        saved = self.mod.nets.get(lvar_key)
+                        self.mod.nets[lvar_key] = iter_net
+                        iter_map = self._collect_blocking_with_muxes(body, allow_nb=allow_nb, _running=_running)
+                        # Restore
+                        if saved is not None:
+                            self.mod.nets[lvar_key] = saved
+                        elif lvar_key in self.mod.nets:
+                            del self.mod.nets[lvar_key]
+                        child_map.update(iter_map)
+                else:
+                    child_map = self._collect_blocking_with_muxes(body, allow_nb=allow_nb, _running=_running)
                 # Break accumulator self-references in for-loop results.
                 # Patterns like `r = r + x` create ADD(r_net, x) where
                 # r_net is the TARGET.  Replace with running value from
@@ -2503,9 +2592,26 @@ class _Lowerer:
 
         # Lower the sub-instance body (variables, parameters, procedural blocks)
         # but NOT ports — we wire those manually below
+        _sub_hier = getattr(sub_body, "hierarchicalPath", "")
+
         def walk_sub(node):
             """Walk a sub-module instance."""
             kind = str(node.kind)
+            # Skip members from nested sub-instances — pyslang's visit
+            # recurses into them, but we handle those via _lower_sub_instance.
+            # Do NOT skip direct-child ProceduralBlocks — those are this
+            # sub-instance's own blocks (unlike lower_instance where direct
+            # children are OTHER sub-instances).
+            node_path = getattr(node, "hierarchicalPath", "")
+            if node_path and _sub_hier and node_path != _sub_hier:
+                if node_path.startswith(_sub_hier + "."):
+                    leaf = node_path[len(_sub_hier) + 1:]
+                    if "." in leaf:
+                        return  # nested deeper — skip
+                    if kind == "SymbolKind.ProceduralBlock":
+                        return  # nested instance's procedural block
+                elif not node_path.startswith(_sub_hier):
+                    return  # different scope entirely
             if kind == "SymbolKind.Variable":
                 w = sub._bit_width(node)
                 t = node.type if hasattr(node, "type") else None
@@ -2608,6 +2714,21 @@ class _Lowerer:
 
         sub_body.visit(walk_sub)
 
+        # Fix scope-leaked nets from nested sub-instances. Leaked nets
+        # (PARENT_PREFIX.port_name) were created during walk_sub by
+        # pyslang visit exposing nested ProceduralBlocks. Redirect their
+        # consumers to the actual parent-side connection expression.
+        for port_name, parent_pfx, port_expr in getattr(sub, "_nested_port_maps", []):
+            leaked_name = f"{parent_pfx}{port_name}"
+            leaked_net = self.mod.nets.get(leaked_name)
+            if leaked_net is None or leaked_net.driver is not None:
+                continue
+            parent_net = sub.lower_expr(port_expr)
+            for cell in self.mod.cells.values():
+                for pn, pnet in list(cell.inputs.items()):
+                    if pnet is leaked_net:
+                        cell.inputs[pn] = parent_net
+
         # Post-processing for sub-instance: apply comb redirects,
         # deferred assigns, and deferred blocking AFTER all procedural
         # blocks, matching the top-level lower_instance flow.
@@ -2676,13 +2797,21 @@ class _Lowerer:
                 if sub_net.driver is None and parent_net.driver is not None:
                     sub_net.driver = parent_net.driver
                 # Redirect cells reading the sub-instance net to read parent net.
-                # Check both prefixed (TX.send) and unprefixed (send) names —
-                # the sub-instance body may create either.
+                # Check three possible names:
+                # 1. prefixed (cpu.mem_done) — the correct sub-instance net
+                # 2. unprefixed (mem_done) — top-level scope leak
+                # 3. parent-prefixed (SOC.mem_done) — parent-scope leak from
+                #    pyslang visit recursing into nested sub-instance bodies
                 unprefixed_net = self.mod.nets.get(port_name)
+                parent_pfx = getattr(self, "_prefix", "")
+                leaked_name = f"{parent_pfx}{port_name}" if parent_pfx else None
+                leaked_net = self.mod.nets.get(leaked_name) if leaked_name else None
                 if parent_net is not sub_net:
                     for cell in self.mod.cells.values():
                         for pn, pnet in list(cell.inputs.items()):
-                            if pnet is sub_net or (unprefixed_net is not None and pnet is unprefixed_net):
+                            if (pnet is sub_net
+                                    or (unprefixed_net is not None and pnet is unprefixed_net)
+                                    or (leaked_net is not None and pnet is leaked_net)):
                                 cell.inputs[pn] = parent_net
             elif is_output and not is_input:
                 if sub_net.driver is not None:
@@ -2693,6 +2822,23 @@ class _Lowerer:
                     sub_net.driver = parent_net.driver
                 if parent_net.driver is None and sub_net.driver is not None:
                     parent_net.driver = sub_net.driver
+
+        # Record port-to-parent mapping for deferred scope-leak fixup.
+        # Leaked nets (PARENT_PREFIX.port_name) are created AFTER this
+        # _lower_sub_instance returns, when pyslang's walk_sub continues
+        # processing ProceduralBlocks from nested scope leaks.
+        parent_pfx = getattr(self, "_prefix", "")
+        if parent_pfx:
+            if not hasattr(self, "_nested_port_maps"):
+                self._nested_port_maps: list[tuple[str, str, Any]] = []
+            for conn in inst.portConnections:
+                port = conn.port
+                direction = str(port.direction)
+                if "In" not in direction or "Out" in direction:
+                    continue
+                expr = getattr(conn, "expression", None) or getattr(conn, "internalExpr", None)
+                if expr is not None:
+                    self._nested_port_maps.append((port.name, parent_pfx, expr))
 
 
 class _PrefixedLowerer(_Lowerer):
@@ -2965,5 +3111,43 @@ def lower_to_ir(result: ParseResult, *, top: str | None = None) -> Design:
                 if pn == "CLK" and id(q_net) not in clock_q_nets:
                     continue
                 cell.inputs[pn] = q_net
+
+    # Fix undriven consumed nets from pyslang scope leaks.
+    # When pyslang's visit recurses into sub-instance bodies, it may
+    # create nets at the wrong hierarchy level (e.g., SOC.state instead
+    # of cpu.state).  For each undriven net consumed by a cell, find
+    # a driven net with the same base name and matching width.
+    for mod in design.modules.values():
+        # Build base-name -> list of driven nets
+        _base_driven: dict[str, list[Net]] = {}
+        for net in mod.nets.values():
+            if net.driver is None:
+                continue
+            base = net.name.rsplit(".", 1)[-1] if "." in net.name else net.name
+            _base_driven.setdefault(base, []).append(net)
+
+        # Find undriven consumed nets
+        _undriven_consumed: dict[str, Net] = {}
+        for cell in mod.cells.values():
+            for pn, pnet in cell.inputs.items():
+                if pnet.driver is None and pnet.name not in _undriven_consumed:
+                    _undriven_consumed[pnet.name] = pnet
+
+        # Redirect
+        for uname, unet in _undriven_consumed.items():
+            base = uname.rsplit(".", 1)[-1] if "." in uname else uname
+            candidates = _base_driven.get(base, [])
+            driven = None
+            for cand in candidates:
+                if cand is unet or cand.width != unet.width:
+                    continue
+                driven = cand
+                break
+            if driven is None:
+                continue
+            for cell in mod.cells.values():
+                for pn, pnet in list(cell.inputs.items()):
+                    if pnet is unet:
+                        cell.inputs[pn] = driven
 
     return design

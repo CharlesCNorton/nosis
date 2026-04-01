@@ -272,6 +272,77 @@ def _eliminate_dead_luts(netlist: ECP5Netlist) -> int:
     return len(to_remove)
 
 
+def _eliminate_tainted_luts(netlist: ECP5Netlist) -> int:
+    """Remove LUT4 cells with undriven inputs and cascade through consumers.
+
+    A LUT4 with an undriven signal input computes a wrong truth table.
+    Remove it and tie its output to constant 0, then cascade: any
+    downstream LUT4 that now has an undriven input (because its source
+    was removed) gets the same treatment.  Iterates until stable.
+    """
+    _OUTPUT_PORTS = {"Z", "Q", "S0", "S1", "COUT", "DO", "F", "F0", "F1",
+                     "OFX0", "OFX1", "CLKO", "DCSOUT"}
+    total = 0
+    for _ in range(20):
+        # Build driven set
+        driven: set[int] = set()
+        for pi in netlist.ports.values():
+            if pi.get("direction") == "input":
+                for b in pi.get("bits", []):
+                    if isinstance(b, int):
+                        driven.add(b)
+        for cell in netlist.cells.values():
+            for pn, bits in cell.ports.items():
+                if pn in _OUTPUT_PORTS or pn.startswith("DO") or pn.startswith("P") or pn.startswith("R"):
+                    for b in bits:
+                        if isinstance(b, int):
+                            driven.add(b)
+
+        # Find LUT4s with undriven signal inputs: tie undriven to "0"
+        # and simplify the truth table. This is safer than deletion —
+        # the LUT produces the correct result for the driven inputs.
+        tied = 0
+        to_remove: list[str] = []
+        for name, cell in netlist.cells.items():
+            if cell.cell_type != "LUT4":
+                continue
+            init = cell.parameters.get("INIT", "")
+            if not init:
+                continue
+            try:
+                init_val = int(init, 2)
+            except (ValueError, TypeError):
+                continue
+            changed = False
+            for pin_idx, pin in enumerate(("A", "B", "C", "D")):
+                bits = cell.ports.get(pin, ["0"])
+                if bits and isinstance(bits[0], int) and bits[0] >= 2 and bits[0] not in driven:
+                    # Tie to 0: reduce truth table
+                    cell.ports[pin] = ["0"]
+                    new_init = 0
+                    for i in range(16):
+                        if (i >> pin_idx) & 1:
+                            continue  # skip entries where this pin = 1
+                        if (init_val >> i) & 1:
+                            new_init |= (1 << i)
+                    init_val = new_init
+                    changed = True
+                    tied += 1
+            if changed:
+                cell.parameters["INIT"] = format(init_val & 0xFFFF, "016b")
+                # If result is all-0 or all-1, mark for removal
+                if init_val == 0:
+                    to_remove.append(name)
+
+        if not to_remove and tied == 0:
+            break
+        for name in to_remove:
+            del netlist.cells[name]
+        total += len(to_remove) + tied
+
+    return total
+
+
 def merge_lut_chains(netlist: ECP5Netlist) -> int:
     """Merge chained LUT4 pairs where the combined function fits in 4 inputs.
 
@@ -656,23 +727,36 @@ def pack_pfumx(netlist: ECP5Netlist) -> int:
 def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     """Run all LUT optimization passes. Returns counts."""
     from nosis.slicepack_merge import merge_lut_chains_safe, deduplicate_luts_safe
-    s1 = simplify_constant_luts(netlist)
-    dl = _eliminate_dead_luts(netlist)
-    bl = break_comb_loops(netlist)
-    mc = merge_lut_chains_safe(netlist)
-    s2 = simplify_constant_luts(netlist)
-    dl2 = _eliminate_dead_luts(netlist)
-    dd = deduplicate_luts_safe(netlist)
-    dl3 = _eliminate_dead_luts(netlist)
-    s3 = 0; dl4 = 0
+    total_simplify = simplify_constant_luts(netlist)
+    total_dead = _eliminate_dead_luts(netlist)
+    total_loops = break_comb_loops(netlist)
+    total_merge = 0
+    total_dedup = 0
+
+    # Remove LUTs with undriven inputs (scope-leak residual) before merging
+    total_tainted = _eliminate_tainted_luts(netlist)
+    total_dead += _eliminate_dead_luts(netlist)
+
+    for _ in range(10):
+        mc = merge_lut_chains_safe(netlist)
+        sc = simplify_constant_luts(netlist)
+        dl = _eliminate_dead_luts(netlist)
+        dd = deduplicate_luts_safe(netlist)
+        dl2 = _eliminate_dead_luts(netlist)
+        total_merge += mc
+        total_simplify += sc
+        total_dead += dl + dl2
+        total_dedup += dd
+        if mc + sc + dl + dd + dl2 == 0:
+            break
 
     return {
-        "const_lut_simplify": s1 + s2 + s3,
-        "lut_dedup": dd,
+        "const_lut_simplify": total_simplify,
+        "lut_dedup": total_dedup,
         "buffer_absorb": 0,
-        "dead_lut": dl + dl2 + dl3 + dl4,
-        "chain_merge": mc,
-        "loops_broken": bl,
+        "dead_lut": total_dead,
+        "chain_merge": total_merge,
+        "loops_broken": total_loops,
         "pfumx_pack": 0,
         "shared_input_merge": 0,
     }

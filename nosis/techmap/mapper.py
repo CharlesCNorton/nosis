@@ -1421,26 +1421,31 @@ class _ECP5Mapper:
                 bit = waddr_bits[logical] if 0 <= logical < len(waddr_bits) else "0"
                 bram.ports[f"ADB{i}"] = [bit]
 
-            # Wire data input (port B write)
+            # Wire data input (write). For X36, data splits across both ports:
+            # DIB[17:0] = wdata[17:0], DIA[17:0] = wdata[35:18]
             wdata_net = cell.inputs.get("WDATA")
             wdata_bits = self._get_bits(wdata_net) if wdata_net else []
             for i in range(18):
                 bit = wdata_bits[i] if i < len(wdata_bits) else "0"
                 bram.ports[f"DIB{i}"] = [bit]
             for i in range(18):
-                bram.ports[f"DIA{i}"] = ["0"]
+                global_i = 18 + i
+                bit = wdata_bits[global_i] if data_width > 18 and global_i < len(wdata_bits) else "0"
+                bram.ports[f"DIA{i}"] = [bit]
 
-            # Wire data output (port A read)
+            # Wire data output (read). For X36, data splits across both ports:
+            # DOA[17:0] = rdata[17:0], DOB[17:0] = rdata[35:18]
             rdata_net = list(cell.outputs.values())[0] if cell.outputs else None
             rdata_bits = self._get_bits(rdata_net) if rdata_net else []
             for i in range(18):
                 bit = rdata_bits[i] if i < len(rdata_bits) else self.nl.alloc_bit()
                 bram.ports[f"DOA{i}"] = [bit]
-            # Wire data output (port B read — for true dual-port)
-            rdata_b_net = cell.outputs.get("RDATA_B") if len(cell.outputs) > 1 else None
-            rdata_b_bits = self._get_bits(rdata_b_net) if rdata_b_net else []
             for i in range(18):
-                bit = rdata_b_bits[i] if i < len(rdata_b_bits) else self.nl.alloc_bit()
+                global_i = 18 + i
+                if data_width > 18 and global_i < len(rdata_bits):
+                    bit = rdata_bits[global_i]
+                else:
+                    bit = self.nl.alloc_bit()
                 bram.ports[f"DOB{i}"] = [bit]
 
             # Clock
@@ -1449,11 +1454,12 @@ class _ECP5Mapper:
             bram.ports["CLKA"] = [clk_bits[0] if clk_bits else "0"]
             bram.ports["CLKB"] = [clk_bits[0] if clk_bits else "0"]
 
-            # Write enable
+            # Write enable. For X36, both WEA and WEB must be active.
             we_net = cell.inputs.get("WE")
             we_bits = self._get_bits(we_net) if we_net else ["0"]
-            bram.ports["WEA"] = ["0"]
-            bram.ports["WEB"] = [we_bits[0] if we_bits else "0"]
+            we_bit = we_bits[0] if we_bits else "0"
+            bram.ports["WEA"] = [we_bit if data_width > 18 else "0"]
+            bram.ports["WEB"] = [we_bit]
 
             # Chip select (active)
             bram.ports["CSA0"] = ["1"]

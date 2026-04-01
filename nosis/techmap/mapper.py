@@ -1511,12 +1511,13 @@ class _ECP5Mapper:
             # Pick the widest data width where depth fits in one tile row
             # (avoids depth MUX). Start wide, stop at first fit.
             # For 4096×32: X4 mode (4096 deep, 4 wide) → 8 BRAMs, no depth MUX.
+            # X4/X2/X1 modes have broken INITVAL address mapping on ECP5.
+            # Use X9 minimum — requires depth tiling for >2048 entries.
             _dw_configs = [
                 (36, 512), (18, 1024), (9, 2048),
-                (4, 4096), (2, 8192), (1, 16384),
             ]
-            tile_data_width = 4  # default: X4 is a good compromise
-            tile_depth = 4096
+            tile_data_width = 9  # X9 minimum (X4/X2/X1 have broken INITVAL)
+            tile_depth = 2048
             for _dw, _dd in _dw_configs:
                 if mem_depth <= _dd:
                     tile_data_width = _dw

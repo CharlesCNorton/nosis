@@ -1630,15 +1630,31 @@ class _Lowerer:
             results.update(inner_running)
 
         elif kind == "StatementKind.ForLoop":
-            # Unroll for-loop: process body for each iteration.
-            # pyslang keeps the loop structure; we process the body
-            # repeatedly. The loop variable is resolved by pyslang
-            # within each iteration's expressions.
             body = getattr(stmt, "body", None)
             if body is not None:
-                # For synthesis, treat the loop body as a single pass.
-                # pyslang evaluates the loop variable for constant loops.
                 child_map = self._collect_blocking_with_muxes(body, allow_nb=allow_nb, _running=_running)
+                # Break accumulator self-references in for-loop results.
+                # Patterns like `r = r + x` create ADD(r_net, x) where
+                # r_net is the TARGET.  Replace with running value from
+                # _running, or from the CURRENT results (which includes
+                # the initialization `r = 0` from a parent List child).
+                merged_running = dict(_running or {})
+                merged_running.update(results)  # results has prior List children
+                for tgt_name, rhs_net in child_map.items():
+                    tgt_net = self.mod.nets.get(tgt_name)
+                    if tgt_net is None or rhs_net.driver is None:
+                        continue
+                    prev = merged_running.get(tgt_name)
+                    if prev is None:
+                        # No running value — use CONST(0) to break the loop
+                        prev_net = self._fresh_net(f"loop_init_{tgt_name}", tgt_net.width)
+                        prev_cell = self._fresh_cell(f"loop_init_{tgt_name}", PrimOp.CONST, value=0, width=tgt_net.width)
+                        self.mod.connect(prev_cell, "Y", prev_net, direction="output")
+                        prev = prev_net
+                    if prev is not tgt_net:
+                        for _pn, _pnet in list(rhs_net.driver.inputs.items()):
+                            if _pnet is tgt_net:
+                                rhs_net.driver.inputs[_pn] = prev
                 results.update(child_map)
 
         elif kind == "StatementKind.Block":
@@ -1647,13 +1663,15 @@ class _Lowerer:
 
         elif kind == "StatementKind.List":
             for child in stmt.list:
-                child_map = self._collect_blocking_with_muxes(child, allow_nb=allow_nb, _running=results)
+                # Merge outer _running with accumulated results for
+                # child processing. This ensures for-loops inside Block
+                # wrappers (like `for (int i ...)` which creates an extra
+                # scope) see prior assignments from the parent List.
+                _child_running = dict(_running or {}) if not allow_nb else {}
+                _child_running.update(results)
+                child_map = self._collect_blocking_with_muxes(child, allow_nb=allow_nb, _running=_child_running if not allow_nb else results)
                 for tgt_name, rhs_net in child_map.items():
                     if tgt_name in results:
-                        # Target already assigned by an earlier child.
-                        # Walk the new rhs_net's MUX A-chain to find
-                        # where the hold value (tgt_net) appears, and
-                        # replace it with the earlier result.
                         prev = results[tgt_name]
                         tgt_net = self.mod.nets.get(tgt_name)
                         if tgt_net:
@@ -2581,7 +2599,10 @@ class _Lowerer:
                     else:
                         self.mod.connect(cell, port_name, parent_net)
                 return
-            self._lower_sub_instance(nested_inst)
+            # Use SUB's scope for nested instances so port expressions
+            # resolve with the correct prefix (e.g., SOC.cpu_mem_addr
+            # instead of unprefixed cpu_mem_addr).
+            sub._lower_sub_instance(nested_inst)
 
         sub._lower_sub_instance_nested = _lower_nested  # type: ignore[attr-defined]
 

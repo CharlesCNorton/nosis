@@ -733,9 +733,10 @@ def pack_slices(netlist: ECP5Netlist) -> dict[str, int]:
     total_merge = 0
     total_dedup = 0
 
-    # Remove LUTs with undriven inputs (scope-leak residual) before merging
-    total_tainted = _eliminate_tainted_luts(netlist)
-    total_dead += _eliminate_dead_luts(netlist)
+    # Tainted-LUT elimination disabled — incorrectly removes LUTs whose
+    # undriven inputs are don't-care high bits (e.g., comparison padding).
+    # total_tainted = _eliminate_tainted_luts(netlist)
+    # total_dead += _eliminate_dead_luts(netlist)
 
     for _ in range(10):
         mc = merge_lut_chains_safe(netlist)

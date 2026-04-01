@@ -38,12 +38,18 @@ def _format_param(key: str, value: str) -> str:
     # Hex values: convert to binary (but NOT INITVAL — those are wide BRAM data)
     if s.startswith("0x") or s.startswith("0X"):
         if key.startswith("INITVAL"):
-            return s  # pass BRAM init hex through as-is
+            return s  # pass BRAM init hex through as-is (with 0x prefix)
         try:
             int_val = int(s, 16)
             if "INIT" in key.upper():
                 return format(int_val, "016b")
             return format(int_val, "032b")
+        except ValueError:
+            return s
+    # DP16KD numeric parameters: DATA_WIDTH needs 32-bit binary encoding
+    if key in ("DATA_WIDTH_A", "DATA_WIDTH_B"):
+        try:
+            return format(int(s), "032b")
         except ValueError:
             return s
     # String values (MUX selectors, mode names, etc.) pass through as-is

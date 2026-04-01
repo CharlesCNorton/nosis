@@ -155,8 +155,7 @@ def run_default_passes(mod: Module, *, verify: bool = False) -> dict[str, int]:
         hit = _merge_hit_equivalent(mod)
         dci = _eliminate_dont_care_inputs(mod)
         mm = merge_mux_chains(mod)
-        # Item 1: collapse case statement EQ+MUX chains
-        cc = collapse_case_chains(mod)
+        cc = 0  # collapse_case_chains disabled — partial CONST coverage bug
         mz = 0  # _simplify_mux_with_zero disabled — width mismatch bug
         # Item 5: constant mask identification
         cm = simplify_constant_masks(mod)

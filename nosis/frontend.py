@@ -2718,16 +2718,29 @@ class _Lowerer:
         # (PARENT_PREFIX.port_name) were created during walk_sub by
         # pyslang visit exposing nested ProceduralBlocks. Redirect their
         # consumers to the actual parent-side connection expression.
-        for port_name, parent_pfx, port_expr in getattr(sub, "_nested_port_maps", []):
+        for entry in getattr(sub, "_nested_port_maps", []):
+            if len(entry) == 4:
+                port_name, parent_pfx, port_expr, direction = entry
+            else:
+                port_name, parent_pfx, port_expr = entry
+                direction = "In"
             leaked_name = f"{parent_pfx}{port_name}"
             leaked_net = self.mod.nets.get(leaked_name)
-            if leaked_net is None or leaked_net.driver is not None:
+            if leaked_net is None:
                 continue
             parent_net = sub.lower_expr(port_expr)
-            for cell in self.mod.cells.values():
-                for pn, pnet in list(cell.inputs.items()):
-                    if pnet is leaked_net:
-                        cell.inputs[pn] = parent_net
+            if "In" in direction and leaked_net.driver is None:
+                # Input port: redirect consumers of leaked net to parent
+                for cell in self.mod.cells.values():
+                    for pn, pnet in list(cell.inputs.items()):
+                        if pnet is leaked_net:
+                            cell.inputs[pn] = parent_net
+            elif "Out" in direction and leaked_net.driver is not None:
+                # Output port: the leaked net has a driver (from duplicate
+                # processing). Redirect consumers of parent_net to read
+                # from leaked_net's driver (or its FF Q output).
+                if parent_net.driver is None:
+                    parent_net.driver = leaked_net.driver
 
         # Post-processing for sub-instance: apply comb redirects,
         # deferred assigns, and deferred blocking AFTER all procedural
@@ -2834,11 +2847,9 @@ class _Lowerer:
             for conn in inst.portConnections:
                 port = conn.port
                 direction = str(port.direction)
-                if "In" not in direction or "Out" in direction:
-                    continue
                 expr = getattr(conn, "expression", None) or getattr(conn, "internalExpr", None)
                 if expr is not None:
-                    self._nested_port_maps.append((port.name, parent_pfx, expr))
+                    self._nested_port_maps.append((port.name, parent_pfx, expr, direction))
 
 
 class _PrefixedLowerer(_Lowerer):

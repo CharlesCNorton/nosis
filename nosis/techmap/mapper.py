@@ -1448,8 +1448,16 @@ class _ECP5Mapper:
                     bit = self.nl.alloc_bit()
                 bram.ports[f"DOB{i}"] = [bit]
 
-            # Clock
+            # Clock — if not connected on the MEMORY cell (read-only arrays
+            # don't get a clock from the frontend), find one from any FF.
             clk_net = cell.inputs.get("CLK")
+            if clk_net is None and self._ir_mod:
+                for _fc in self._ir_mod.cells.values():
+                    if _fc.op == PrimOp.FF:
+                        _fclk = _fc.inputs.get("CLK")
+                        if _fclk is not None:
+                            clk_net = _fclk
+                            break
             clk_bits = self._get_bits(clk_net) if clk_net else ["0"]
             bram.ports["CLKA"] = [clk_bits[0] if clk_bits else "0"]
             bram.ports["CLKB"] = [clk_bits[0] if clk_bits else "0"]
@@ -1462,10 +1470,10 @@ class _ECP5Mapper:
             bram.ports["WEB"] = [we_bit]
 
             # Chip select (active)
-            bram.ports["CSA0"] = ["1"]
+            bram.ports["CSA0"] = ["0"]
             bram.ports["CSA1"] = ["0"]
             bram.ports["CSA2"] = ["0"]
-            bram.ports["CSB0"] = ["1"]
+            bram.ports["CSB0"] = ["0"]
             bram.ports["CSB1"] = ["0"]
             bram.ports["CSB2"] = ["0"]
 
@@ -1537,6 +1545,13 @@ class _ECP5Mapper:
             wdata_net = cell.inputs.get("WDATA")
             we_net = cell.inputs.get("WE")
             clk_net = cell.inputs.get("CLK")
+            if clk_net is None and self._ir_mod:
+                for _fc in self._ir_mod.cells.values():
+                    if _fc.op == PrimOp.FF:
+                        _fclk = _fc.inputs.get("CLK")
+                        if _fclk is not None:
+                            clk_net = _fclk
+                            break
             rdata_net = list(cell.outputs.values())[0] if cell.outputs else None
 
             raddr_bits = self._get_bits(raddr_net) if raddr_net else []

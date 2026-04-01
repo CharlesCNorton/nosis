@@ -2533,9 +2533,13 @@ class _Lowerer:
                         cell = sub._fresh_cell(f"enum_{node.name}", PrimOp.CONST, value=int_val, width=w)
                         self.mod.connect(cell, "Y", net, direction="output")
             elif kind == "SymbolKind.ContinuousAssign":
+                # Defer continuous assigns — they must run AFTER all
+                # procedural blocks so that FF Q outputs are available.
                 assign_expr = getattr(node, "body", None) or getattr(node, "assignment", None)
                 if assign_expr is not None:
-                    sub.lower_expr(assign_expr)
+                    if not hasattr(sub, '_deferred_assigns'):
+                        sub._deferred_assigns = []
+                    sub._deferred_assigns.append(assign_expr)
             elif kind == "SymbolKind.ProceduralBlock":
                 sub.lower_procedural_block(node)
             elif kind == "SymbolKind.Instance":
@@ -2569,6 +2573,11 @@ class _Lowerer:
         sub._lower_sub_instance_nested = _lower_nested  # type: ignore[attr-defined]
 
         sub_body.visit(walk_sub)
+
+        # Process deferred continuous assigns NOW — after all procedural
+        # blocks have created their FFs, so Q outputs are available.
+        for assign_expr in getattr(sub, '_deferred_assigns', []):
+            sub.lower_expr(assign_expr)
 
         # Update parent counters and merge warnings
         self._net_counter = sub._net_counter

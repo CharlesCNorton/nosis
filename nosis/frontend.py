@@ -2565,7 +2565,7 @@ class _Lowerer:
             nested_mod_name = nested_body.name
             # Handle vendor primitives at nested level too
             if nested_mod_name in _VENDOR_PRIMITIVES:
-                cell = self._fresh_cell(f"vendor_{nested_inst.name}", PrimOp.CONST)
+                cell = sub._fresh_cell(f"vendor_{nested_inst.name}", PrimOp.CONST)
                 cell.params = {"_vendor_primitive": nested_mod_name, "value": 0, "width": 1}
                 cell.attributes["keep"] = True
                 for conn in nested_inst.portConnections:
@@ -2575,27 +2575,23 @@ class _Lowerer:
                     expr = getattr(conn, "expression", None) or getattr(conn, "internalExpr", None)
                     if expr is None:
                         continue
-                    parent_net = self.lower_expr(expr)
+                    parent_net = sub.lower_expr(expr)
                     if "Out" in direction:
-                        self.mod.connect(cell, port_name, parent_net, direction="output")
+                        sub.mod.connect(cell, port_name, parent_net, direction="output")
                     else:
-                        self.mod.connect(cell, port_name, parent_net)
+                        sub.mod.connect(cell, port_name, parent_net)
                 return
-            self._lower_sub_instance(nested_inst)
+            sub._lower_sub_instance(nested_inst)
 
         sub._lower_sub_instance_nested = _lower_nested  # type: ignore[attr-defined]
 
         sub_body.visit(walk_sub)
 
-        # Post-processing for sub-instance: apply comb redirects,
-        # deferred assigns, and deferred blocking AFTER all procedural
-        # blocks, matching the top-level lower_instance flow.
+        # Post-processing: comb redirects, deferred assigns, deferred blocking.
         for assign_expr in getattr(sub, '_deferred_assigns', []):
             sub.lower_expr(assign_expr)
         sub._apply_comb_redirects()
 
-        # Process deferred blocking assignments (always_comb simple assigns
-        # where RHS had no driver at lowering time — now it should).
         ff_q_map: dict[str, "Net"] = {}
         for cell in self.mod.cells.values():
             if cell.op == PrimOp.FF:
@@ -2624,39 +2620,32 @@ class _Lowerer:
         self._cell_counter = sub._cell_counter
         self.warnings.extend(sub.warnings)
 
-        # Wire port connections: parent net <-> sub-instance net
+        # Wire port connections (original position — after body walk).
+        # Input ports wire parent→sub. Output ports wire sub→parent.
+        # Output ports now have drivers from the body walk above.
         for conn in inst.portConnections:
             port = conn.port
             port_name = port.name
             direction = str(port.direction)
             w = sub._bit_width(port)
 
-            # The sub-instance's internal net for this port
             sub_net_name = f"{prefix}{port_name}"
             sub_net = self.mod.nets.get(sub_net_name)
             if sub_net is None:
                 sub_net = self.mod.add_net(sub_net_name, w)
 
-            # The expression on the parent side of the connection
             expr = getattr(conn, "expression", None) or getattr(conn, "internalExpr", None)
             if expr is None:
                 continue
 
             parent_net = self.lower_expr(expr)
 
-            # Wire based on port direction:
-            # Input port: parent drives sub-instance net
-            # Output port: sub-instance drives parent net
-            # InOut port: both directions
             is_input = "In" in direction
             is_output = "Out" in direction
 
             if is_input and not is_output:
                 if sub_net.driver is None and parent_net.driver is not None:
                     sub_net.driver = parent_net.driver
-                # Redirect cells reading the sub-instance net to read parent net.
-                # Check both prefixed (TX.send) and unprefixed (send) names —
-                # the sub-instance body may create either.
                 unprefixed_net = self.mod.nets.get(port_name)
                 if parent_net is not sub_net:
                     for cell in self.mod.cells.values():
@@ -2664,10 +2653,18 @@ class _Lowerer:
                             if pnet is sub_net or (unprefixed_net is not None and pnet is unprefixed_net):
                                 cell.inputs[pn] = parent_net
             elif is_output and not is_input:
-                if sub_net.driver is not None:
+                if sub_net.driver is not None and parent_net.driver is None:
                     parent_net.driver = sub_net.driver
+                # Check Q-redirected FF output if sub_net has no direct driver
+                if parent_net.driver is None:
+                    q_candidates = [n for n in self.mod.nets
+                                    if n.endswith(sub_net.name.split('.')[-1]) and 'ff_q' in n]
+                    for qn in q_candidates:
+                        qnet = self.mod.nets[qn]
+                        if qnet.driver is not None:
+                            parent_net.driver = qnet.driver
+                            break
             elif is_input and is_output:
-                # InOut: wire both directions
                 if sub_net.driver is None and parent_net.driver is not None:
                     sub_net.driver = parent_net.driver
                 if parent_net.driver is None and sub_net.driver is not None:

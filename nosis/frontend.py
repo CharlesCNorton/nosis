@@ -902,7 +902,13 @@ class _Lowerer:
         else:
             # Blocking / continuous: direct wire.
             if not getattr(self, '_in_comb_case', False):
-                if lhs.driver is None and rhs.driver is not None:
+                if lhs.driver is None and rhs.driver is None:
+                    # RHS has no driver yet (always_comb before always_ff).
+                    # Defer: after all blocks, rhs will have a driver.
+                    if not hasattr(self, '_deferred_blocking'):
+                        self._deferred_blocking = []
+                    self._deferred_blocking.append((lhs, rhs))
+                elif lhs.driver is None and rhs.driver is not None:
                     lhs.driver = rhs.driver
                     # Try to set the driver cell's output to lhs
                     rewired = False
@@ -954,7 +960,9 @@ class _Lowerer:
 
         if "AlwaysComb" in proc_kind or "AlwaysLatch" in proc_kind:
             # Combinational or latch — lower statements as wiring.
-            # Warn on incomplete if/case in always_comb (latch inference)
+            # Reset _in_comb_case so that a case in a PREVIOUS always_comb
+            # doesn't poison simple assignments in THIS block.
+            self._in_comb_case = False
             if "AlwaysComb" in proc_kind:
                 latch_targets = self._detect_latch_inference(body)
                 for target in latch_targets:
@@ -966,6 +974,7 @@ class _Lowerer:
                         src=src,
                     ))
             self._lower_statement(body)
+            self._in_comb_case = False  # clean up after block
 
         elif "AlwaysFF" in proc_kind or "Always" in proc_kind:
             # Extract clock edge from timing control
@@ -2542,6 +2551,10 @@ class _Lowerer:
                     sub._deferred_assigns.append(assign_expr)
             elif kind == "SymbolKind.ProceduralBlock":
                 sub.lower_procedural_block(node)
+                # Apply comb redirects after EACH block so that inter-
+                # always_comb dependencies resolve (block A's output
+                # becomes available before block B reads it).
+                sub._apply_comb_redirects()
             elif kind == "SymbolKind.Instance":
                 # Nested sub-instances — recurse
                 sub._lower_sub_instance_nested(node, prefix)
@@ -2574,10 +2587,37 @@ class _Lowerer:
 
         sub_body.visit(walk_sub)
 
-        # Process deferred continuous assigns NOW — after all procedural
-        # blocks have created their FFs, so Q outputs are available.
+        # Post-processing for sub-instance: apply comb redirects,
+        # deferred assigns, and deferred blocking AFTER all procedural
+        # blocks, matching the top-level lower_instance flow.
         for assign_expr in getattr(sub, '_deferred_assigns', []):
             sub.lower_expr(assign_expr)
+        sub._apply_comb_redirects()
+
+        # Process deferred blocking assignments (always_comb simple assigns
+        # where RHS had no driver at lowering time — now it should).
+        ff_q_map: dict[str, "Net"] = {}
+        for cell in self.mod.cells.values():
+            if cell.op == PrimOp.FF:
+                ff_target = cell.params.get("ff_target", "")
+                for o in cell.outputs.values():
+                    if ff_target:
+                        ff_q_map[ff_target] = o
+        for lhs, rhs in getattr(sub, '_deferred_blocking', []):
+            q_net = ff_q_map.get(rhs.name)
+            if q_net is not None:
+                if lhs.driver is None:
+                    lhs.driver = q_net.driver if q_net.driver else rhs.driver
+                for cell in self.mod.cells.values():
+                    for pn, pnet in list(cell.inputs.items()):
+                        if pnet is lhs:
+                            cell.inputs[pn] = q_net
+            elif rhs.driver is not None and lhs.driver is None:
+                lhs.driver = rhs.driver
+                for pname, pnet in list(rhs.driver.outputs.items()):
+                    if pnet is rhs:
+                        rhs.driver.outputs[pname] = lhs
+                        break
 
         # Update parent counters and merge warnings
         self._net_counter = sub._net_counter

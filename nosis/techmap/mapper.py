@@ -2153,6 +2153,15 @@ def map_to_ecp5(design: Design) -> ECP5Netlist:
     for pname in mod.ports:
         live_nets.add(pname)
 
+    # Build a map of CONST IR nets so we can resolve orphaned const bits
+    # to their correct constant value instead of a stale net bit.
+    from nosis.ir import PrimOp as _PrimOp
+    _const_nets: dict[str, int] = {}
+    for _ic in mod.cells.values():
+        if _ic.op == _PrimOp.CONST:
+            for _on in _ic.outputs.values():
+                _const_nets[_on.name] = int(_ic.params.get("value", 0))
+
     fixed = 0
     for cell in netlist.cells.values():
         for port, bits in cell.ports.items():
@@ -2164,13 +2173,21 @@ def map_to_ecp5(design: Design) -> ECP5Netlist:
                     origin = bit_origin.get(b)
                     if origin:
                         net_name, bit_idx = origin
-                        ecp5_net = netlist.nets.get(net_name)
-                        if ecp5_net and bit_idx < len(ecp5_net.bits):
-                            actual = ecp5_net.bits[bit_idx]
-                            if actual != b:
-                                bits[i] = actual
-                                fixed += 1
-                                resolved = True
+                        # If the origin net is a CONST, resolve to the constant value
+                        if net_name in _const_nets:
+                            const_val = _const_nets[net_name]
+                            bit_val = (const_val >> bit_idx) & 1
+                            bits[i] = str(bit_val)
+                            fixed += 1
+                            resolved = True
+                        else:
+                            ecp5_net = netlist.nets.get(net_name)
+                            if ecp5_net and bit_idx < len(ecp5_net.bits):
+                                actual = ecp5_net.bits[bit_idx]
+                                if actual != b:
+                                    bits[i] = actual
+                                    fixed += 1
+                                    resolved = True
                         if not resolved and net_name not in live_nets:
                             bits[i] = "0"
                             fixed += 1

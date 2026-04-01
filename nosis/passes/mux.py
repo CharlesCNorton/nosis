@@ -245,6 +245,13 @@ def collapse_case_chains(mod: Module) -> int:
             if len(case_map) < 2:
                 continue
 
+            # Only collapse if ALL chain MUXes had constant outputs.
+            # If some were skipped (non-CONST B-input), the case_map is
+            # incomplete and non-captured selector values would incorrectly
+            # use default_val, corrupting the logic.
+            if len(case_map) != len(dead_cells):
+                continue
+
             # Build the truth table: for each selector value, what is the output?
             if default_val is None:
                 default_val = 0
@@ -343,6 +350,11 @@ def collapse_case_chains(mod: Module) -> int:
                 current = a.driver
 
             if len(case_map) < 2 or len(chain_cells) < 2:
+                continue
+
+            # Only convert if ALL chain MUXes had constant outputs.
+            # Partial conversion drops non-CONST arms, corrupting the logic.
+            if len(case_map) != len(chain_cells):
                 continue
 
             # All case values must be constants for PMUX conversion

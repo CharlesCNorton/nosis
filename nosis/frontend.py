@@ -1017,9 +1017,79 @@ class _Lowerer:
         self.mod.connect(cell, "Y", out, direction="output")
         return out
 
+    def _record_continuous_partsel(self, expr: Any, rhs: Net) -> Net | None:
+        """Record `assign vec[i] = rhs` as a piece of `vec`, or return None.
+
+        A continuous assignment to a bit- or part-select cannot be wired the way
+        a whole-net assignment is: the target is driven jointly by several such
+        statements and has no prior value to read-modify-write against. The
+        pieces are collected here and concatenated into a single driver by
+        `_finalize_continuous_partsel` once every assignment has been seen.
+        """
+        parts = self._const_partsel_write(expr.left)
+        if parts is None:
+            return None
+        base_node, hi, lo = parts
+        base_sym = getattr(base_node, "symbol", None)
+        base_name = getattr(base_sym, "name", "") if base_sym is not None else ""
+        if not base_name:
+            return None
+        base_net = self._get_or_create_net(base_name, self._bit_width(base_node))
+        if base_net.driver is not None:
+            return None
+        if not hasattr(self, "_cont_partsel"):
+            self._cont_partsel: dict[str, list[tuple[int, int, Net]]] = {}
+        self._cont_partsel.setdefault(base_net.name, []).append((hi, lo, rhs))
+        return base_net
+
+    def _finalize_continuous_partsel(self) -> None:
+        """Drive each partially assigned net from the concatenation of its pieces.
+
+        Bits no assignment covers are tied low, which matches the undriven-net
+        behaviour the rest of the frontend assumes.
+        """
+        for net_name, pieces in getattr(self, "_cont_partsel", {}).items():
+            net = self.mod.nets.get(net_name)
+            if net is None or net.driver is not None:
+                continue
+            covered: dict[int, Net] = {}
+            for hi, lo, rhs in pieces:
+                for bit in range(lo, hi + 1):
+                    src = rhs
+                    if hi != lo or rhs.width != 1:
+                        src = self._slice_read(rhs, bit - lo, 1)
+                    covered[bit] = src
+            bit_nets: list[Net] = []
+            for bit in range(net.width):
+                if bit in covered:
+                    bit_nets.append(covered[bit])
+                    continue
+                zero = self._fresh_net(f"cps_z{bit}", 1)
+                zc = self._fresh_cell(f"cps_z{bit}", PrimOp.CONST, value=0, width=1)
+                self.mod.connect(zc, "Y", zero, direction="output")
+                bit_nets.append(zero)
+            if len(bit_nets) == 1:
+                only = bit_nets[0]
+                if only.driver is not None:
+                    net.driver = only.driver
+                    for pname, pnet in list(only.driver.outputs.items()):
+                        if pnet is only:
+                            only.driver.outputs[pname] = net
+                            break
+                continue
+            cat = self._fresh_cell("cps_cat", PrimOp.CONCAT, count=len(bit_nets))
+            for i, bn in enumerate(bit_nets):
+                self.mod.connect(cat, f"I{i}", bn)
+                cat.params[f"I{i}_width"] = bn.width
+            self.mod.connect(cat, "Y", net, direction="output")
+
     def _lower_assignment_expr(self, expr: Any) -> Net:
         """Lower an assignment expression. Returns the LHS net."""
         rhs = self.lower_expr(expr.right)
+        if not expr.isNonBlocking and getattr(self, "_in_continuous", False):
+            partial = self._record_continuous_partsel(expr, rhs)
+            if partial is not None:
+                return partial
         lhs = self.lower_expr(expr.left)
         # Wire RHS to LHS — the assignment connects them
         if expr.isNonBlocking:
@@ -2954,8 +3024,11 @@ class _Lowerer:
                         cell.inputs[pn] = q
 
         # Process deferred continuous assigns now that all FFs exist
+        self._in_continuous = True
         for assign_expr in getattr(self, '_deferred_assigns', []):
             self.lower_expr(assign_expr)
+        self._in_continuous = False
+        self._finalize_continuous_partsel()
 
         # Process deferred blocking assignments where RHS had no driver.
         # Find the FF Q net that replaced rhs, then redirect lhs consumers to it.
@@ -3255,8 +3328,11 @@ class _Lowerer:
         # Post-processing for sub-instance: apply comb redirects,
         # deferred assigns, and deferred blocking AFTER all procedural
         # blocks, matching the top-level lower_instance flow.
+        sub._in_continuous = True
         for assign_expr in getattr(sub, '_deferred_assigns', []):
             sub.lower_expr(assign_expr)
+        sub._in_continuous = False
+        sub._finalize_continuous_partsel()
         sub._apply_comb_redirects()
 
         # Process deferred blocking assignments (always_comb simple assigns

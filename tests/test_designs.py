@@ -267,12 +267,13 @@ class TestUartTx:
 
     def test_cli_version(self):
         import subprocess
+        from nosis import __version__
         r = subprocess.run(
             ["python", "-m", "nosis.cli", "--version"],
             capture_output=True, text=True, timeout=10,
         )
         assert r.returncode == 0
-        assert "0.1.0" in r.stdout or "0.1.0" in r.stderr
+        assert __version__ in r.stdout or __version__ in r.stderr
 
     # --- nextpnr integration ---
 

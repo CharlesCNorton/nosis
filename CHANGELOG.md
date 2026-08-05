@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Bit-select correctness
+
+- **Slice at offset 0 eliminated as an identity.** `_eliminate_functional_identities`
+  drove each input of a candidate cell with 0 or 1 and read identity off the
+  resulting truth table. For `SLICE(a, offset=0, width=1)` over a multi-bit `a`
+  that probe cannot distinguish bit 0 from the whole net, so the slice was
+  replaced by a wire to its source and the one-bit result took the source width.
+  Offsets above 0 read 0 under both probes and were unaffected. Both that pass
+  and `_eliminate_dont_care_inputs` now skip cells with any multi-bit input,
+  matching the restriction `_merge_hit_equivalent` already carried.
+- **Continuous assignment to a bit-select left the target undriven.**
+  `assign v[i] = e;` lowered `v[i]` as a read, emitting a dangling slice and no
+  driver for `v`. Bit- and part-select targets of continuous assignments are now
+  collected per net and concatenated into a single driver, with uncovered bits
+  tied low. Procedural blocks already handled these through the part-select
+  write expander and are unchanged.
+- `tests/test_bitselect.py` covers both.
+
 ### Frontend hierarchical-lowering fixes (full-SoC support)
 Found while bringing up the RIME boot image, a deep hierarchy the yosys flow
 handles but nosis did not. Each is a real lowering bug or missing feature that

@@ -44,6 +44,12 @@ def _eliminate_functional_identities(mod: Module) -> int:
         n_inputs = len(input_nets)
         if n_inputs == 0 or n_inputs > 4:
             continue
+        # The truth table below drives each input with 0 or 1 only, so a wider
+        # input is never exercised above its low bit and any identity read off
+        # it is unsound. SLICE at offset 0 is the case that bites: probing an
+        # 8-bit source at 0 and 1 makes bit 0 look like the whole net.
+        if any(net.width != 1 for net in input_nets):
+            continue
 
         out_net = out_nets[0]
 
@@ -125,6 +131,10 @@ def _eliminate_dont_care_inputs(mod: Module) -> int:
         inp_items = list(cell.inputs.items())
         n = len(inp_items)
         if n < 2 or n > 4:
+            continue
+        # Same restriction as above: a multi-bit input driven only at 0 and 1
+        # can look irrelevant when it is not.
+        if any(net.width != 1 for _, net in inp_items):
             continue
 
         inp_names = [name for name, _ in inp_items]
